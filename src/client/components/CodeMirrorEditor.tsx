@@ -1,0 +1,214 @@
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import CodeMirror from '@uiw/react-codemirror';
+import { EditorState, Prec, type Extension } from '@codemirror/state';
+import {
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap,
+  lineNumbers,
+  type KeyBinding,
+} from '@codemirror/view';
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentLess,
+  indentMore,
+  indentWithTab,
+  insertNewline,
+} from '@codemirror/commands';
+import {
+  bracketMatching,
+  codeFolding,
+  foldKeymap,
+  indentOnInput,
+  indentUnit,
+} from '@codemirror/language';
+import {
+  acceptCompletion,
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+  completeAnyWord,
+  completionKeymap,
+} from '@codemirror/autocomplete';
+import { highlightSelectionMatches } from '@codemirror/search';
+import { javascript } from '@codemirror/lang-javascript';
+import { oneDark } from '@codemirror/theme-one-dark';
+import type { AssistanceOverrides } from '@/client/lib/assistance';
+import type { CodeEditorImplProps } from '@/client/components/CodeEditor';
+
+/**
+ * Cosmetic layer over oneDark. 16px (vs Monaco's 14) is deliberate: iOS Safari
+ * zooms the page whenever a focused field is under 16px, which on a phone reads
+ * as the editor "jumping" every time the keyboard opens.
+ */
+const BASE_THEME = EditorView.theme(
+  {
+    '&': { height: '100%', fontSize: '16px', backgroundColor: 'transparent' },
+    '&.cm-focused': { outline: 'none' },
+    '.cm-scroller': {
+      fontFamily:
+        'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+      lineHeight: '1.55',
+    },
+    '.cm-content': { paddingTop: '12px', paddingBottom: '12px' },
+    '.cm-gutters': { backgroundColor: 'transparent', borderRight: 'none' },
+  },
+  { dark: true },
+);
+
+/**
+ * The assistance ladder, translated from Monaco options to CM6 extensions.
+ * Mirrors `overridesToOptions` in lib/assistance.ts dimension for dimension:
+ *
+ *   syntaxHighlighting → JS grammar + oneDark highlight style (+ code folding)
+ *   lineNumbers        → line-number gutter + active-line highlight
+ *   autoIndent         → indentOnInput; when off, Enter drops to insertNewline
+ *   autoCloseBrackets  → closeBrackets (covers Monaco's autoClosingQuotes too)
+ *   bracketMatching    → bracketMatching + highlightSelectionMatches
+ *   autocomplete       → autocompletion + any-word source + Tab to accept
+ *
+ * No CM6 analogue (documented gaps): Monaco's `parameterHints` (needs a language
+ * service) and `fixedOverflowWidgets`. Folding is keyboard/command only — no fold
+ * gutter, which would just be a mis-tap target at phone width.
+ */
+function extensionsFor(
+  o: AssistanceOverrides,
+  onRun: () => void,
+  onSubmit: () => void,
+): Extension[] {
+  const ext: Extension[] = [
+    history(),
+    // Horizontal scrolling in a code editor is miserable on a phone; Monaco's
+    // desktop default (no wrap) does not translate.
+    EditorView.lineWrapping,
+    EditorState.tabSize.of(2),
+    indentUnit.of('  '),
+    oneDark,
+    BASE_THEME,
+    keymap.of([...defaultKeymap, ...historyKeymap]),
+  ];
+
+  if (o.syntaxHighlighting) {
+    ext.push(javascript(), codeFolding(), keymap.of(foldKeymap));
+  }
+  if (o.lineNumbers) {
+    ext.push(lineNumbers(), highlightActiveLineGutter(), highlightActiveLine());
+  }
+  if (o.autoIndent) ext.push(indentOnInput());
+  if (o.autoCloseBrackets) {
+    ext.push(closeBrackets(), keymap.of(closeBracketsKeymap));
+  }
+  if (o.bracketMatching) ext.push(bracketMatching(), highlightSelectionMatches());
+  if (o.autocomplete) {
+    ext.push(
+      autocompletion(),
+      keymap.of(completionKeymap),
+      // Monaco's wordBasedSuggestions: 'currentDocument'.
+      EditorState.languageData.of(() => [{ autocomplete: completeAnyWord }]),
+    );
+  }
+
+  // Highest precedence so these beat defaultKeymap (which binds Mod-Enter and
+  // Enter itself) regardless of what else is configured.
+  const bindings: KeyBinding[] = [
+    {
+      key: 'Mod-Enter',
+      preventDefault: true,
+      run: () => {
+        onRun();
+        return true;
+      },
+    },
+    {
+      key: 'Mod-Shift-Enter',
+      preventDefault: true,
+      run: () => {
+        onSubmit();
+        return true;
+      },
+    },
+  ];
+  if (o.autocomplete) bindings.push({ key: 'Tab', run: acceptCompletion });
+  bindings.push(indentWithTab);
+  if (!o.autoIndent) {
+    bindings.push({
+      key: 'Enter',
+      run: (view) => (o.autocomplete && acceptCompletion(view)) || insertNewline(view),
+    });
+  }
+  ext.push(Prec.highest(keymap.of(bindings)));
+
+  return ext;
+}
+
+/** Mobile editor (< lg). Desktop gets Monaco — see CodeEditor.tsx. */
+export function CodeMirrorEditor({
+  value,
+  onChange,
+  settings,
+  onRun,
+  onSubmit,
+  onReady,
+}: CodeEditorImplProps) {
+  // Refs keep the keymap out of the reconfiguration path.
+  const handlers = useRef({ onRun, onSubmit });
+  handlers.current = { onRun, onSubmit };
+
+  const extensions = useMemo(
+    () =>
+      extensionsFor(
+        settings.overrides,
+        () => handlers.current.onRun(),
+        () => handlers.current.onSubmit(),
+      ),
+    [settings.overrides],
+  );
+
+  const handleCreate = useCallback(
+    (view: EditorView) => {
+      onReady({
+        focus: () => view.focus(),
+        relayout: () => view.requestMeasure(),
+        revealCursor: () =>
+          view.dispatch({
+            effects: EditorView.scrollIntoView(view.state.selection.main.head, {
+              y: 'nearest',
+            }),
+          }),
+        indent: (direction) => {
+          (direction > 0 ? indentMore : indentLess)(view);
+          view.focus();
+        },
+        insert: (text) => {
+          const { from, to } = view.state.selection.main;
+          view.dispatch({
+            changes: { from, to, insert: text },
+            selection: { anchor: from + text.length },
+            scrollIntoView: true,
+          });
+          view.focus();
+        },
+      });
+    },
+    [onReady],
+  );
+
+  useEffect(() => () => onReady(null), [onReady]);
+
+  return (
+    <CodeMirror
+      className="h-full"
+      height="100%"
+      value={value}
+      theme="none"
+      basicSetup={false}
+      indentWithTab={false}
+      extensions={extensions}
+      onChange={onChange}
+      onCreateEditor={handleCreate}
+    />
+  );
+}

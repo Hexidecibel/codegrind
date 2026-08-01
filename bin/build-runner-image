@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Build the sandbox runner image (harness baked in). Idempotent — re-run after
+# editing test-harness/runner.mjs. hexi is in the docker group; no sudo needed.
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+IMAGE="codegrind-runner:latest"
+
+echo "Building ${IMAGE} from test-harness/ ..."
+docker build -t "${IMAGE}" "${REPO_DIR}/test-harness"
+echo "Done: ${IMAGE}"

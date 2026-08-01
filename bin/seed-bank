@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Seed a small starter problem bank (real Claude generate path). Thin wrapper
+# around bin/seed-bank.ts so it can be run directly like the other bin scripts.
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_DIR}"
+exec npx tsx bin/seed-bank.ts

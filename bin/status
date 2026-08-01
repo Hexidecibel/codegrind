@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Show codegrind service status + health probe.
+set -uo pipefail
+PORT="${PORT:-9416}"
+systemctl --no-pager status codegrind | head -12 || true
+echo "---"
+curl -sS -o /dev/null -w 'health: %{http_code}\n' "http://127.0.0.1:${PORT}/api/health" \
+  || echo "health: UNREACHABLE"

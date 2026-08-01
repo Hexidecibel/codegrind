@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Tail codegrind logs. Pass --no-follow (or extra journalctl args) for a one-shot.
+exec journalctl -u codegrind -f -n 200 "$@"

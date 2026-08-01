@@ -1,0 +1,157 @@
+@import "tailwindcss";
+@plugin "tailwindcss-animate";
+
+@custom-variant dark (&:is(.dark *));
+
+/* A phone in landscape with the soft keyboard up — mirrors SHORT_QUERY in
+   hooks/useMediaQuery.ts; keep the two in sync. */
+@custom-variant short (@media (max-height: 500px) and (min-width: 600px));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* codegrind ships dark-only — a deep, calm workspace palette with an
+   indigo/violet accent so the coach + pattern callouts pop. */
+:root {
+  /* Dark-only app: let the UA render form controls, scrollbars and the
+     keyboard accessory chrome in dark, instead of light-mode defaults. */
+  color-scheme: dark;
+  --radius: 0.625rem;
+  --background: oklch(0.16 0.012 265);
+  --foreground: oklch(0.97 0.005 265);
+  --card: oklch(0.2 0.014 265);
+  --card-foreground: oklch(0.97 0.005 265);
+  --popover: oklch(0.19 0.014 265);
+  --popover-foreground: oklch(0.97 0.005 265);
+  --primary: oklch(0.68 0.16 280);
+  --primary-foreground: oklch(0.16 0.012 265);
+  --secondary: oklch(0.27 0.018 265);
+  --secondary-foreground: oklch(0.97 0.005 265);
+  --muted: oklch(0.27 0.018 265);
+  --muted-foreground: oklch(0.72 0.02 265);
+  --accent: oklch(0.3 0.02 280);
+  --accent-foreground: oklch(0.97 0.005 265);
+  --destructive: oklch(0.6 0.2 15);
+  --destructive-foreground: oklch(0.98 0.01 15);
+  --border: oklch(0.3 0.016 265);
+  --input: oklch(0.3 0.016 265);
+  --ring: oklch(0.68 0.16 280);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html,
+  body,
+  #root {
+    /* Mirrors the app shell's sizing, newest-supported wins: --app-height is
+       the visual viewport (set below `lg` by useAppHeight), dvh is the fallback
+       for desktop and pre-visualViewport browsers, 100% for pre-dvh ones.
+       Leaving these at 100% lets the document grow taller than the shell on
+       mobile, which shows up as stray page scroll under the URL bar.
+
+       LOAD-BEARING, do not "simplify": CodeMirror positions its autocomplete
+       popup against the document, so if <html> is taller than the visible
+       viewport the popup can be placed under the soft keyboard. */
+    height: 100%;
+    height: 100dvh;
+    height: var(--app-height, 100dvh);
+  }
+  body {
+    @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    /* The app scrolls inside its panes — no rubber-banding the whole shell. */
+    overscroll-behavior-y: none;
+  }
+
+  /* Honour reduced-motion: drop decorative animation/transitions. Spinners
+     (.animate-spin) are exempt — they are load-state information, and frozen
+     they read as a hang. */
+  @media (prefers-reduced-motion: reduce) {
+    *:not(.animate-spin),
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ---- Markdown prose for the problem prompt ------------------------- */
+.prose-cg {
+  @apply text-sm leading-relaxed text-foreground/90;
+}
+.prose-cg p {
+  @apply my-2;
+}
+.prose-cg h1,
+.prose-cg h2,
+.prose-cg h3 {
+  @apply mb-1.5 mt-4 font-semibold text-foreground;
+}
+.prose-cg h1 {
+  @apply text-lg;
+}
+.prose-cg h2 {
+  @apply text-base;
+}
+.prose-cg h3 {
+  @apply text-sm;
+}
+.prose-cg ul {
+  @apply my-2 list-disc space-y-1 pl-5;
+}
+.prose-cg ol {
+  @apply my-2 list-decimal space-y-1 pl-5;
+}
+.prose-cg code {
+  @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em];
+}
+.prose-cg pre {
+  @apply my-3 overflow-x-auto rounded-lg border border-border bg-black/30 p-3;
+}
+.prose-cg pre code {
+  @apply bg-transparent p-0;
+}
+.prose-cg a {
+  @apply text-primary underline underline-offset-2;
+}
+.prose-cg strong {
+  @apply font-semibold text-foreground;
+}
+.prose-cg blockquote {
+  @apply my-2 border-l-2 border-border pl-3 text-muted-foreground;
+}
+.prose-cg table {
+  @apply my-3 w-full border-collapse text-xs;
+}
+.prose-cg th,
+.prose-cg td {
+  @apply border border-border px-2 py-1 text-left;
+}

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Restart codegrind and report status.
+set -euo pipefail
+sudo systemctl restart codegrind
+exec "$(dirname "${BASH_SOURCE[0]}")/status"
