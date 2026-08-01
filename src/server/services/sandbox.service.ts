@@ -101,7 +101,10 @@ export async function runTests(
       // have printed partial/valid JSON to stdout before being killed.
       const e = err as { stdout?: string; killed?: boolean; code?: number; message?: string };
       stdout = e.stdout || '';
-      if (e.killed || e.code === 124) timedOut = true;
+      // 124 = `timeout` fired and SIGTERM was enough. 137 = 128+SIGKILL, i.e.
+      // `timeout -k` had to escalate — which is the normal path for a tight
+      // synchronous loop, since it never yields to a signal handler.
+      if (e.killed || e.code === 124 || e.code === 137) timedOut = true;
       runError = e.message;
     }
 

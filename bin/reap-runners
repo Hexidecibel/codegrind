@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Kill orphaned codegrind-runner containers.
+#
+# bin/run-submission force-removes its own container in an EXIT trap, which
+# covers the normal timeout path. It cannot cover the case where the script
+# itself is SIGKILLed (OOM killer, `systemctl kill -s KILL`, host reboot mid-run)
+# — the trap never runs and the container is left spinning.
+#
+# A submission is capped at 12s, so anything older than MAX_AGE is by definition
+# an orphan. Safe to run on a timer; a no-op when there is nothing to reap.
+#
+# Usage: bin/reap-runners [--dry-run] [--max-age SECONDS]
+set -euo pipefail
+
+IMAGE="codegrind-runner:latest"
+MAX_AGE=120        # 10x the 12s submission cap — nothing legitimate lives this long
+DRY_RUN=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run)  DRY_RUN=1; shift ;;
+    --max-age)  MAX_AGE="${2:?--max-age needs a value}"; shift 2 ;;
+    -h|--help)  sed -n '2,12p' "$0"; exit 0 ;;
+    *)          echo "unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+
+now="$(date +%s)"
+reaped=0
+
+# StartedAt is RFC3339; `date -d` parses it. Containers that vanish between the
+# listing and the inspect are simply skipped.
+while read -r id; do
+  [ -n "${id}" ] || continue
+  started="$(docker inspect -f '{{.State.StartedAt}}' "${id}" 2>/dev/null)" || continue
+  [ -n "${started}" ] || continue
+  started_epoch="$(date -d "${started}" +%s 2>/dev/null)" || continue
+  age=$(( now - started_epoch ))
+  [ "${age}" -gt "${MAX_AGE}" ] || continue
+
+  if [ "${DRY_RUN}" -eq 1 ]; then
+    echo "would reap ${id} (age ${age}s)"
+  else
+    docker rm -f "${id}" >/dev/null 2>&1 && echo "reaped ${id} (age ${age}s)"
+  fi
+  reaped=$(( reaped + 1 ))
+done < <(docker ps -q --filter "ancestor=${IMAGE}")
+
+if [ "${reaped}" -eq 0 ]; then
+  echo "nothing to reap"
+fi

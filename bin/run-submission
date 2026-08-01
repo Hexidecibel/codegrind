@@ -19,7 +19,16 @@ IMAGE="codegrind-runner:latest"
 HARD_TIMEOUT=12
 
 WORK="$(mktemp -d)"
-cleanup() { rm -rf "${WORK}"; }
+# Name the container so cleanup can reach it. Without this, `timeout` kills the
+# `docker run` CLI client but NOT the container: a tight JS loop never yields to
+# the forwarded SIGTERM, `timeout` sends no SIGKILL follow-up, the client dies,
+# and `--rm` never fires because it detached. Two such containers span-looped for
+# 10 days and burned 2 full cores before anyone noticed.
+NAME="codegrind-run-$$-${RANDOM}"
+cleanup() {
+  docker rm -f "${NAME}" >/dev/null 2>&1 || true
+  rm -rf "${WORK}"
+}
 trap cleanup EXIT
 
 cp "${SOLUTION_SRC}" "${WORK}/solution.mjs"
@@ -29,7 +38,7 @@ cp "${TESTS_SRC}" "${WORK}/tests.json"
 # otherwise. We do NOT `set -e`-abort on a non-zero here — let the caller see
 # stdout (which may be empty on a killed container) and the exit code.
 set +e
-timeout "${HARD_TIMEOUT}" docker run --rm \
+timeout -k 3 "${HARD_TIMEOUT}" docker run --rm --name "${NAME}" \
   --network none \
   --memory=256m \
   --cpus=1 \
