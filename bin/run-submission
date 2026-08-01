@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Run a user submission against a tests JSON blob inside an ephemeral, hardened
+# Docker container, and emit the harness JSON to stdout.
+#
+# Usage: bin/run-submission <solution.mjs> <tests.json>
+#
+# The two input files are copied into a private temp dir which is bind-mounted
+# read-only at /work. A hard `timeout` kills a runaway (e.g. infinite loop);
+# on timeout/failure this script still exits 0-or-nonzero with whatever the
+# container produced — the Node caller (sandbox.service.ts) handles both.
+#
+# hexi IS in the docker group, so `docker run` needs no sudo.
+set -euo pipefail
+
+SOLUTION_SRC="${1:?usage: run-submission <solution.mjs> <tests.json>}"
+TESTS_SRC="${2:?usage: run-submission <solution.mjs> <tests.json>}"
+
+IMAGE="codegrind-runner:latest"
+HARD_TIMEOUT=12
+
+WORK="$(mktemp -d)"
+cleanup() { rm -rf "${WORK}"; }
+trap cleanup EXIT
+
+cp "${SOLUTION_SRC}" "${WORK}/solution.mjs"
+cp "${TESTS_SRC}" "${WORK}/tests.json"
+
+# `timeout` returns 124 on kill; docker run propagates the container exit code
+# otherwise. We do NOT `set -e`-abort on a non-zero here — let the caller see
+# stdout (which may be empty on a killed container) and the exit code.
+set +e
+timeout "${HARD_TIMEOUT}" docker run --rm \
+  --network none \
+  --memory=256m \
+  --cpus=1 \
+  --pids-limit=128 \
+  --read-only \
+  --tmpfs /tmp \
+  --cap-drop=ALL \
+  --security-opt no-new-privileges \
+  -v "${WORK}:/work:ro" \
+  "${IMAGE}" \
+  node /app/runner.mjs /work/solution.mjs /work/tests.json
+EXIT=$?
+set -e
+
+exit "${EXIT}"

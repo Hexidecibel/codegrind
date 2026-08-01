@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- `class="dark"`: the app ships dark-only, and src/index.css declares
+     `@custom-variant dark (&:is(.dark *))` — without this class every `dark:`
+     utility silently matches nothing. -->
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- interactive-widget=resizes-content: the soft keyboard shrinks the layout
+         viewport (and h-dvh with it) instead of covering the pinned action bar.
+         Honoured by Chrome/Android; iOS Safari ignores it. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content"
+    />
+    <!-- Dark-only UI: keep UA form controls/scrollbars and the Android status
+         bar in dark instead of light-mode defaults. Colours mirror
+         --background (#0b0d13) in src/index.css. -->
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b0d13" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <title>codegrind</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

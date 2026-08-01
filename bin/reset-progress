@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Reset LEARNER state (attempts, sessions, review queue, per-topic skill state)
+# while KEEPING the generated problem bank and pattern primers — so a fresh start
+# reflects real performance without re-paying generation cost. Safe on the live
+# DB (WAL). Run: bin/reset-progress
+set -euo pipefail
+
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+REPO="/home/hexi/local/src/codegrind"
+DB="${DATA_DIR:-$REPO/data}/codegrind.db"
+
+node -e '
+const Database = require("'"$REPO"'/node_modules/better-sqlite3");
+const db = new Database("'"$DB"'");
+const wipe = ["attempts","sessions","review_queue","skill_state"];
+const kept = ["problems","pattern_primers"];
+db.pragma("foreign_keys = OFF");
+for (const t of wipe) {
+  try { const n = db.prepare(`DELETE FROM ${t}`).run().changes; console.log(`cleared ${t}: ${n} rows`); }
+  catch (e) { console.log(`skip ${t}: ${e.message}`); }
+}
+// Re-make the whole banked set available so a fresh start serves instantly
+// (otherwise all-used problems force a ~15s generate on the first grind).
+try { const n = db.prepare("UPDATE problems SET used=0").run().changes; console.log(`freed problems (used=0): ${n}`); }
+catch (e) { console.log(`skip un-use: ${e.message}`); }
+for (const t of kept) {
+  try { const n = db.prepare(`SELECT COUNT(*) c FROM ${t}`).get().c; console.log(`kept ${t}: ${n} rows`); }
+  catch {}
+}
+db.close();
+'
+echo "done"

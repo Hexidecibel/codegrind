@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Typecheck + build the client into ./dist. No service restart — use bin/deploy
+# for that. Safe to run against a live install: the running server only reads
+# ./dist on request, so the worst case is a few seconds of mixed assets.
+set -euo pipefail
+
+REPO="/home/hexi/local/src/codegrind"
+cd "$REPO"
+
+# Same Node pin as bin/deploy — better-sqlite3 is compiled against the ABI of
+# whatever Node runs npm, and the systemd unit runs v22.22.0.
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+if [[ "${SKIP_INSTALL:-0}" != "1" ]]; then
+  # This box has a global npm `omit=dev`, so devDependencies (vite, tsx,
+  # @types/*) are skipped by a bare install — force them in or tsc/vite is missing.
+  echo "==> Installing dependencies (--include=dev)"
+  npm install --include=dev
+fi
+
+echo "==> Building client (tsc -b && vite build)"
+npm run build
+
+# The server serves ./dist with `precompressed: true`, so ship .br/.gz siblings.
+# Monaco is bundled rather than CDN-loaded; its editor chunk and TypeScript
+# worker are multi-MB and there is no compression anywhere else in the path
+# (HAProxy doesn't compress this backend).
+echo "==> Precompressing dist assets (.br/.gz)"
+node --input-type=module - <<'NODE'
+import { readdirSync, statSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { gzipSync, brotliCompressSync, constants } from 'node:zlib';
+
+const EXT = /\.(js|css|html|svg|json|map|ttf)$/;
+let files = 0;
+let raw = 0;
+let br = 0;
+
+const walk = (dir) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, entry.name);
+    if (entry.isDirectory()) { walk(p); continue; }
+    if (!EXT.test(entry.name) || /\.(br|gz)$/.test(entry.name)) continue;
+    if (statSync(p).size < 1024) continue;
+    const buf = readFileSync(p);
+    const b = brotliCompressSync(buf, {
+      params: { [constants.BROTLI_PARAM_QUALITY]: 9 },
+    });
+    writeFileSync(p + '.br', b);
+    writeFileSync(p + '.gz', gzipSync(buf, { level: 9 }));
+    files++; raw += buf.length; br += b.length;
+  }
+};
+walk('dist');
+const mb = (n) => (n / 1024 / 1024).toFixed(1) + ' MB';
+console.log(`    ${files} files: ${mb(raw)} -> ${mb(br)} brotli`);
+NODE
+
+echo "==> dist"
+du -sh dist
+ls -la dist/assets | head -20

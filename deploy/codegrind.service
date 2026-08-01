@@ -1,0 +1,19 @@
+[Unit]
+Description=codegrind (AI-coached coding-problem trainer — React+Hono, Monaco, Docker sandbox, Claude coach)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hexi
+WorkingDirectory=/home/hexi/local/src/codegrind
+EnvironmentFile=/home/hexi/local/src/codegrind/.env
+Environment=HOST=127.0.0.1
+Environment=NODE_ENV=production
+Environment=PATH=/home/hexi/.nvm/versions/node/v22.22.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/hexi/.nvm/versions/node/v22.22.0/bin/npx tsx src/server/index.ts
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

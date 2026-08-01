@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Deploy codegrind: refresh secrets, install deps, build client, ensure sandbox
+# image, restart service. Idempotent — safe to re-run.
+set -euo pipefail
+
+REPO="/home/hexi/local/src/codegrind"
+INJECT="/home/hexi/local/src/cush-tools/bin/inject"
+cd "$REPO"
+
+# Pin Node to the version the systemd unit runs (v22.22.0). Native modules like
+# better-sqlite3 compile against the ABI of whatever Node runs npm — if a shell's
+# default is a different major (e.g. Node 24), the built .node fails to load under
+# the service's Node 22 (NODE_MODULE_VERSION mismatch). Prepending this guarantees
+# install/rebuild target the runtime ABI.
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+echo "==> Materializing .env via cush-tools inject"
+if [[ -x "$INJECT" ]]; then
+  "$INJECT" --no-prompt || echo "    (inject non-fatal; continuing)"
+else
+  echo "    (inject not found at $INJECT; skipping)"
+fi
+
+# This box has a global npm `omit=dev`, so devDependencies (incl. @types/*, vite,
+# tsx) are skipped by a bare install — force them in or the build fails.
+echo "==> Installing dependencies (--include=dev)"
+npm ci --include=dev || npm install --include=dev
+
+# Typecheck + bundle + precompress. Deps are already installed above.
+SKIP_INSTALL=1 "$REPO/bin/build"
+
+echo "==> Ensuring sandbox runner image (codegrind-runner:latest)"
+if ! docker image inspect codegrind-runner:latest >/dev/null 2>&1; then
+  echo "    image missing — building"
+  "$REPO/bin/build-runner-image"
+else
+  echo "    present"
+fi
+
+echo "==> Restarting service"
+sudo systemctl restart codegrind
+
+echo "==> Status"
+exec "$REPO/bin/status"

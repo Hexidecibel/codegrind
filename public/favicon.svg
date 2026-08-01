@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Mirrors the app-shell logo: lucide Code2 on the --primary indigo. -->
+  <rect width="64" height="64" rx="14" fill="#878af8"/>
+  <g fill="none" stroke="#0b0d13" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M40 21l10 11-10 11"/>
+    <path d="M24 21L14 32l10 11"/>
+    <path d="M36 15l-8 34"/>
+  </g>
+</svg>
