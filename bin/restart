@@ -2,4 +2,19 @@
 # Restart codegrind and report status.
 set -euo pipefail
 sudo systemctl restart codegrind
+
+# systemctl returns as soon as the unit is started, not when the app has bound
+# its port — tsx has to boot and compile first. Without this wait, bin/status
+# curls a socket that isn't listening yet and reports a false UNREACHABLE.
+# Same loop bin/deploy uses; kept in sync deliberately.
+for i in $(seq 1 30); do
+  if curl -fsS -o /dev/null http://127.0.0.1:9416/api/health 2>/dev/null; then
+    break
+  fi
+  if [[ "$i" == "30" ]]; then
+    echo "    still not healthy after 30s — see bin/logs" >&2
+  fi
+  sleep 1
+done
+
 exec "$(dirname "${BASH_SOURCE[0]}")/status"
