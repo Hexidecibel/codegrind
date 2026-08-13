@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { TOPICS, type Topic, type Primer } from '../../shared/types.js';
-import { getPrimer, insertPrimer, getPrimerPatterns } from '../services/db.js';
+import { getPrimer, insertPrimer } from '../services/db.js';
 import { generatePrimer } from '../services/llm.service.js';
 
 export const primersRoutes = new Hono();
@@ -8,12 +8,6 @@ export const primersRoutes = new Hono();
 function isTopic(v: unknown): v is Topic {
   return typeof v === 'string' && (TOPICS as readonly string[]).includes(v);
 }
-
-// GET /api/primers — topics that already have a cached primer (library page).
-primersRoutes.get('/primers', (c) => {
-  const payload: string[] = getPrimerPatterns();
-  return c.json(payload);
-});
 
 // GET /api/primer/:topic — cached primer, generated + cached on a miss.
 primersRoutes.get('/primer/:topic', async (c) => {

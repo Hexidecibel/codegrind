@@ -1,18 +1,12 @@
 import { Hono } from 'hono';
-import type { ProgressStats, HistoryResponse, MistakeStat } from '../../shared/types.js';
-import { getProgress, getHistory, getReviewDueCount, getMistakeLedger } from '../services/db.js';
+import type { ProgressStats, HistoryResponse } from '../../shared/types.js';
+import { getProgress, getHistory, getReviewDueCount } from '../services/db.js';
 
 export const progressRoutes = new Hono();
 
 // GET /api/progress — per-pattern mastery derived from attempts + review-due count.
 progressRoutes.get('/progress', (c) => {
   const payload: ProgressStats = { patterns: getProgress(), reviewDue: getReviewDueCount() };
-  return c.json(payload);
-});
-
-// GET /api/mistakes — aggregated recurring-failure-mode ledger.
-progressRoutes.get('/mistakes', (c) => {
-  const payload: MistakeStat[] = getMistakeLedger();
   return c.json(payload);
 });
 

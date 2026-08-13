@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "start": "tsx src/server/index.ts",
     "test": "vitest",
-    "seed": "tsx bin/seed-bank.ts"
+    "seed": "tsx bin/seed-bank.ts",
+    "warm": "tsx bin/warm-lessons.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.100.1",

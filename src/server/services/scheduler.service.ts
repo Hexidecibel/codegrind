@@ -15,7 +15,7 @@ import {
 } from '../../shared/types.js';
 import {
   getSkillState,
-  getProgress,
+  getCleanSolvesByTopic,
   getBankTitles,
   getRecentSolvedProblem,
   getDueReview,
@@ -23,6 +23,18 @@ import {
   getReviewDueCount,
   type SkillRow,
 } from './db.js';
+import {
+  PREREQS,
+  ROOT_TOPICS,
+  FOUNDATIONAL_START,
+  UNLOCK_TIER,
+  WEAK_SCORE,
+  easierDifficulty,
+  emptyCleanSolves,
+  levelAtLeast,
+  tierProgress,
+  type TierProgress,
+} from './curriculum.js';
 
 // -----------------------------------------------------------------------------
 // Intent — what the scheduler decides to serve next.
@@ -48,54 +60,32 @@ export interface NextIntentOpts {
 }
 
 // -----------------------------------------------------------------------------
-// Skill tree — prerequisites-of each topic. Roots (empty) are available from the
-// start. A topic is eligible for `new-pattern` once ≥1 prerequisite is mastered.
+// Skill tree — the prerequisite DAG and the tier ladder now live in
+// ./curriculum.js so the Study ordering can import them without pulling in this
+// module's `db.js` dependency. Re-exported here so existing importers of
+// scheduler.service keep working unchanged.
 // -----------------------------------------------------------------------------
-export const PREREQS: Record<Topic, Topic[]> = {
-  // roots
-  arrays: [],
-  hashing: [],
-  math: [],
-  'bit-manipulation': [],
-  // built on arrays
-  'two-pointer': ['arrays'],
-  'sliding-window': ['arrays', 'two-pointer'],
-  'binary-search': ['arrays'],
-  intervals: ['arrays', 'two-pointer'],
-  stack: ['arrays'],
-  'linked-list': ['arrays'],
-  greedy: ['arrays', 'intervals'],
-  // structural
-  trees: ['linked-list'],
-  'bfs-dfs': ['trees'],
-  graphs: ['bfs-dfs'],
-  backtracking: ['trees'],
-  'dynamic-programming': ['backtracking'],
-  heap: ['trees'],
-  trie: ['trees'],
-};
-
-const ROOT_TOPICS: Topic[] = ['arrays', 'hashing', 'math', 'bit-manipulation'];
-const FOUNDATIONAL_START: Topic = 'arrays';
-
-// A topic counts as "mastered" (for progression/tree unlock) at/above this.
-const MASTERY_THRESHOLD = 0.6;
-// A topic counts as "weak" (reinforce candidate) below this.
-const WEAK_THRESHOLD = 0.5;
-
-const DIFF_ORDER: Difficulty[] = ['easy', 'medium', 'hard'];
-function nextDifficulty(d: Difficulty): Difficulty {
-  return DIFF_ORDER[Math.min(DIFF_ORDER.indexOf(d) + 1, DIFF_ORDER.length - 1)];
-}
+export {
+  PREREQS,
+  ROOT_TOPICS,
+  FOUNDATIONAL_START,
+  UNLOCK_TIER,
+  TIER_REQUIREMENT,
+  WEAK_SCORE,
+} from './curriculum.js';
 
 // -----------------------------------------------------------------------------
-// Per-topic view — skill row + derived mastery/staleness, one per TOPIC.
+// Per-topic view — skill row + derived tier/staleness, one per TOPIC.
 // -----------------------------------------------------------------------------
 interface TopicView {
   topic: Topic;
   attempts: number;
   solved: number;
-  mastery: number; // 0..1
+  /** Display ordinal, 0..1 — see curriculum.masteryScore. */
+  mastery: number;
+  /** The whole tier picture: level, next tier, credits banked toward it. */
+  tier: TierProgress;
+  /** The difficulty to serve = the tier being worked on (derived, not stored). */
   currentDifficulty: Difficulty;
   box: number;
   streak: number;
@@ -113,31 +103,14 @@ function buildViews(): TopicView[] {
   const skill = new Map<Topic, SkillRow>();
   for (const s of getSkillState()) skill.set(s.topic, s);
 
-  // Supplementary weakness signal from the pattern-keyed progress table: when a
-  // pattern tag happens to match a topic name, fold its mastery in.
-  const progressByName = new Map<string, number>();
-  for (const p of getProgress()) progressByName.set(p.pattern, p.masteryScore);
+  // The tier ladder's only input: distinct problems solved with zero hints.
+  const clean = getCleanSolvesByTopic();
 
   const now = Date.now();
 
   return TOPICS.map((topic): TopicView => {
     const s = skill.get(topic);
-    const attempts = s?.attempts ?? 0;
-    const solved = s?.solved ?? 0;
-
-    let mastery = 0;
-    if (s && attempts > 0) {
-      const solveRate = solved / attempts;
-      let recency = 0;
-      if (s.lastSeenAt) {
-        const ageDays = (now - new Date(s.lastSeenAt).getTime()) / DAY_MS;
-        recency = Math.max(0, 1 - ageDays / 30);
-      }
-      mastery = solveRate * 0.8 + recency * 0.2;
-    }
-    // Blend in same-named pattern mastery if present (never lowers below skill).
-    const byName = progressByName.get(topic);
-    if (byName !== undefined) mastery = Math.max(mastery, (mastery + byName) / 2);
+    const tier = tierProgress(clean.get(topic) ?? emptyCleanSolves());
 
     const dueAt = s?.dueAt ?? null;
     const overdue = dueAt ? new Date(dueAt).getTime() <= now : false;
@@ -147,10 +120,13 @@ function buildViews(): TopicView[] {
 
     return {
       topic,
-      attempts,
-      solved,
-      mastery,
-      currentDifficulty: s?.currentDifficulty ?? 'easy',
+      attempts: s?.attempts ?? 0,
+      solved: s?.solved ?? 0,
+      mastery: tier.score,
+      tier,
+      // Derived, so the scheduler can never disagree with the tier the ladder
+      // says you are on — the stored column is only a cache of this.
+      currentDifficulty: tier.working,
       box: s?.box ?? 0,
       streak: s?.streak ?? 0,
       lastResult: s?.lastResult ?? null,
@@ -239,19 +215,21 @@ function buildCandidates(views: TopicView[], plan?: SessionPlan): Candidate[] {
   for (const v of views) {
     const staleBoost = Number.isFinite(v.staleDays) ? Math.min(v.staleDays / 14, 0.6) : 0.3;
 
-    // warm-up — a solid, known topic to get into flow (opener-ish).
-    if (v.attempts > 0 && v.mastery >= WEAK_THRESHOLD) {
+    // warm-up — a solid, known topic to get into flow (opener-ish). Served one
+    // tier below the one being worked on, floored at easy: a warm-up is meant
+    // to be comfortable, and "comfortable" moves up the ladder with you.
+    if (v.attempts > 0 && v.mastery >= WEAK_SCORE) {
       out.push({
         kind: 'warm-up',
         topic: v.topic,
-        difficulty: v.currentDifficulty === 'hard' ? 'medium' : 'easy',
+        difficulty: easierDifficulty(v.currentDifficulty),
         score: 0.3 + v.mastery * 0.4 + focusBias(v.topic, plan),
         rationale: `Warming up on ${v.topic}, one of your stronger areas.`,
       });
     }
 
     // reinforce — weak / failed-last / overdue topic (spaced repetition).
-    if (v.attempts > 0 && (v.mastery < WEAK_THRESHOLD || v.failedLast || v.overdue)) {
+    if (v.attempts > 0 && (v.mastery < WEAK_SCORE || v.failedLast || v.overdue)) {
       let reason = 'it is one of your weaker areas';
       if (v.failedLast) reason = 'you missed it last time';
       else if (v.overdue) reason = 'it is due for review';
@@ -281,28 +259,48 @@ function buildCandidates(views: TopicView[], plan?: SessionPlan): Candidate[] {
       });
     }
 
-    // level-up — mastered topic, bump difficulty.
-    if (v.mastery >= MASTERY_THRESHOLD && v.box >= 2 && v.currentDifficulty !== 'hard') {
-      const nd = nextDifficulty(v.currentDifficulty);
+    // level-up — a tier was just completed and nothing has been banked at the
+    // next one yet. THE TIER RULE, not a score: `v.tier.level` only moves on
+    // TIER_REQUIREMENT distinct hint-free solves, so this cannot be triggered by
+    // re-submitting a solution that already passes. It stops firing at the top
+    // of the ladder (`next === null`) — but reinforce/variation keep serving
+    // that tier forever, so there is always a next problem.
+    if (v.tier.level !== 'none' && v.tier.next !== null && v.tier.towardNext === 0) {
+      const nd = v.tier.next;
       out.push({
         kind: 'level-up',
         topic: v.topic,
         difficulty: nd,
         score: 0.7 + v.mastery * 0.6 + v.streak * 0.05 + focusBias(v.topic, plan),
-        rationale: `You've been crushing ${v.topic} — stepping it up to ${nd}.`,
+        rationale: `You cleared the ${v.tier.level} tier on ${v.topic} — stepping it up to ${nd}.`,
       });
     }
   }
 
-  // new-pattern — an unattempted topic whose ≥1 prerequisite is mastered.
+  // new-pattern — an unattempted topic with ≥1 prerequisite at the unlock tier.
+  const atUnlockTier = (t: Topic): boolean =>
+    levelAtLeast(byTopic.get(t)?.tier.level ?? 'none', UNLOCK_TIER);
+
   for (const v of views) {
     if (v.attempts > 0) continue;
     const prereqs = PREREQS[v.topic];
-    if (prereqs.length === 0) continue; // roots handled via cold-start/warm-up
-    const unlocked = prereqs.some((p) => (byTopic.get(p)?.mastery ?? 0) >= MASTERY_THRESHOLD);
-    if (!unlocked) continue;
-    const readyPrereq =
-      prereqs.find((p) => (byTopic.get(p)?.mastery ?? 0) >= MASTERY_THRESHOLD) ?? prereqs[0];
+    if (prereqs.length === 0) {
+      // Roots have no prerequisites, so they are unlocked from the very start —
+      // but nothing else can reach them once the grind is under way. Cold-start
+      // only fires while NOTHING has been practiced, and warm-up/reinforce both
+      // require attempts > 0. Without this branch an untouched root (hashing,
+      // math, bit-manipulation) is unreachable forever.
+      out.push({
+        kind: 'new-pattern',
+        topic: v.topic,
+        difficulty: 'easy',
+        score: 0.75 + focusBias(v.topic, plan),
+        rationale: `New pattern: ${v.topic} — a foundational topic you haven't touched yet.`,
+      });
+      continue;
+    }
+    const readyPrereq = prereqs.find(atUnlockTier);
+    if (!readyPrereq) continue;
     out.push({
       kind: 'new-pattern',
       topic: v.topic,

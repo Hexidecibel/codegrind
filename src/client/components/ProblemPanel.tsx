@@ -6,10 +6,15 @@ import { Badge } from '@/client/components/ui/badge';
 import { humanize } from '@/client/lib/format';
 import { cn } from '@/lib/utils';
 
+// Same four hues as reflect/chart.DIFFICULTY_COLOR (emerald / amber / rose /
+// fuchsia), on the Tailwind scale this badge already used. The badge always
+// prints the difficulty word — the emerald↔amber CVD warning on this set is
+// only legal with that text label, so never drop it for a bare swatch.
 const DIFFICULTY_STYLES: Record<Difficulty, string> = {
   easy: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
   medium: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
   hard: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
+  expert: 'bg-fuchsia-500/15 text-fuchsia-400 border-fuchsia-500/30',
 };
 
 export function ProblemPanel({

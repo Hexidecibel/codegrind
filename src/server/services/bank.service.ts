@@ -10,6 +10,7 @@ import {
   getProblem,
   getBankTitles,
   getRecentSolvedProblem,
+  getRecentProblemDigests,
 } from './db.js';
 
 // How many times to regenerate if too few tests survive canonicalization (the
@@ -75,8 +76,25 @@ export async function generateAndStore(
   let gen: GeneratedProblem | null = null;
   let lastRaw: GeneratedProblem | null = null;
 
+  let lastError: unknown = null;
+
   for (let attempt = 1; attempt <= MAX_GEN_ATTEMPTS; attempt++) {
-    const raw = await generateProblem(topic, difficulty, opts);
+    // Generation itself must be inside the retry. It throws on a truncated or
+    // malformed tool call ("missing sample or hidden tests"), and that used to
+    // escape this loop entirely — one unlucky completion 500'd the request and
+    // left the player staring at "Failed to load next problem" with no recovery.
+    let raw: GeneratedProblem;
+    try {
+      raw = await generateProblem(topic, difficulty, opts);
+    } catch (err) {
+      lastError = err;
+      console.warn(
+        `[bank] ${difficulty}/${topic} attempt ${attempt}/${MAX_GEN_ATTEMPTS} failed to generate: ${
+          err instanceof Error ? err.message : err
+        }`
+      );
+      continue;
+    }
     lastRaw = raw;
     try {
       const canon = await canonicalize(raw);
@@ -97,9 +115,19 @@ export async function generateAndStore(
     }
   }
 
-  if (!gen) {
+  if (!gen && lastRaw) {
     console.warn(`[bank] storing ${difficulty}/${topic} un-canonicalized after ${MAX_GEN_ATTEMPTS} attempts.`);
-    gen = lastRaw!;
+    gen = lastRaw;
+  }
+
+  if (!gen) {
+    // Every attempt threw, so there is no raw problem to fall back on. Surface
+    // the real cause rather than a null-deref on `gen.title`.
+    throw new Error(
+      `Could not generate a ${difficulty} ${topic} problem after ${MAX_GEN_ATTEMPTS} attempts: ${
+        lastError instanceof Error ? lastError.message : lastError
+      }`
+    );
   }
 
   const record: ProblemRecord = {
@@ -179,6 +207,27 @@ export async function getAdaptiveProblem(intent: SchedulerIntent): Promise<Probl
 
     const avoidTitles = intent.avoidTitles ?? getBankTitles(topic);
     if (avoidTitles.length) opts.avoidTitles = avoidTitles;
+
+    // Avoiding titles only stops repeated NAMES. Left alone the generator will
+    // happily re-serve the same algorithm in a fresh costume — six distinct
+    // "find a target in a sorted array" problems with six different stories.
+    // Show it what it has already produced and demand a different structural
+    // variant of the technique.
+    const recent = getRecentProblemDigests(topic, 4);
+    if (recent.length) {
+      const digest = recent
+        .map((r) => `- "${r.title}": ${r.prompt.replace(/\s+/g, ' ').slice(0, 160)}`)
+        .join('\n');
+      opts.noveltyHint = [
+        opts.noveltyHint,
+        `Already served for "${topic}":\n${digest}\n\n` +
+          `Pick a genuinely DIFFERENT structural variant of the ${topic} technique — a different ` +
+          `invariant, boundary condition, or search/traversal target. Re-stating the same algorithm ` +
+          `in a new domain or story is a failure; the solution shape itself must differ.`,
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+    }
 
     if (kind === 'variation') {
       const seed = getRecentSolvedProblem(topic);

@@ -17,9 +17,14 @@ import type {
   SessionPlan,
   ChatTurn,
   AskResponse,
+  RevealResponse,
+  TestResult,
   Prediction,
-  MistakeStat,
   Primer,
+  StudyFeedResponse,
+  StudyIndexResponse,
+  StudyReadResponse,
+  ReflectResponse,
 } from '@/shared/types';
 
 /** Shape returned by GET /api/session/:id (resume). */
@@ -60,11 +65,6 @@ export function generateProblem(
     method: 'POST',
     body: JSON.stringify({ topic, difficulty }),
   });
-}
-
-/** GET /api/problems/:id */
-export function getProblem(id: string): Promise<Problem> {
-  return request<Problem>(`/api/problems/${encodeURIComponent(id)}`);
 }
 
 /** POST /api/run — run visible sample tests only (sandbox, no AI). */
@@ -124,16 +124,34 @@ export function getSession(sessionId: string): Promise<SessionState> {
   return request<SessionState>(`/api/session/${encodeURIComponent(sessionId)}`);
 }
 
-/** POST /api/ask — conversational follow-up Q&A anchored to the current problem + code. */
+/**
+ * POST /api/ask — conversational follow-up Q&A anchored to the current problem
+ * + code. `results` are the last submit's per-test outcomes; pass them so the
+ * tutor can answer "why did mine fail?" from the actual failures rather than
+ * by re-deriving them from the code.
+ */
 export function askCoach(
   problemId: string,
   code: string,
   question: string,
   history: ChatTurn[] = [],
+  results: TestResult[] = [],
 ): Promise<AskResponse> {
   return request<AskResponse>('/api/ask', {
     method: 'POST',
-    body: JSON.stringify({ problemId, code, question, history }),
+    body: JSON.stringify({ problemId, code, question, history, results }),
+  });
+}
+
+/**
+ * POST /api/reveal — show the reference solution. Always available; the server
+ * records the reveal and the next submit is counted as assisted (same treatment
+ * as a hint), so it can never earn tier credit.
+ */
+export function revealSolution(problemId: string): Promise<RevealResponse> {
+  return request<RevealResponse>('/api/reveal', {
+    method: 'POST',
+    body: JSON.stringify({ problemId }),
   });
 }
 
@@ -148,19 +166,55 @@ export function getHistory(): Promise<HistoryResponse> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase C — retrieval loop, primers, mistake ledger
+// Phase C — retrieval loop, primers
 // ---------------------------------------------------------------------------
-/** GET /api/mistakes — aggregated recurring-mistake tags, most frequent first. */
-export function getMistakes(): Promise<MistakeStat[]> {
-  return request<MistakeStat[]>('/api/mistakes');
-}
-
 /** GET /api/primer/:topic — per-pattern cheat-sheet card (generates + caches on miss). */
 export function getPrimer(topic: string): Promise<Primer> {
   return request<Primer>(`/api/primer/${encodeURIComponent(topic)}`);
 }
 
-/** GET /api/primers — topic ids that already have a cached primer. */
-export function getPrimers(): Promise<string[]> {
-  return request<string[]>('/api/primers');
+// ---------------------------------------------------------------------------
+// Study — the guided reading feed
+// ---------------------------------------------------------------------------
+/**
+ * GET /api/study/feed — the next already-cached lessons in curriculum order.
+ * Never blocks on generation: omit `after` to resume at the first unread lesson,
+ * and watch `warming` to decide whether to render a skeleton for the next card.
+ */
+export function getStudyFeed(
+  opts: { after?: string; limit?: number } = {},
+): Promise<StudyFeedResponse> {
+  const qs = new URLSearchParams({ limit: String(opts.limit ?? 3) });
+  if (opts.after) qs.set('after', opts.after);
+  return request<StudyFeedResponse>(`/api/study/feed?${qs.toString()}`);
+}
+
+/** GET /api/study/jump/:topic — reposition the feed to a topic. */
+export function jumpToTopic(topic: string): Promise<StudyFeedResponse> {
+  return request<StudyFeedResponse>(`/api/study/jump/${encodeURIComponent(topic)}`);
+}
+
+/** POST /api/study/read — mark a lesson read; `fuzzy` resurfaces it for a re-read. */
+export function markLessonRead(lessonId: string, fuzzy = false): Promise<StudyReadResponse> {
+  return request<StudyReadResponse>('/api/study/read', {
+    method: 'POST',
+    body: JSON.stringify({ lessonId, fuzzy }),
+  });
+}
+
+/** GET /api/study/index — per-topic totals, read counts and mastery for the jump grid. */
+export function getStudyIndex(): Promise<StudyIndexResponse> {
+  return request<StudyIndexResponse>('/api/study/index');
+}
+
+// ---------------------------------------------------------------------------
+// Reflect — the progress dashboard
+// ---------------------------------------------------------------------------
+/**
+ * GET /api/reflect — the whole dashboard in one call: skill tree, next unlock,
+ * stat tiles, 84-day activity, per-problem trend and the split mistake ledger.
+ * Everything is precomputed server-side; nothing here needs re-deriving.
+ */
+export function getReflect(): Promise<ReflectResponse> {
+  return request<ReflectResponse>('/api/reflect');
 }

@@ -9,15 +9,19 @@ import {
   type SessionStartResponse,
   type GrindProblem,
 } from '../../shared/types.js';
-import { getSkillState, createSession, getSession, bumpSession } from '../services/db.js';
+import {
+  getSkillState,
+  getCleanSolvesByTopic,
+  createSession,
+  getSession,
+  bumpSession,
+} from '../services/db.js';
+import { TIER_REQUIREMENT, WEAK_SCORE, tierProgress } from '../services/curriculum.js';
 import { planSession, type SessionSnapshotTopic } from '../services/llm.service.js';
 import { nextIntent, peekUpNext, type SchedulerIntent } from '../services/scheduler.service.js';
 import { getAdaptiveProblem } from '../services/bank.service.js';
 
 export const sessionRoutes = new Hono();
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const WEAK_THRESHOLD = 0.5;
 
 const DEFAULT_PLAN: SessionPlan = {
   theme: 'Adaptive practice',
@@ -25,33 +29,31 @@ const DEFAULT_PLAN: SessionPlan = {
   focus: [],
 };
 
-/** Build the per-topic mastery snapshot the session planner reasons over. */
+/**
+ * Build the per-topic tier snapshot the session planner reasons over. Same
+ * ladder the scheduler uses (curriculum.tierProgress) — this route used to
+ * hand-roll its own `solveRate * 0.8 + recency * 0.2` copy of the old formula.
+ */
 function buildSnapshot(): SessionSnapshotTopic[] {
   const skill = new Map(getSkillState().map((s) => [s.topic, s]));
+  const clean = getCleanSolvesByTopic();
   const now = Date.now();
   return TOPICS.map((topic): SessionSnapshotTopic => {
     const s = skill.get(topic);
     const attempted = s?.attempts ?? 0;
-    const solved = s?.solved ?? 0;
-    let mastery = 0;
-    if (s && attempted > 0) {
-      const solveRate = solved / attempted;
-      let recency = 0;
-      if (s.lastSeenAt) {
-        const ageDays = (now - new Date(s.lastSeenAt).getTime()) / DAY_MS;
-        recency = Math.max(0, 1 - ageDays / 30);
-      }
-      mastery = solveRate * 0.8 + recency * 0.2;
-    }
+    const tier = tierProgress(clean.get(topic));
     const due = s?.dueAt ? new Date(s.dueAt).getTime() <= now : false;
     return {
       topic,
       attempted,
-      solved,
-      mastery,
-      currentDifficulty: s?.currentDifficulty ?? 'easy',
+      solved: s?.solved ?? 0,
+      tier: tier.level,
+      towardNext: tier.towardNext,
+      tierRequirement: TIER_REQUIREMENT,
+      nextTier: tier.next,
+      currentDifficulty: tier.working,
       due: attempted > 0 && due,
-      weak: attempted > 0 && mastery < WEAK_THRESHOLD,
+      weak: attempted > 0 && tier.score < WEAK_SCORE,
     };
   });
 }

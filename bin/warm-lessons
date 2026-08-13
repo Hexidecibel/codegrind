@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Pre-generate the Study reading tracks (18 outlines + the first lessons of
+# each) so the first bedtime session isn't a series of 15s waits. Thin wrapper
+# around bin/warm-lessons.ts, like bin/seed-bank.
+#
+# Idempotent and resumable — anything already cached is skipped and never
+# re-requested from the API. Safe to re-run after a partial failure.
+#
+#   bin/warm-lessons --dry-run       # report the plan, spend nothing
+#   bin/warm-lessons                 # all 18 tracks, first 3 lessons each
+#   bin/warm-lessons --topic trees   # one track only
+set -euo pipefail
+
+REPO="/home/hexi/local/src/codegrind"
+cd "$REPO"
+
+# Same Node pin as bin/build / bin/deploy — better-sqlite3 is compiled against
+# the ABI of the Node the systemd unit runs (v22.22.0).
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+# The service gets its env from systemd's EnvironmentFile; a CLI run has to load
+# it itself (ANTHROPIC_API_KEY, DATA_DIR). bin/inject materializes this file.
+if [[ -f "$REPO/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO/.env"
+  set +a
+fi
+
+exec npx tsx bin/warm-lessons.ts "$@"
