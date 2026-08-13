@@ -1,29 +1,50 @@
 #!/usr/bin/env bash
-# Kill orphaned codegrind-runner containers.
+# Kill orphaned codegrind runner containers.
 #
 # bin/run-submission force-removes its own container in an EXIT trap, which
 # covers the normal timeout path. It cannot cover the case where the script
 # itself is SIGKILLed (OOM killer, `systemctl kill -s KILL`, host reboot mid-run)
 # — the trap never runs and the container is left spinning.
 #
-# A submission is capped at 12s, so anything older than MAX_AGE is by definition
-# an orphan. Safe to run on a timer; a no-op when there is nothing to reap.
+# The longest legitimate submission is CG_TIMEOUT[java] = 30s, so anything older
+# than MAX_AGE is by definition an orphan. Safe to run on a timer (it is: see
+# deploy/codegrind-reap.timer, installed by bin/install-units); a no-op when
+# there is nothing to reap.
 #
 # Usage: bin/reap-runners [--dry-run] [--max-age SECONDS]
+#
+# WHY A LABEL AND NOT AN IMAGE. This used to filter on `ancestor=<tag>`, which
+# docker resolves to an image ID at query time. Rebuilding the runner mints a new
+# ID, so every container started from the OLD image instantly became invisible to
+# this script — and a rebuild is exactly the moment long-lived orphans exist. The
+# reaper was blind to the containers it was written for. A label is attached to
+# the CONTAINER at creation and cannot be invalidated by anything that happens to
+# the image afterwards.
 set -euo pipefail
 
-IMAGE="codegrind-runner:latest"
-MAX_AGE=120        # 10x the 12s submission cap — nothing legitimate lives this long
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/languages.sh
+source "${REPO_DIR}/bin/lib/languages.sh"
+
+MAX_AGE=300        # 10x the 30s java cap — nothing legitimate lives this long
 DRY_RUN=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run)  DRY_RUN=1; shift ;;
     --max-age)  MAX_AGE="${2:?--max-age needs a value}"; shift 2 ;;
-    -h|--help)  sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,16p' "$0"; exit 0 ;;
     *)          echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+
+# The same SIGKILL that orphans a container also orphans the scratch directory
+# that was bind-mounted into it, and that leak is NEW: the scratch dir used to
+# be `mktemp -d` under /tmp, which systemd-tmpfiles-clean sweeps, and it now
+# lives under DATA_DIR so the host-path indirection can survive
+# containerization. Nothing sweeps DATA_DIR. Same trap, same failure, same
+# script — so the same age rule cleans both.
+SCRATCH_DIR="${CG_SCRATCH_DIR:-${DATA_DIR:-${REPO_DIR}/data}/tmp}"
 
 now="$(date +%s)"
 reaped=0
@@ -44,7 +65,25 @@ while read -r id; do
     docker rm -f "${id}" >/dev/null 2>&1 && echo "reaped ${id} (age ${age}s)"
   fi
   reaped=$(( reaped + 1 ))
-done < <(docker ps -q --filter "ancestor=${IMAGE}")
+done < <(docker ps -q --filter "label=${CG_LABEL}")
+
+# Scratch left behind by a run whose EXIT trap never fired: the `run.XXXXXXXX`
+# directory bin/run-submission mounts, and the solution/tests pair
+# sandbox.service.ts writes and removes in its `finally`.
+if [ -d "${SCRATCH_DIR}" ]; then
+  while IFS= read -r -d '' stale; do
+    if [ "${DRY_RUN}" -eq 1 ]; then
+      echo "would remove scratch ${stale}"
+    else
+      rm -rf "${stale}" && echo "removed scratch ${stale}"
+    fi
+    reaped=$(( reaped + 1 ))
+  done < <(
+    find "${SCRATCH_DIR}" -maxdepth 1 \
+      \( -type d -name 'run.*' -o -type f \( -name '*.tests.json' -o -name '*.solution.*' \) \) \
+      ! -newermt "-${MAX_AGE} seconds" -print0 2>/dev/null
+  )
+fi
 
 if [ "${reaped}" -eq 0 ]; then
   echo "nothing to reap"

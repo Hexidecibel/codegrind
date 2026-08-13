@@ -30,12 +30,13 @@ const MIN_HIDDEN_TESTS = 4;
  * of several valid answers for an ambiguous case.
  */
 async function canonicalizeTests(
+  language: Language,
   functionName: string,
   referenceSolution: string,
   tests: TestCase[]
 ): Promise<TestCase[]> {
   if (tests.length === 0) return [];
-  const res = await runTests(functionName, referenceSolution, tests);
+  const res = await runTests({ language, functionName, userCode: referenceSolution, tests });
   const out: TestCase[] = [];
   res.results.forEach((r, i) => {
     const src = tests[i];
@@ -54,9 +55,16 @@ async function canonicalizeTests(
 }
 
 /** Rebuild a generated problem with reference-canonicalized tests, or null if too few survive. */
-async function canonicalize(gen: GeneratedProblem): Promise<GeneratedProblem | null> {
-  const sampleTests = await canonicalizeTests(gen.functionName, gen.referenceSolution, gen.sampleTests);
-  const hiddenTests = await canonicalizeTests(gen.functionName, gen.referenceSolution, gen.hiddenTests);
+async function canonicalize(
+  language: Language,
+  gen: GeneratedProblem
+): Promise<GeneratedProblem | null> {
+  const sampleTests = await canonicalizeTests(
+    language, gen.functionName, gen.referenceSolution, gen.sampleTests
+  );
+  const hiddenTests = await canonicalizeTests(
+    language, gen.functionName, gen.referenceSolution, gen.hiddenTests
+  );
   if (sampleTests.length < MIN_SAMPLE_TESTS || hiddenTests.length < MIN_HIDDEN_TESTS) {
     return null;
   }
@@ -66,8 +74,20 @@ async function canonicalize(gen: GeneratedProblem): Promise<GeneratedProblem | n
 /**
  * Generate a fresh problem via Claude, canonicalize its tests against the
  * reference solution (so the problem is internally consistent), and store it.
- * Regenerates if the reference is too broken to yield enough usable tests; as a
- * last resort stores the raw generation so the bank is never empty.
+ * Regenerates if the reference is too broken to yield enough usable tests.
+ *
+ * WHEN CANONICALIZATION CANNOT BE DONE, THE TWO LANGUAGES PART WAYS. This used
+ * to swallow a sandbox failure with a `console.warn` and store the problem with
+ * the model's hand-authored `expected` values, which is survivable in
+ * JavaScript — the incumbent, whose whole existing bank was built that way and
+ * is demonstrably solvable — and fatal anywhere else. A missing JDK image would
+ * mint a Java problem whose `expected` no real run can ever reproduce: an
+ * unsolvable problem, served silently, with the failure looking exactly like the
+ * player being wrong.
+ *
+ * So: JavaScript keeps the lenient path and the problem is stamped
+ * `canonicalized: false`, which keeps it out of every future bank read. Every
+ * other language throws, loudly, at generation time.
  */
 export async function generateAndStore(
   language: Language,
@@ -77,6 +97,9 @@ export async function generateAndStore(
 ): Promise<ProblemRecord> {
   let gen: GeneratedProblem | null = null;
   let lastRaw: GeneratedProblem | null = null;
+  // Only true when every stored `expected` came out of a real sandbox run of
+  // the reference. Never inferred later — by then the evidence is gone.
+  let canonicalized = false;
 
   let lastError: unknown = null;
 
@@ -99,27 +122,45 @@ export async function generateAndStore(
     }
     lastRaw = raw;
     try {
-      const canon = await canonicalize(raw);
+      const canon = await canonicalize(language, raw);
       if (canon) {
         gen = canon;
+        canonicalized = true;
         break;
       }
       console.warn(
         `[bank] ${difficulty}/${topic} attempt ${attempt}: too few tests survived canonicalization (reference errors on most inputs) — regenerating.`
       );
     } catch (err) {
-      // Sandbox unavailable (e.g. Docker/image missing) — store the raw problem.
-      console.warn(
-        `[bank] canonicalization skipped (sandbox error): ${err instanceof Error ? err.message : err}`
-      );
+      // The sandbox itself could not run (Docker down, image missing, the
+      // script gone). This is infrastructure, not a bad generation, so retrying
+      // would only burn generation calls against the same broken sandbox.
+      const detail = err instanceof Error ? err.message : String(err);
+      if (language !== 'javascript') {
+        throw new Error(
+          `Cannot generate a ${language} problem: the sandbox failed, so the reference ` +
+            `solution was never run and every expected value would be unverified. ` +
+            `Fix the sandbox (bin/build-runner-image, bin/status) and retry. Cause: ${detail}`
+        );
+      }
+      console.warn(`[bank] canonicalization skipped (sandbox error): ${detail}`);
       gen = raw;
+      canonicalized = false;
       break;
     }
   }
 
   if (!gen && lastRaw) {
+    if (language !== 'javascript') {
+      throw new Error(
+        `Could not generate a solvable ${language} ${difficulty} ${topic} problem after ` +
+          `${MAX_GEN_ATTEMPTS} attempts: the reference solution errored on too many of its own ` +
+          `test inputs every time, so no expected value could be verified.`
+      );
+    }
     console.warn(`[bank] storing ${difficulty}/${topic} un-canonicalized after ${MAX_GEN_ATTEMPTS} attempts.`);
     gen = lastRaw;
+    canonicalized = false;
   }
 
   if (!gen) {
@@ -135,8 +176,8 @@ export async function generateAndStore(
   const record: ProblemRecord = {
     id: nanoid(),
     // The language that produced these `expected` values, stamped at the moment
-    // they were produced. Phase 2 gives the sandbox a language of its own; until
-    // then generation and canonicalization are both JavaScript by construction.
+    // they were produced — and the language the sandbox was actually invoked
+    // with above, not an assumption about which one it must have been.
     language,
     title: gen.title,
     prompt: gen.prompt,
@@ -150,6 +191,7 @@ export async function generateAndStore(
     sampleTests: gen.sampleTests,
     hiddenTests: gen.hiddenTests,
     referenceSolution: gen.referenceSolution,
+    canonicalized,
     used: false,
     createdAt: new Date().toISOString(),
   };

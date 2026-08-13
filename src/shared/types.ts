@@ -113,14 +113,34 @@ export interface Problem {
 export interface ProblemRecord extends Problem {
   hiddenTests: TestCase[];
   referenceSolution: string;
+  /**
+   * True when every `expected` value below was produced by actually RUNNING
+   * `referenceSolution` in the sandbox, rather than authored by the model.
+   *
+   * The bank used to swallow a sandbox failure with a `console.warn` and store
+   * the problem anyway. Survivable in JavaScript, where the model's hand-written
+   * `expected` is usually right; fatal in Java, where a missing JDK image would
+   * mint values that no real run can ever match — an unsolvable problem with no
+   * signal that anything went wrong. So it is recorded, un-canonicalized
+   * problems are never re-served from the bank, and for every language other
+   * than JavaScript a canonicalization failure throws instead of degrading.
+   */
+  canonicalized: boolean;
   used: boolean;
   createdAt: string;
 }
 
 /** Strip server-only fields to produce the player-safe view. */
 export function toPlayerProblem(p: ProblemRecord): Problem {
-  const { hiddenTests: _h, referenceSolution: _r, used: _u, createdAt: _c, ...safe } = p;
-  void _h; void _r; void _u; void _c;
+  const {
+    hiddenTests: _h,
+    referenceSolution: _r,
+    canonicalized: _k,
+    used: _u,
+    createdAt: _c,
+    ...safe
+  } = p;
+  void _h; void _r; void _k; void _u; void _c;
   return safe;
 }
 
@@ -136,6 +156,16 @@ export interface TestResult {
   actual?: string;
   /** Captured error / stderr for this case, if any. */
   stderr?: string;
+  /**
+   * Anything the solution PRINTED while this case ran (`console.log`, and its
+   * equivalent in every other language).
+   *
+   * It arrives as data because the sandbox's stdout is a single JSON document:
+   * a stray print used to be written directly into that stream, the caller's
+   * JSON.parse failed on the result, and perfectly correct code came back as an
+   * unexplained `error` verdict. The runners now buffer it instead.
+   */
+  stdout?: string;
   /** Wall-clock time for this case in milliseconds. */
   timeMs: number;
 }
@@ -144,14 +174,33 @@ export type Verdict =
   | 'accepted' // all tests passed
   | 'wrong_answer' // ran, but one or more tests produced the wrong result
   | 'runtime_error' // threw an exception
+  | 'compile_error' // the source never parsed — no test was ever called
   | 'timeout' // killed by the sandbox timeout (e.g. infinite loop)
   | 'error'; // harness/sandbox failure (couldn't run at all)
+
+/**
+ * How far the sandbox got before it stopped.
+ *
+ * The distinction is what makes `compile_error` possible, and it exists because
+ * the three languages express the same failure in three unrelated ways: a
+ * JavaScript `SyntaxError` from parsing, a Python `IndentationError`, a javac
+ * diagnostic with a line and column. All three mean "this never became runnable
+ * code", which is a different thing to tell a learner than "your code ran and
+ * got the wrong answer", and the runner is the only layer that can tell them
+ * apart.
+ */
+export type RunPhase =
+  | 'compile' // the source did not parse
+  | 'load' // it parsed, but blew up (or defined nothing) while loading
+  | 'run'; // the target function was actually called
 
 export interface RunResult {
   results: TestResult[];
   passed: number;
   total: number;
   verdict: Verdict;
+  /** Absent when the sandbox produced nothing at all (a kill, a crash). */
+  phase?: RunPhase;
 }
 
 /** Submit uses the same execution shape as Run (hidden tests instead of sample). */

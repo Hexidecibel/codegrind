@@ -29,6 +29,15 @@ export const VERDICT_META: Record<
     textClass: 'text-orange-400',
     icon: AlertTriangle,
   },
+  // Distinct from Runtime Error on purpose: nothing ran, so there is no
+  // behaviour to reason about and no test result that means anything. Same
+  // orange tone — it is still "your code, not the sandbox".
+  compile_error: {
+    label: 'Compile Error',
+    className: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
+    textClass: 'text-orange-400',
+    icon: AlertTriangle,
+  },
   timeout: {
     label: 'Time Limit Exceeded',
     className: 'bg-amber-500/15 text-amber-400 border-amber-500/30',

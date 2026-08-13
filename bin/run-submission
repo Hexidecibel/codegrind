@@ -2,7 +2,14 @@
 # Run a user submission against a tests JSON blob inside an ephemeral, hardened
 # Docker container, and emit the harness JSON to stdout.
 #
-# Usage: bin/run-submission <solution.mjs> <tests.json>
+# Usage: bin/run-submission <language> <solution-file> <tests.json>
+#
+# LANGUAGE COMES FIRST because it selects everything else: the image, the name
+# the source must have inside the container, the command that starts the
+# harness, and the memory/pids/time budget. All of that lives in one table,
+# bin/lib/languages.sh — deliberately in bash rather than in TypeScript, because
+# bash is what runs docker and two files that both own the run command will
+# eventually disagree.
 #
 # The two input files are copied into a private temp dir which is bind-mounted
 # read-only at /work. A hard `timeout` kills a runaway (e.g. infinite loop);
@@ -12,13 +19,47 @@
 # hexi IS in the docker group, so `docker run` needs no sudo.
 set -euo pipefail
 
-SOLUTION_SRC="${1:?usage: run-submission <solution.mjs> <tests.json>}"
-TESTS_SRC="${2:?usage: run-submission <solution.mjs> <tests.json>}"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/languages.sh
+source "${REPO_DIR}/bin/lib/languages.sh"
 
-IMAGE="codegrind-runner:latest"
-HARD_TIMEOUT=12
+LANGUAGE="${1:?usage: run-submission <language> <solution-file> <tests.json>}"
+SOLUTION_SRC="${2:?usage: run-submission <language> <solution-file> <tests.json>}"
+TESTS_SRC="${3:?usage: run-submission <language> <solution-file> <tests.json>}"
 
-WORK="$(mktemp -d)"
+cg_require_language "${LANGUAGE}"
+
+IMAGE="${CG_IMAGE[$LANGUAGE]}"
+SRCNAME="${CG_SRCNAME[$LANGUAGE]}"
+HARD_TIMEOUT="${CG_TIMEOUT[$LANGUAGE]}"
+read -r -a RUN_CMD <<< "${CG_CMD[$LANGUAGE]}"
+
+# -----------------------------------------------------------------------------
+# Scratch directory — and the one indirection that makes containerizing this app
+# a config change instead of a rewrite.
+# -----------------------------------------------------------------------------
+# CG_SCRATCH_DIR is where THIS PROCESS writes. CG_HOST_SCRATCH_DIR is the path
+# the SAME directory has on the docker HOST. Today they are identical and this
+# is pure ceremony.
+#
+# They stop being identical the moment codegrind itself runs in a container with
+# the host's docker socket mounted, which is the deployment already decided on.
+# `docker run -v SRC:/work` is resolved by the DAEMON, which lives on the host:
+# hand it a container-local path and the daemon happily creates an EMPTY
+# directory of that name and mounts that. The harness then reports "could not
+# read solution" for every submission, the bank stores hand-authored `expected`
+# values that were never verified against a reference, and the bill is 3x the
+# generation calls. It fails silently, at the layer nobody suspects.
+#
+# With this in place, containerizing is two environment variables and a shared
+# volume.
+CG_SCRATCH_DIR="${CG_SCRATCH_DIR:-${DATA_DIR:-${REPO_DIR}/data}/tmp}"
+CG_HOST_SCRATCH_DIR="${CG_HOST_SCRATCH_DIR:-${CG_SCRATCH_DIR}}"   # identical today
+
+mkdir -p "${CG_SCRATCH_DIR}"
+WORK="$(mktemp -d "${CG_SCRATCH_DIR}/run.XXXXXXXX")"
+HOST_WORK="${CG_HOST_SCRATCH_DIR}/$(basename "${WORK}")"
+
 # Name the container so cleanup can reach it. Without this, `timeout` kills the
 # `docker run` CLI client but NOT the container: a tight JS loop never yields to
 # the forwarded SIGTERM, `timeout` sends no SIGKILL follow-up, the client dies,
@@ -31,25 +72,33 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cp "${SOLUTION_SRC}" "${WORK}/solution.mjs"
+cp "${SOLUTION_SRC}" "${WORK}/${SRCNAME}"
 cp "${TESTS_SRC}" "${WORK}/tests.json"
 
 # `timeout` returns 124 on kill; docker run propagates the container exit code
 # otherwise. We do NOT `set -e`-abort on a non-zero here — let the caller see
 # stdout (which may be empty on a killed container) and the exit code.
+#
+# --label: bin/reap-runners finds orphans by THIS, not by image. A label belongs
+# to the container and survives a rebuild of the image it came from; the old
+# `--filter ancestor=<tag>` resolved the tag to an image ID, so the first rebuild
+# made every running container invisible to the reaper — precisely the orphans
+# it exists to catch.
 set +e
 timeout -k 3 "${HARD_TIMEOUT}" docker run --rm --name "${NAME}" \
+  --label "${CG_LABEL}" \
+  --label "codegrind.language=${LANGUAGE}" \
   --network none \
-  --memory=256m \
-  --cpus=1 \
-  --pids-limit=128 \
+  --memory="${CG_MEMORY[$LANGUAGE]}" \
+  --cpus="${CG_CPUS}" \
+  --pids-limit="${CG_PIDS[$LANGUAGE]}" \
   --read-only \
   --tmpfs /tmp \
   --cap-drop=ALL \
   --security-opt no-new-privileges \
-  -v "${WORK}:/work:ro" \
+  -v "${HOST_WORK}:/work:ro" \
   "${IMAGE}" \
-  node /app/runner.mjs /work/solution.mjs /work/tests.json
+  "${RUN_CMD[@]}" "/work/${SRCNAME}" /work/tests.json
 EXIT=$?
 set -e
 

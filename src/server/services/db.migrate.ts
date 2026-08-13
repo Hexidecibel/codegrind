@@ -23,7 +23,7 @@ import { DEFAULT_LANGUAGE } from '../../shared/languages.js';
  * itself become a thing that needs migrating, and it is already there on every
  * SQLite file ever created (0 by default).
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** Optional instrumentation — startup logging, and the seam tests observe. */
 export interface MigrateOptions {
@@ -224,6 +224,20 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
       // that table's PRIMARY KEY, and ALTER TABLE ADD COLUMN cannot extend a
       // key — it arrives with the rebuild below.
 
+      // v3. Did every `expected` value on this problem come out of a real
+      // sandbox run of its reference solution?
+      //
+      // DEFAULT 0, NOT 1, and the difference matters. The default is what an
+      // INSERT that forgets this column gets, and the safe thing to assume about
+      // a problem nobody vouched for is that nobody vouched for it. Existing
+      // rows are backfilled to 1 by the versioned step below — explicitly,
+      // because they are all JavaScript, all already served, and all
+      // demonstrably solvable, which is a claim about THIS database rather than
+      // a property of the column.
+      const addedCanonicalized = tableExists(db, 'problems')
+        && !columnExists(db, 'problems', 'canonicalized');
+      addColumnIfMissing(db, 'problems', 'canonicalized', 'INTEGER NOT NULL DEFAULT 0');
+
       // Server-side key/value store. The language selector needs it now; the
       // provider/model wizard later adds ROWS, never another migration.
       db.exec(`
@@ -356,6 +370,22 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
         opts.onStep?.('v2-code-translations');
       }
 
+      if (from < 3 || addedCanonicalized) {
+        // The backfill fires if and only if THIS run created the column — which
+        // is exactly the condition "there are rows here that predate it". That
+        // is a stronger gate than the version marker: re-running against a warm
+        // database cannot flip a legitimately un-canonicalized problem back to
+        // 1, and a database whose marker lies still gets backfilled the moment
+        // the column is actually missing.
+        //
+        // Every row that exists at this point is a JavaScript problem that has
+        // already been served and solved, so 1 is the truth about all of them.
+        if (addedCanonicalized) {
+          db.exec(`UPDATE problems SET canonicalized = 1`);
+          opts.onStep?.('v3-problems-canonicalized');
+        }
+      }
+
       // --- Verification, INSIDE the transaction -------------------------------
       // Throwing here rolls everything back, including the version bump. The
       // correct failure mode for a migration is a loud crash-loop against an
@@ -385,6 +415,39 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
           throw new Error(
             `migration aborted: ${stray} skill_state row(s) did not land on '${LANG}'.`
           );
+        }
+      }
+
+      // Same idea for the canonicalized flag, which is a boolean stored in a
+      // column SQLite will happily accept a string into.
+      if (tableExists(db, 'problems') && columnExists(db, 'problems', 'canonicalized')) {
+        const bad = (
+          db
+            .prepare(
+              `SELECT COUNT(*) AS n FROM problems
+                WHERE canonicalized IS NULL OR canonicalized NOT IN (0, 1)`
+            )
+            .get() as { n: number }
+        ).n;
+        if (bad !== 0) {
+          throw new Error(
+            `migration aborted: ${bad} problems row(s) have a canonicalized value that is neither 0 nor 1.`
+          );
+        }
+        // If this run added the column, the backfill above claimed every row.
+        // A row still at 0 means the UPDATE did not reach it, and serving would
+        // then silently refuse problems the player has already solved.
+        if (addedCanonicalized) {
+          const missed = (
+            db.prepare(`SELECT COUNT(*) AS n FROM problems WHERE canonicalized <> 1`).get() as {
+              n: number;
+            }
+          ).n;
+          if (missed !== 0) {
+            throw new Error(
+              `migration aborted: ${missed} pre-existing problems row(s) were not backfilled to canonicalized = 1.`
+            );
+          }
         }
       }
 

@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Install (or refresh) codegrind's systemd units from deploy/ and enable the
+# reaper timer. Idempotent — safe to re-run after editing any unit file.
+#
+#   bin/install-units             # install everything, enable+start the timer
+#   bin/install-units --status    # just show what is installed and running
+#
+# These are SYSTEM units, not user units, matching codegrind.service, which has
+# been a system unit since day one (`/etc/systemd/system/codegrind.service`,
+# WantedBy=multi-user.target). A user timer would stop running whenever the
+# hexi session ends unless lingering is enabled, and the sandbox reaper needs to
+# run on a headless box that nobody is logged into.
+#
+# Installing codegrind.service here is deliberate: deploy/ is the source of
+# truth for that file too, and having one script that reconciles /etc with the
+# repo is what stops the live unit and the committed one from drifting. Note
+# that this REWRITES the installed unit — it does not restart the service, so a
+# change to codegrind.service needs a `bin/restart` afterwards to take effect.
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+UNIT_DIR=/etc/systemd/system
+UNITS=(codegrind.service codegrind-reap.service codegrind-reap.timer)
+
+if [[ "${1:-}" == "--status" ]]; then
+  for u in "${UNITS[@]}"; do
+    if [[ -f "${UNIT_DIR}/${u}" ]]; then
+      if diff -q "${REPO_DIR}/deploy/${u}" "${UNIT_DIR}/${u}" >/dev/null; then
+        printf '  ok      %-26s installed, matches deploy/\n' "$u"
+      else
+        printf '  DRIFT   %-26s installed but DIFFERS from deploy/\n' "$u"
+      fi
+    else
+      printf '  MISSING %-26s not installed\n' "$u"
+    fi
+  done
+  echo
+  systemctl list-timers codegrind-reap.timer --all --no-pager
+  exit 0
+fi
+
+echo "==> Installing units into ${UNIT_DIR}"
+for u in "${UNITS[@]}"; do
+  src="${REPO_DIR}/deploy/${u}"
+  [[ -f "$src" ]] || { echo "    missing ${src}" >&2; exit 1; }
+  sudo install -m 0644 -o root -g root "$src" "${UNIT_DIR}/${u}"
+  echo "    ${u}"
+done
+
+echo "==> Reloading systemd"
+sudo systemctl daemon-reload
+
+echo "==> Enabling the reaper timer"
+# The TIMER is enabled, never the service: enabling a Type=oneshot service that
+# a timer already activates makes it run once at boot for no reason and reports
+# a confusing "inactive (dead)" state forever after.
+sudo systemctl enable --now codegrind-reap.timer
+
+echo "==> Proving it works right now"
+sudo systemctl start codegrind-reap.service
+sudo systemctl status codegrind-reap.service --no-pager | sed -n '1,12p' || true
+
+echo
+systemctl list-timers codegrind-reap.timer --all --no-pager

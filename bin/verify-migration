@@ -51,8 +51,8 @@ BASELINE_DIR="${BASELINE_DIR:-/home/hexi/backups/codegrind/baseline}"
 # Edit this table (and re-capture BASELINE_DIR) whenever the real numbers move
 # because the user practiced, not because a migration ran.
 EXPECTED_ROWS=(
-  "problems:36"
-  "attempts:62"
+  "problems:37"
+  "attempts:63"
   "skill_state:4"
   "sessions:8"
   "review_queue:11"
@@ -72,6 +72,12 @@ EXPECTED_ROWS=(
 #                (there is a live queue row due within hours of this baseline)
 REFLECT_IGNORE='["/activity","/tiles/streak","/tiles/reviewDue"]'
 PROGRESS_IGNORE='["/reviewDue"]'
+# /api/history and /api/study/index carry no clock-derived field at all: history
+# is a list of stored attempts with their own stored timestamps, and the study
+# index is the lesson corpus plus read receipts. Nothing to exclude, so nothing
+# is — an empty ignore list is the strongest form of this check.
+HISTORY_IGNORE='[]'
+STUDY_INDEX_IGNORE='[]'
 
 DB_ONLY=0
 [[ "${1:-}" == "--db-only" ]] && DB_ONLY=1
@@ -232,6 +238,28 @@ if (!migrated) {
   if (idx && /language/.test(idx.sql)) console.log(`  ok   idx_problems_slot carries language`);
   else { console.log(`  FAIL idx_problems_slot does not carry language: ${idx ? idx.sql : "(missing)"}`); bad++; }
 
+  // v3: every problem must carry an explicit 0/1, and the pre-migration rows
+  // must have been backfilled to 1 -- an un-backfilled row is invisible to the
+  // bank filter, so the failure looks like "the bank is empty" rather than like
+  // a migration bug.
+  if (has("problems", "canonicalized")) {
+    const malformed = db.prepare(
+      `SELECT COUNT(*) AS n FROM problems WHERE canonicalized IS NULL OR canonicalized NOT IN (0, 1)`
+    ).get().n;
+    if (malformed === 0) console.log(`  ok   problems.canonicalized  every row is 0 or 1`);
+    else { console.log(`  FAIL problems.canonicalized  ${malformed} row(s) neither 0 nor 1`); bad++; }
+
+    const unverified = db.prepare(
+      `SELECT COUNT(*) AS n FROM problems WHERE canonicalized = 0`
+    ).get().n;
+    const total = db.prepare(`SELECT COUNT(*) AS n FROM problems`).get().n;
+    // Not a failure on its own -- JavaScript is allowed to store one when the
+    // sandbox is down -- but it is always worth saying out loud.
+    console.log(`  ok   problems servable       ${total - unverified}/${total} canonicalized`);
+  } else {
+    console.log(`  ..   problems.canonicalized not present yet -- v3 pending`);
+  }
+
   const wantCt =
     db.prepare(`SELECT COUNT(*) AS n FROM lessons WHERE json_extract(data, ?) <> ?`).get("$.code", "").n +
     db.prepare(`SELECT COUNT(*) AS n FROM pattern_primers WHERE json_extract(data, ?) <> ?`).get("$.template", "").n;
@@ -311,6 +339,15 @@ else
     compare_endpoint reflect /api/reflect "$BASELINE_DIR/reflect.json" "$REFLECT_IGNORE" \
       || FAILURES=$((FAILURES + 1))
     compare_endpoint progress /api/progress "$BASELINE_DIR/progress.json" "$PROGRESS_IGNORE" \
+      || FAILURES=$((FAILURES + 1))
+    # bin/capture-baseline has always written these two; comparing them was the
+    # missing half. /api/history is the widest read in the app (every attempt,
+    # joined to its problem) and /api/study/index is the only one that touches
+    # the lesson corpus, which is precisely what code_translations was carved
+    # out of.
+    compare_endpoint history /api/history "$BASELINE_DIR/history.json" "$HISTORY_IGNORE" \
+      || FAILURES=$((FAILURES + 1))
+    compare_endpoint study_index /api/study/index "$BASELINE_DIR/study_index.json" "$STUDY_INDEX_IGNORE" \
       || FAILURES=$((FAILURES + 1))
     printf '  note ignored as time-varying: activity window, day streak, reviewDue\n'
   fi

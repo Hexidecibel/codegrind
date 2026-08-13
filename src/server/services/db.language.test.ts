@@ -56,6 +56,11 @@ function problem(over: Partial<ProblemRecord> & { id: string; language: Language
     sampleTests: [{ name: 's', args: [1], expected: 1 }],
     hiddenTests: [{ name: 'h', args: [2], expected: 2 }],
     referenceSolution: 'function f(x) { return x; }',
+    // Default true: a fixture problem stands in for a normal banked one, and a
+    // normal banked one had its expected values produced by a real reference
+    // run. The tests that care about the un-canonicalized case pass false
+    // explicitly, so the filter is never accidentally satisfied.
+    canonicalized: true,
     used: false,
     createdAt: '2026-08-13T00:00:00.000Z',
     ...over,
@@ -149,6 +154,48 @@ describe('the bank partitions by language', () => {
     expect(db.bankSize('javascript')).toBe(2);
     expect(db.bankSize('python')).toBe(1);
     expect(db.bankSize('java')).toBe(0);
+  });
+});
+
+// =============================================================================
+describe('the bank refuses to serve an un-canonicalized problem', () => {
+  // "Un-canonicalized" means its `expected` values were never produced by
+  // running its own reference solution — the model wrote them by hand and
+  // nothing checked them. Such a problem may be flatly unsolvable, and it fails
+  // in the one way the player cannot diagnose: it looks exactly like their own
+  // mistake. It stays in the table as evidence; it is never handed out again.
+
+  it('skips it and serves the verified one instead', () => {
+    db.insertProblem(
+      problem({ id: 'bad', language: 'javascript', canonicalized: false, createdAt: '2026-01-01T00:00:00.000Z' })
+    );
+    db.insertProblem(
+      problem({ id: 'good', language: 'javascript', canonicalized: true, createdAt: '2026-01-02T00:00:00.000Z' })
+    );
+
+    // `bad` is OLDER, so the ORDER BY createdAt would pick it first if the
+    // filter were missing. That is the whole point of the ordering here.
+    expect(db.findUnusedProblem('javascript', 'arrays', 'easy')?.id).toBe('good');
+  });
+
+  it('reports an empty slot rather than serving the only problem it has', () => {
+    db.insertProblem(problem({ id: 'bad', language: 'javascript', canonicalized: false }));
+    expect(db.findUnusedProblem('javascript', 'arrays', 'easy')).toBeNull();
+  });
+
+  it('still returns it by id — a live attempt must not lose its problem', () => {
+    // getProblem is how /api/run, /api/submit and the review loop reach a
+    // problem the player is already looking at. Refusing there would strand a
+    // session mid-solve, which is a worse outcome than the one being prevented.
+    db.insertProblem(problem({ id: 'bad', language: 'javascript', canonicalized: false }));
+    expect(db.getProblem('bad')?.canonicalized).toBe(false);
+  });
+
+  it('round-trips the flag through storage in both states', () => {
+    db.insertProblem(problem({ id: 'yes', language: 'javascript', canonicalized: true }));
+    db.insertProblem(problem({ id: 'no', language: 'javascript', canonicalized: false }));
+    expect(db.getProblem('yes')?.canonicalized).toBe(true);
+    expect(db.getProblem('no')?.canonicalized).toBe(false);
   });
 });
 

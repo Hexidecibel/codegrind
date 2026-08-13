@@ -71,7 +71,15 @@ submitRoutes.post('/run', async (c) => {
     if (!problem) return c.json({ error: 'problem not found' }, 404);
     const code = typeof body.code === 'string' ? body.code : '';
 
-    const result = await runTests(problem.functionName, code, problem.sampleTests);
+    // The language comes off the PROBLEM, never off the request — /api/run and
+    // /api/submit carry no language at all, which is what makes handing one
+    // language's source to another's harness structurally impossible.
+    const result = await runTests({
+      language: problem.language,
+      functionName: problem.functionName,
+      userCode: code,
+      tests: problem.sampleTests,
+    });
     return c.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -100,7 +108,12 @@ submitRoutes.post('/submit', async (c) => {
     // every clean-solve path below (tier credit, review clearing, streaks).
     const assistedHints = Math.max(clientHints, isSolutionRevealed(problem.id) ? 1 : 0);
 
-    const result = await runTests(problem.functionName, code, problem.hiddenTests);
+    const result = await runTests({
+      language: problem.language,
+      functionName: problem.functionName,
+      userCode: code,
+      tests: problem.hiddenTests,
+    });
     const solved = result.verdict === 'accepted';
 
     // Coach on the real results (best-effort — a coaching failure must not lose the run).

@@ -1,0 +1,17 @@
+[Unit]
+Description=codegrind — reap orphaned sandbox runner containers
+Documentation=file:///home/hexi/local/src/codegrind/bin/reap-runners
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Same user as codegrind.service: hexi is in the docker group, so no sudo and no
+# root. A reaper that needed root to clean up after an unprivileged service
+# would be a larger blast radius than the problem it solves.
+User=hexi
+WorkingDirectory=/home/hexi/local/src/codegrind
+ExecStart=/home/hexi/local/src/codegrind/bin/reap-runners
+# A docker daemon hiccup must not wedge the timer: oneshot units block the next
+# activation until they exit.
+TimeoutStartSec=120

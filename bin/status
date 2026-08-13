@@ -1,8 +1,26 @@
 #!/usr/bin/env bash
-# Show codegrind service status + health probe.
+# Show codegrind service status + health probe + sandbox readiness.
 set -uo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${PORT:-9416}"
 systemctl --no-pager status codegrind | head -12 || true
 echo "---"
 curl -sS -o /dev/null -w 'health: %{http_code}\n' "http://127.0.0.1:${PORT}/api/health" \
   || echo "health: UNREACHABLE"
+
+# A missing runner image is invisible until the first submission, and a stopped
+# reaper timer is invisible until a core has been spinning for a week. Both are
+# one line to check, so both get checked.
+# shellcheck source=lib/languages.sh
+source "${REPO_DIR}/bin/lib/languages.sh"
+while read -r lang; do
+  if docker image inspect "${CG_IMAGE[$lang]}" >/dev/null 2>&1; then
+    echo "runner ${lang}: ${CG_IMAGE[$lang]}"
+  else
+    echo "runner ${lang}: MISSING — run bin/build-runner-image ${lang}"
+  fi
+done < <(cg_buildable_languages "${REPO_DIR}")
+
+printf 'reap timer: %s\n' "$(systemctl is-active codegrind-reap.timer 2>/dev/null || echo unknown)"
+running="$(docker ps -q --filter "label=${CG_LABEL}" | wc -l)"
+[ "${running}" -gt 0 ] && echo "runner containers in flight: ${running}"
