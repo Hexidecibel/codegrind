@@ -1,0 +1,22 @@
+[Unit]
+Description=codegrind — reap orphaned sandbox runner containers every 5 minutes
+
+[Timer]
+# The EXIT trap in bin/run-submission handles every ordinary end, including the
+# timeout path. This timer exists only for the case the trap cannot cover: the
+# script itself killed with SIGKILL, leaving a container spinning a full core
+# with nobody to remove it. Two of those ran for 10 days once.
+#
+# MAX_AGE is 300s, so an orphan survives at most 5-10 minutes. Tightening the
+# interval buys very little and wakes the machine more often.
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+# Nothing depends on the exact instant, so let systemd batch this with whatever
+# else it is waking up for.
+RandomizedDelaySec=30s
+Persistent=false
+Unit=codegrind-reap.service
+
+[Install]
+WantedBy=timers.target

@@ -1,11 +1,98 @@
 #!/usr/bin/env bash
-# Build the sandbox runner image (harness baked in). Idempotent — re-run after
-# editing test-harness/runner.mjs. hexi is in the docker group; no sudo needed.
+# Build the sandbox runner image(s) — harness baked in, conformance-gated.
+#
+#   bin/build-runner-image                 # every language with a harness on disk
+#   bin/build-runner-image javascript      # just one
+#   bin/build-runner-image --no-selftest   # build without the gate (debugging only)
+#
+# Idempotent — re-run after editing a runner. hexi is in the docker group; no
+# sudo needed.
+#
+# THE BUILD CONTEXT IS `test-harness/`, ONE LEVEL ABOVE EACH LANGUAGE. Docker
+# forbids `COPY ../…`, and every language's runner has to bake in the SAME
+# conformance/equality-cases.json, so a per-language context could not reach it.
+# Context up, `-f` down.
+#
+# THE POST-BUILD GATE. Each image is immediately run with `--selftest`, which
+# checks that language's hand-written deepEqual and JSON serializer against the
+# shared fixture. Three runtimes each need their own comparator (sharing the code
+# would mean embedding a JS engine in the Python image), and hand-written
+# comparators drift — silently, and in the direction of "your correct answer is
+# wrong". An image that fails the fixture is deleted rather than published, so it
+# cannot be the thing that runs a submission.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="codegrind-runner:latest"
+# shellcheck source=lib/languages.sh
+source "${REPO_DIR}/bin/lib/languages.sh"
 
-echo "Building ${IMAGE} from test-harness/ ..."
-docker build -t "${IMAGE}" "${REPO_DIR}/test-harness"
-echo "Done: ${IMAGE}"
+SELFTEST=1
+LANGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-selftest) SELFTEST=0; shift ;;
+    -h|--help)     sed -n '2,10p' "$0"; exit 0 ;;
+    -*)            echo "unknown flag: $1" >&2; exit 2 ;;
+    *)             cg_require_language "$1"; LANGS+=("$1"); shift ;;
+  esac
+done
+
+if [ "${#LANGS[@]}" -eq 0 ]; then
+  # No explicit list: build what actually exists. The languages table describes
+  # three, but python/java have no test-harness/<lang>/ yet — an unwritten phase
+  # is not a build failure.
+  mapfile -t LANGS < <(cg_buildable_languages "${REPO_DIR}")
+fi
+
+if [ "${#LANGS[@]}" -eq 0 ]; then
+  echo "nothing to build: no test-harness/<language>/Dockerfile found" >&2
+  exit 1
+fi
+
+built=()
+
+for lang in "${LANGS[@]}"; do
+  dockerfile="${REPO_DIR}/test-harness/${lang}/Dockerfile"
+  image="${CG_IMAGE[$lang]}"
+
+  if [ ! -f "${dockerfile}" ]; then
+    echo "==> ${lang}: no harness at test-harness/${lang}/ — skipping"
+    continue
+  fi
+
+  echo "==> Building ${image}"
+  echo "    context    ${REPO_DIR}/test-harness"
+  echo "    dockerfile test-harness/${lang}/Dockerfile"
+  docker build -t "${image}" -f "${dockerfile}" "${REPO_DIR}/test-harness"
+
+  if [ "${SELFTEST}" -eq 1 ]; then
+    echo "==> Conformance gate: ${image} --selftest"
+    # Split the run command the same way bin/run-submission does. Same sandbox
+    # flags too — a selftest that passed with privileges the real thing does not
+    # have would be proving something else.
+    read -r -a cmd <<< "${CG_CMD[$lang]}"
+    if ! docker run --rm \
+        --network none \
+        --memory="${CG_MEMORY[$lang]}" \
+        --cpus="${CG_CPUS}" \
+        --pids-limit="${CG_PIDS[$lang]}" \
+        --read-only \
+        --tmpfs /tmp \
+        --cap-drop=ALL \
+        --security-opt no-new-privileges \
+        --label "${CG_LABEL}" \
+        "${image}" "${cmd[@]}" --selftest; then
+      echo "" >&2
+      echo "FAIL: ${lang} runner disagrees with test-harness/conformance/equality-cases.json." >&2
+      echo "      The image is being removed so it cannot run a submission." >&2
+      echo "      Fix the runner (or the fixture, if the SPEC is what changed) and rebuild." >&2
+      docker rmi -f "${image}" >/dev/null 2>&1 || true
+      exit 1
+    fi
+  fi
+
+  built+=("${image}")
+done
+
+echo ""
+echo "Done: ${built[*]}"

@@ -29,13 +29,27 @@ npm ci --include=dev || npm install --include=dev
 # Typecheck + bundle + precompress. Deps are already installed above.
 SKIP_INSTALL=1 "$REPO/bin/build"
 
-echo "==> Ensuring sandbox runner image (codegrind-runner:latest)"
-if ! docker image inspect codegrind-runner:latest >/dev/null 2>&1; then
-  echo "    image missing — building"
-  "$REPO/bin/build-runner-image"
-else
-  echo "    present"
+echo "==> Ensuring sandbox runner images"
+# One image per language now, so ask the languages table rather than hard-coding
+# a tag here — a second source of truth for image names is how a deploy ends up
+# "ensuring" an image nothing runs.
+# shellcheck source=lib/languages.sh
+source "$REPO/bin/lib/languages.sh"
+missing=()
+while read -r lang; do
+  if docker image inspect "${CG_IMAGE[$lang]}" >/dev/null 2>&1; then
+    echo "    ${CG_IMAGE[$lang]} present"
+  else
+    echo "    ${CG_IMAGE[$lang]} missing"
+    missing+=("$lang")
+  fi
+done < <(cg_buildable_languages "$REPO")
+if [[ ${#missing[@]} -gt 0 ]]; then
+  "$REPO/bin/build-runner-image" "${missing[@]}"
 fi
+
+echo "==> Ensuring systemd units + the runner reaper timer"
+"$REPO/bin/install-units" >/dev/null
 
 echo "==> Restarting service"
 sudo systemctl restart codegrind

@@ -212,6 +212,7 @@ interface ProblemRow {
   used: number;
   createdAt: string;
   language: string;
+  canonicalized: number;
 }
 
 /**
@@ -241,6 +242,7 @@ function rowToProblem(row: ProblemRow): ProblemRecord {
     sampleTests: JSON.parse(row.sampleTests),
     hiddenTests: JSON.parse(row.hiddenTests),
     referenceSolution: row.referenceSolution,
+    canonicalized: row.canonicalized === 1,
     used: row.used === 1,
     createdAt: row.createdAt,
   };
@@ -253,11 +255,11 @@ const insertProblemStmt = db.prepare(`
   INSERT INTO problems (
     id, language, title, prompt, examples, constraints, difficulty, topic, pattern,
     starterCode, functionName, sampleTests, hiddenTests, referenceSolution,
-    used, createdAt
+    canonicalized, used, createdAt
   ) VALUES (
     @id, @language, @title, @prompt, @examples, @constraints, @difficulty, @topic, @pattern,
     @starterCode, @functionName, @sampleTests, @hiddenTests, @referenceSolution,
-    @used, @createdAt
+    @canonicalized, @used, @createdAt
   )
 `);
 
@@ -282,6 +284,10 @@ export function insertProblem(p: ProblemRecord): void {
     sampleTests: JSON.stringify(p.sampleTests),
     hiddenTests: JSON.stringify(p.hiddenTests),
     referenceSolution: p.referenceSolution,
+    // Written explicitly on every insert. The column's SQL default is 0, so a
+    // caller that forgot would store an unverified problem rather than silently
+    // vouching for one — but no caller forgets, because ProblemRecord requires it.
+    canonicalized: p.canonicalized ? 1 : 0,
     used: p.used ? 1 : 0,
     createdAt: p.createdAt,
   });
@@ -303,7 +309,7 @@ export function getProblem(id: string): ProblemRecord | null {
 
 const findUnusedStmt = db.prepare(`
   SELECT * FROM problems
-  WHERE language = ? AND topic = ? AND difficulty = ? AND used = 0
+  WHERE language = ? AND topic = ? AND difficulty = ? AND used = 0 AND canonicalized = 1
   ORDER BY createdAt ASC
   LIMIT 1
 `);
@@ -313,6 +319,15 @@ const findUnusedStmt = db.prepare(`
  * slot of the bank is empty. The language filter is HARD on purpose: a Python
  * bank starts empty and every problem is a cold generate until it fills, which
  * is the honest cost of never serving the wrong language's test data.
+ *
+ * `canonicalized = 1` is the second hard filter, and it is what "refuse to serve
+ * an un-canonicalized problem" actually means. A problem whose `expected` values
+ * were never produced by running its own reference is not merely lower quality —
+ * it may be unsolvable, and it fails in the one way the player cannot diagnose,
+ * by looking exactly like their own mistake. It stays in the table (it is
+ * evidence, and it may still be attached to a live attempt) but it is never
+ * handed out again. Every pre-migration row was backfilled to 1, so nothing that
+ * was servable yesterday stops being servable today.
  */
 export function findUnusedProblem(
   language: Language,

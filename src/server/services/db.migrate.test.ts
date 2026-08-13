@@ -323,6 +323,7 @@ describe('user_version — the gate on the expensive steps', () => {
       'v2-skill-state-pk',
       'v2-idx-problems-slot',
       'v2-code-translations',
+      'v3-problems-canonicalized',
     ]);
     expect(stepsFrom(db)).toEqual([]);
     expect(stepsFrom(db)).toEqual([]);
@@ -348,10 +349,14 @@ describe('user_version — the gate on the expensive steps', () => {
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
     expect(hasPk(db, 'skill_state', ['topic'])).toBe(true);
 
+    // v3 forces itself open on the same principle and for the same reason: the
+    // column is genuinely missing, and a lying marker must not be able to leave
+    // the bank filtering on a column that is not there.
     expect(stepsFrom(db)).toEqual([
       'v2-skill-state-pk',
       'v2-idx-problems-slot',
       'v2-code-translations',
+      'v3-problems-canonicalized',
     ]);
 
     expect(hasPk(db, 'skill_state', ['topic', 'language'])).toBe(true);
@@ -786,6 +791,160 @@ describe('v2 — settings and code_translations', () => {
   });
 });
 
+// =============================================================================
+describe('v3 — problems.canonicalized', () => {
+  it('adds the column, declared NOT NULL DEFAULT 0', () => {
+    const db = oldDb();
+    expect(columnExists(db, 'problems', 'canonicalized')).toBe(false);
+
+    migrate(db);
+
+    expect(columnExists(db, 'problems', 'canonicalized')).toBe(true);
+    const col = (
+      db.pragma('table_info(problems)') as Array<{
+        name: string;
+        type: string;
+        notnull: number;
+        dflt_value: string | null;
+      }>
+    ).find((c) => c.name === 'canonicalized')!;
+    expect(col.type).toBe('INTEGER');
+    expect(col.notnull).toBe(1);
+    // 0, not 1. The default is what an insert that forgot this column gets, and
+    // the safe assumption about a problem nobody vouched for is that nobody
+    // vouched for it. The backfill of existing rows is a separate, explicit act.
+    expect(col.dflt_value).toBe('0');
+    db.close();
+  });
+
+  it('backfills every pre-existing problem to 1', () => {
+    const db = oldDb();
+    seed(db);
+    db.prepare(
+      `INSERT INTO problems (id, title, difficulty, topic, pattern, used, createdAt)
+       VALUES ('p2', 'Valid Parens', 'easy', 'stack', 'stack', 1, '2026-01-04T00:00:00.000Z')`
+    ).run();
+
+    migrate(db);
+
+    // They are all JavaScript, all already served, all demonstrably solvable —
+    // a claim about THIS database, which is why it is made once, here, and not
+    // encoded as the column's default.
+    const rows = db
+      .prepare(`SELECT id, canonicalized FROM problems ORDER BY id`)
+      .all() as Array<{ id: string; canonicalized: number }>;
+    expect(rows).toEqual([
+      { id: 'p1', canonicalized: 1 },
+      { id: 'p2', canonicalized: 1 },
+    ]);
+    db.close();
+  });
+
+  it('leaves an empty problems table alone rather than failing on it', () => {
+    const db = oldDb(); // no seed
+    migrate(db);
+    expect(
+      (db.prepare(`SELECT COUNT(*) AS n FROM problems`).get() as { n: number }).n
+    ).toBe(0);
+    db.close();
+  });
+
+  it('does NOT flip a later un-canonicalized row back to 1 on re-run', () => {
+    // The whole reason the backfill is gated on "did THIS run create the
+    // column" rather than on the version marker. A migration that re-asserted
+    // `SET canonicalized = 1` on every boot would launder exactly the problems
+    // the flag exists to quarantine — and it would do it silently, on a
+    // database that had been correct until the next restart.
+    const db = oldDb();
+    seed(db);
+    migrate(db);
+
+    db.prepare(
+      `INSERT INTO problems (id, title, difficulty, topic, pattern, used, createdAt, canonicalized)
+       VALUES ('p-bad', 'Never Verified', 'hard', 'graphs', 'graphs', 0, '2026-02-01T00:00:00.000Z', 0)`
+    ).run();
+
+    migrate(db);
+    migrate(db);
+
+    expect(
+      (
+        db.prepare(`SELECT canonicalized AS c FROM problems WHERE id = 'p-bad'`).get() as {
+          c: number;
+        }
+      ).c
+    ).toBe(0);
+    // ...and the one that WAS backfilled stays backfilled.
+    expect(
+      (db.prepare(`SELECT canonicalized AS c FROM problems WHERE id = 'p1'`).get() as { c: number })
+        .c
+    ).toBe(1);
+    db.close();
+  });
+
+  it('backfills a database whose version marker already claims v3', () => {
+    // Self-healing beats the marker, same rule as the skill_state rebuild: the
+    // bank filters on this column, so a database that lies about having it
+    // would serve nothing at all.
+    const db = oldDb();
+    seed(db);
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+
+    migrate(db);
+
+    expect(columnExists(db, 'problems', 'canonicalized')).toBe(true);
+    expect(
+      (db.prepare(`SELECT canonicalized AS c FROM problems WHERE id = 'p1'`).get() as { c: number })
+        .c
+    ).toBe(1);
+    db.close();
+  });
+
+  it('aborts the whole migration if a canonicalized value is neither 0 nor 1', () => {
+    const db = oldDb();
+    seed(db);
+    migrate(db);
+    // Sneak past NOT NULL with a value SQLite's flexible typing accepts into an
+    // INTEGER column. The verification block is what notices.
+    db.prepare(`UPDATE problems SET canonicalized = 'yes' WHERE id = 'p1'`).run();
+    db.pragma('user_version = 0');
+
+    expect(() => migrate(db)).toThrow(/neither 0 nor 1/);
+    db.close();
+  });
+
+  it('is the step that moves SCHEMA_VERSION to 3', () => {
+    const db = oldDb();
+    migrate(db);
+    expect(userVersion(db)).toBe(3);
+    expect(SCHEMA_VERSION).toBe(3);
+    db.close();
+  });
+
+  it('lets the bank filter find only the canonicalized half', () => {
+    // The shipping query in db.ts (findUnusedProblem), reproduced against the
+    // migrated schema. It is the reason this column exists at all.
+    const db = oldDb();
+    seed(db);
+    migrate(db);
+    db.prepare(
+      `INSERT INTO problems (id, language, title, difficulty, topic, pattern, used, createdAt, canonicalized)
+       VALUES ('p-bad', 'javascript', 'Never Verified', 'easy', 'arrays', 'arrays', 0, '2026-02-01T00:00:00.000Z', 0)`
+    ).run();
+
+    const found = db
+      .prepare(
+        `SELECT id FROM problems
+          WHERE language = ? AND topic = ? AND difficulty = ? AND used = 0 AND canonicalized = 1
+          ORDER BY createdAt ASC LIMIT 1`
+      )
+      .all('javascript', 'arrays', 'easy') as Array<{ id: string }>;
+    expect(found).toEqual([{ id: 'p1' }]);
+    db.close();
+  });
+});
+
+// =============================================================================
 describe('v2 — the statement db.ts prepares against this schema', () => {
   // Code and data are coupled here, and this test is the tripwire. db.ts cannot
   // be imported (it opens the live database at module scope), so the upsert is
