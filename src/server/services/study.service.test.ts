@@ -45,10 +45,14 @@ const mocks = vi.hoisted(() => {
       }))
     ),
     getLessonReads: vi.fn(() => store.reads),
-    getSkillState: vi.fn(() => store.skills),
-    getCleanSolvesByTopic: vi.fn(() => new Map()),
-    getMistakeContexts: vi.fn(() => store.mistakes),
-    getWalkthroughCandidates: vi.fn(() => store.walkthroughs),
+    // The language-partitioned accessors take a REQUIRED leading `language`.
+    // The fakes accept and ignore it — this suite is about ordering, not
+    // partitioning (db.language.test.ts covers that against real SQL) — but
+    // they take it so the mocked shape matches the real signature.
+    getSkillState: vi.fn((_language: string) => store.skills),
+    getCleanSolvesByTopic: vi.fn((_language: string) => new Map()),
+    getMistakeContexts: vi.fn((_language: string) => store.mistakes),
+    getWalkthroughCandidates: vi.fn((_language: string) => store.walkthroughs),
     getProblem: vi.fn((id: string) => store.problems.get(id) ?? null),
   };
 
@@ -180,7 +184,7 @@ describe('materializeDerivedLessons — seq 0 backfilled free from a cached prim
   it('writes the seq-0 lesson for a primed topic without touching the API', async () => {
     store.primers.set('arrays', PRIMER);
 
-    const state = svc.buildStudyState();
+    const state = svc.buildStudyState('javascript');
 
     expect(db.insertLesson).toHaveBeenCalledTimes(1);
     expect(state.cached.map((m) => m.id)).toContain('arrays:0');
@@ -191,8 +195,8 @@ describe('materializeDerivedLessons — seq 0 backfilled free from a cached prim
   it('is idempotent — a second build re-derives nothing', async () => {
     store.primers.set('arrays', PRIMER);
 
-    svc.buildStudyState();
-    svc.buildStudyState();
+    svc.buildStudyState('javascript');
+    svc.buildStudyState('javascript');
 
     expect(db.insertLesson).toHaveBeenCalledTimes(1);
   });
@@ -201,7 +205,7 @@ describe('materializeDerivedLessons — seq 0 backfilled free from a cached prim
     store.primers.set('arrays', PRIMER);
     store.lessons.set('arrays:0', lesson('arrays:0', { body: 'HAND WRITTEN' }));
 
-    svc.buildStudyState();
+    svc.buildStudyState('javascript');
 
     expect(db.insertLesson).not.toHaveBeenCalled();
     expect(store.lessons.get('arrays:0')?.body).toBe('HAND WRITTEN');
@@ -210,7 +214,7 @@ describe('materializeDerivedLessons — seq 0 backfilled free from a cached prim
   it('ignores primer rows whose pattern is not a real topic', async () => {
     store.primers.set('vibes-based-search', { ...PRIMER, pattern: 'vibes-based-search' });
 
-    const state = svc.buildStudyState();
+    const state = svc.buildStudyState('javascript');
 
     expect(db.insertLesson).not.toHaveBeenCalled();
     expect(state.cached.map((m) => m.id)).not.toContain('vibes-based-search:0');

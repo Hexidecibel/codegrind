@@ -14,6 +14,7 @@ import {
   getLessonReadCounts,
   getCachedLessonMeta,
   getCleanSolvesByTopic,
+  getActiveLanguage,
 } from '../services/db.js';
 import { masteryScore } from '../services/curriculum.js';
 import {
@@ -121,7 +122,7 @@ studyRoutes.get('/study/feed', (c) => {
     const after = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'));
 
-    const state = buildStudyState();
+    const state = buildStudyState(getActiveLanguage());
     const queue = studyQueue(state);
 
     let start = 0;
@@ -145,7 +146,7 @@ studyRoutes.get('/study/jump/:topic', (c) => {
     return c.json({ error: `topic must be one of: ${TOPICS.join(', ')}` }, 400);
   }
   try {
-    const state = buildStudyState();
+    const state = buildStudyState(getActiveLanguage());
     let queue = studyQueue(state);
 
     // Only the topic's own TRACK counts as "somewhere to jump to" — a
@@ -208,12 +209,15 @@ studyRoutes.get('/study/index', (c) => {
     // same path the feed will walk, so prerequisites read above their dependents
     // (e.g. bfs-dfs above graphs). Listing in tuple order was the old Library's
     // failing: it ignored the skill tree entirely.
-    const state = buildStudyState();
+    // One read of the setting for the whole handler — the grid and the skills
+    // it orders by must not be able to describe two different languages.
+    const language = getActiveLanguage();
+    const state = buildStudyState(language);
     const reads = getLessonReadCounts();
 
     // Topic-keyed, exactly like Reflect — the jump grid and the skill tree must
     // never show two different numbers for the same topic.
-    const clean = getCleanSolvesByTopic();
+    const clean = getCleanSolvesByTopic(language);
 
     const payload: StudyIndexResponse = {
       topics: topicOrder(state.skills).map((topic) => ({

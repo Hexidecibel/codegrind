@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid';
 import type { ProblemRecord, Topic, Difficulty, TestCase } from '../../shared/types.js';
+import type { Language } from '../../shared/languages.js';
 import { generateProblem, type GeneratedProblem, type GenerateProblemOpts } from './llm.service.js';
 import type { SchedulerIntent } from './scheduler.service.js';
 import { runTests } from './sandbox.service.js';
@@ -69,6 +70,7 @@ async function canonicalize(gen: GeneratedProblem): Promise<GeneratedProblem | n
  * last resort stores the raw generation so the bank is never empty.
  */
 export async function generateAndStore(
+  language: Language,
   topic: Topic,
   difficulty: Difficulty,
   opts?: GenerateProblemOpts
@@ -132,6 +134,10 @@ export async function generateAndStore(
 
   const record: ProblemRecord = {
     id: nanoid(),
+    // The language that produced these `expected` values, stamped at the moment
+    // they were produced. Phase 2 gives the sandbox a language of its own; until
+    // then generation and canonicalization are both JavaScript by construction.
+    language,
     title: gen.title,
     prompt: gen.prompt,
     examples: gen.examples,
@@ -157,11 +163,12 @@ export async function generateAndStore(
  * is marked used so it isn't served again.
  */
 export async function getNextProblem(
+  language: Language,
   topic: Topic,
   difficulty: Difficulty
 ): Promise<ProblemRecord> {
-  const existing = findUnusedProblem(topic, difficulty);
-  const record = existing ?? (await generateAndStore(topic, difficulty));
+  const existing = findUnusedProblem(language, topic, difficulty);
+  const record = existing ?? (await generateAndStore(language, topic, difficulty));
   markProblemUsed(record.id);
   return { ...record, used: true };
 }
@@ -181,7 +188,9 @@ const NOVELTY_HINT: Partial<Record<SchedulerIntent['kind'], string>> = {
  * (fast + free), else generate. The returned problem is marked used.
  */
 export async function getAdaptiveProblem(intent: SchedulerIntent): Promise<ProblemRecord> {
-  const { topic, difficulty, kind } = intent;
+  // No separate language argument on purpose — it rides on the intent, which is
+  // what the scheduler computed the whole pick from.
+  const { language, topic, difficulty, kind } = intent;
 
   // Retrieval loop: a review re-serves the SAME problem cold. Do NOT generate,
   // do NOT mark used again — the player solves the exact problem they leaned on.
@@ -197,7 +206,7 @@ export async function getAdaptiveProblem(intent: SchedulerIntent): Promise<Probl
 
   if (!mustGenerate) {
     // warm-up / reinforce — reuse the bank when possible.
-    record = findUnusedProblem(topic, difficulty);
+    record = findUnusedProblem(language, topic, difficulty);
   }
 
   if (!record) {
@@ -205,7 +214,7 @@ export async function getAdaptiveProblem(intent: SchedulerIntent): Promise<Probl
     const noveltyHint = NOVELTY_HINT[kind];
     if (noveltyHint) opts.noveltyHint = noveltyHint;
 
-    const avoidTitles = intent.avoidTitles ?? getBankTitles(topic);
+    const avoidTitles = intent.avoidTitles ?? getBankTitles(language, topic);
     if (avoidTitles.length) opts.avoidTitles = avoidTitles;
 
     // Avoiding titles only stops repeated NAMES. Left alone the generator will
@@ -213,7 +222,7 @@ export async function getAdaptiveProblem(intent: SchedulerIntent): Promise<Probl
     // "find a target in a sorted array" problems with six different stories.
     // Show it what it has already produced and demand a different structural
     // variant of the technique.
-    const recent = getRecentProblemDigests(topic, 4);
+    const recent = getRecentProblemDigests(language, topic, 4);
     if (recent.length) {
       const digest = recent
         .map((r) => `- "${r.title}": ${r.prompt.replace(/\s+/g, ' ').slice(0, 160)}`)
@@ -230,13 +239,13 @@ export async function getAdaptiveProblem(intent: SchedulerIntent): Promise<Probl
     }
 
     if (kind === 'variation') {
-      const seed = getRecentSolvedProblem(topic);
+      const seed = getRecentSolvedProblem(language, topic);
       if (seed) {
         opts.variationOf = { title: seed.title, pattern: seed.pattern, prompt: seed.prompt };
       }
     }
 
-    record = await generateAndStore(topic, difficulty, opts);
+    record = await generateAndStore(language, topic, difficulty, opts);
   }
 
   markProblemUsed(record.id);

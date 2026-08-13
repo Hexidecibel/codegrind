@@ -15,7 +15,9 @@ import {
   createSession,
   getSession,
   bumpSession,
+  getActiveLanguage,
 } from '../services/db.js';
+import type { Language } from '../../shared/languages.js';
 import { TIER_REQUIREMENT, WEAK_SCORE, tierProgress } from '../services/curriculum.js';
 import { planSession, type SessionSnapshotTopic } from '../services/llm.service.js';
 import { nextIntent, peekUpNext, type SchedulerIntent } from '../services/scheduler.service.js';
@@ -34,9 +36,9 @@ const DEFAULT_PLAN: SessionPlan = {
  * ladder the scheduler uses (curriculum.tierProgress) — this route used to
  * hand-roll its own `solveRate * 0.8 + recency * 0.2` copy of the old formula.
  */
-function buildSnapshot(): SessionSnapshotTopic[] {
-  const skill = new Map(getSkillState().map((s) => [s.topic, s]));
-  const clean = getCleanSolvesByTopic();
+function buildSnapshot(language: Language): SessionSnapshotTopic[] {
+  const skill = new Map(getSkillState(language).map((s) => [s.topic, s]));
+  const clean = getCleanSolvesByTopic(language);
   const now = Date.now();
   return TOPICS.map((topic): SessionSnapshotTopic => {
     const s = skill.get(topic);
@@ -72,19 +74,25 @@ sessionRoutes.post('/session/start', async (c) => {
   try {
     const sessionId = nanoid();
 
+    // The sitting's language is decided ONCE, here, and then stored on the
+    // session row. Every later /next reads it back off that row rather than
+    // re-reading the setting, so flipping the picker mid-sitting cannot serve a
+    // problem the plan (and the tier state behind it) was never built for.
+    const language = getActiveLanguage();
+
     // Plan the session arc once (best-effort — fall back to a default plan).
     let plan: SessionPlan;
     try {
-      plan = await planSession(buildSnapshot());
+      plan = await planSession(buildSnapshot(language));
     } catch (err) {
       console.warn('[session/start] planSession failed, using default plan:', err instanceof Error ? err.message : err);
       plan = DEFAULT_PLAN;
     }
 
-    const intent = nextIntent({ plan });
+    const intent = nextIntent({ language, plan });
     const record = await getAdaptiveProblem(intent);
 
-    createSession(sessionId, plan);
+    createSession(language, sessionId, plan);
     bumpSession(sessionId, intent.topic);
 
     const payload: SessionStartResponse = {
@@ -92,7 +100,7 @@ sessionRoutes.post('/session/start', async (c) => {
       plan,
       problem: toPlayerProblem(record),
       why: intentToWhy(intent),
-      upNext: peekUpNext({ plan, avoidTopic: intent.topic }),
+      upNext: peekUpNext({ language, plan, avoidTopic: intent.topic }),
     };
     return c.json(payload);
   } catch (err) {
@@ -110,6 +118,8 @@ sessionRoutes.post('/session/:id/next', async (c) => {
     if (!session) return c.json({ error: 'session not found' }, 404);
 
     const intent = nextIntent({
+      // The language the sitting STARTED in — see createSession above.
+      language: session.language,
       plan: session.plan,
       avoidTopic: session.lastTopic ?? undefined,
     });
@@ -120,7 +130,11 @@ sessionRoutes.post('/session/:id/next', async (c) => {
       sessionId: id,
       problem: toPlayerProblem(record),
       why: intentToWhy(intent),
-      upNext: peekUpNext({ plan: session.plan, avoidTopic: intent.topic }),
+      upNext: peekUpNext({
+        language: session.language,
+        plan: session.plan,
+        avoidTopic: intent.topic,
+      }),
     };
     return c.json(payload);
   } catch (err) {
@@ -137,6 +151,7 @@ sessionRoutes.get('/session/:id', (c) => {
   if (!session) return c.json({ error: 'session not found' }, 404);
   return c.json({
     sessionId: session.id,
+    language: session.language,
     createdAt: session.createdAt,
     plan: session.plan,
     served: session.served,

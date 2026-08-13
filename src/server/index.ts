@@ -11,6 +11,7 @@ import { sessionRoutes } from './routes/session.js';
 import { primersRoutes } from './routes/primers.js';
 import { studyRoutes } from './routes/study.js';
 import { reflectRoutes } from './routes/reflect.js';
+import { settingsRoutes } from './routes/settings.js';
 
 const app = new Hono();
 
@@ -23,6 +24,7 @@ app.route('/api', sessionRoutes);
 app.route('/api', primersRoutes);
 app.route('/api', studyRoutes);
 app.route('/api', reflectRoutes);
+app.route('/api', settingsRoutes);
 
 app.get('/api/health', (c) => c.json({ status: 'ok' }));
 

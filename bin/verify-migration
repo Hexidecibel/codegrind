@@ -51,10 +51,10 @@ BASELINE_DIR="${BASELINE_DIR:-/home/hexi/backups/codegrind/baseline}"
 # Edit this table (and re-capture BASELINE_DIR) whenever the real numbers move
 # because the user practiced, not because a migration ran.
 EXPECTED_ROWS=(
-  "problems:35"
-  "attempts:61"
+  "problems:36"
+  "attempts:62"
   "skill_state:4"
-  "sessions:7"
+  "sessions:8"
   "review_queue:11"
   "pattern_primers:18"
   "lesson_tracks:18"

@@ -123,6 +123,10 @@ submitRoutes.post('/submit', async (c) => {
     insertAttempt({
       id: nanoid(),
       problemId: problem.id,
+      // From the PROBLEM, not from the active setting. A submit belongs to the
+      // language the problem was written in even if the setting was flipped
+      // while this tab sat open.
+      language: problem.language,
       pattern: problem.pattern,
       difficulty: problem.difficulty,
       solved,
@@ -137,7 +141,7 @@ submitRoutes.post('/submit', async (c) => {
 
     // Update per-topic spaced-repetition / progression state (keyed on topic).
     // AFTER insertAttempt on purpose — the tier derivation counts this attempt.
-    updateSkillOnAttempt(problem.topic, solved, assistedHints);
+    updateSkillOnAttempt(problem.language, problem.topic, solved, assistedHints);
 
     // Retrieval loop: a clean unaided solve clears the review; a miss or an
     // assisted solve (hint or revealed answer) (re-)queues it on the ladder.

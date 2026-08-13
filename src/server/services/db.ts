@@ -13,6 +13,7 @@ import {
 import fs from 'node:fs';
 import path from 'node:path';
 import { TOPICS } from '../../shared/types.js';
+import { DEFAULT_LANGUAGE, isLanguage, type Language } from '../../shared/languages.js';
 import type {
   ProblemRecord,
   Problem,
@@ -167,6 +168,31 @@ db.exec(`
 migrate(db);
 
 // -----------------------------------------------------------------------------
+// THE REQUIRED-PARAMETER RULE
+// -----------------------------------------------------------------------------
+// Every accessor below that reads or writes language-partitioned data takes
+// `language` as a REQUIRED, LEADING, NON-DEFAULTED parameter.
+//
+// Not `language?: Language = 'javascript'`. An optional parameter turns every
+// call site somebody forgets into a silent cross-language read that looks
+// perfectly correct on a machine that only has JavaScript data — the bug would
+// surface as "why is my Python ladder already at medium?" months later, on
+// someone else's install. Required means a missed site is a COMPILE ERROR, and
+// that is the entire point of the parameter.
+//
+// The exceptions, and why they are exceptions:
+//   getProblem(id) / markProblemUsed(id) — the id carries its own language.
+//   getSession(id) / bumpSession(id, …)  — likewise; the row reports its language.
+//   review_queue / revealed_solutions writes — keyed on problemId, which is
+//     already language-bound. Only the two READS that pick what to serve
+//     (getDueReview, getReviewDueCount) take a language, because they select
+//     ACROSS problems and a Python sitting must never be handed a JS review.
+//   lessons / primers / tracks / reads — the study corpus is deliberately
+//     SHARED across languages (prose is language-free; only the snippet forks,
+//     via code_translations in Phase 4).
+// -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
 // Row <-> record mapping
 // -----------------------------------------------------------------------------
 interface ProblemRow {
@@ -185,11 +211,24 @@ interface ProblemRow {
   referenceSolution: string;
   used: number;
   createdAt: string;
+  language: string;
+}
+
+/**
+ * Narrow a stored language cell. Every value in this column was written by code
+ * in this repo, so an unknown string is a bug — but a bug that must not take the
+ * whole bank down, so it degrades to the default rather than throwing on read.
+ */
+function toLanguage(value: string): Language {
+  if (isLanguage(value)) return value;
+  console.warn(`[db] unknown language "${value}" in a stored row — reading it as ${DEFAULT_LANGUAGE}`);
+  return DEFAULT_LANGUAGE;
 }
 
 function rowToProblem(row: ProblemRow): ProblemRecord {
   return {
     id: row.id,
+    language: toLanguage(row.language),
     title: row.title,
     prompt: row.prompt,
     examples: JSON.parse(row.examples),
@@ -212,19 +251,25 @@ function rowToProblem(row: ProblemRow): ProblemRecord {
 // -----------------------------------------------------------------------------
 const insertProblemStmt = db.prepare(`
   INSERT INTO problems (
-    id, title, prompt, examples, constraints, difficulty, topic, pattern,
+    id, language, title, prompt, examples, constraints, difficulty, topic, pattern,
     starterCode, functionName, sampleTests, hiddenTests, referenceSolution,
     used, createdAt
   ) VALUES (
-    @id, @title, @prompt, @examples, @constraints, @difficulty, @topic, @pattern,
+    @id, @language, @title, @prompt, @examples, @constraints, @difficulty, @topic, @pattern,
     @starterCode, @functionName, @sampleTests, @hiddenTests, @referenceSolution,
     @used, @createdAt
   )
 `);
 
+/**
+ * Store a generated problem. No separate `language` argument: the language is a
+ * property of the record (it produced that record's `expected` values), so it
+ * travels with it and cannot be paired with the wrong bytes.
+ */
 export function insertProblem(p: ProblemRecord): void {
   insertProblemStmt.run({
     id: p.id,
+    language: p.language,
     title: p.title,
     prompt: p.prompt,
     examples: JSON.stringify(p.examples),
@@ -244,6 +289,13 @@ export function insertProblem(p: ProblemRecord): void {
 
 const getProblemStmt = db.prepare(`SELECT * FROM problems WHERE id = ?`);
 
+/**
+ * THE deliberate exception to the required-parameter rule: a problem id already
+ * identifies exactly one problem in exactly one language, and the caller reads
+ * the language back off the record. `/api/run` and `/api/submit` rely on this —
+ * they carry no language at all, which is what makes running Python source
+ * against the JavaScript harness structurally impossible.
+ */
 export function getProblem(id: string): ProblemRecord | null {
   const row = getProblemStmt.get(id) as ProblemRow | undefined;
   return row ? rowToProblem(row) : null;
@@ -251,17 +303,23 @@ export function getProblem(id: string): ProblemRecord | null {
 
 const findUnusedStmt = db.prepare(`
   SELECT * FROM problems
-  WHERE topic = ? AND difficulty = ? AND used = 0
+  WHERE language = ? AND topic = ? AND difficulty = ? AND used = 0
   ORDER BY createdAt ASC
   LIMIT 1
 `);
 
-/** Pick an unused problem for a topic+difficulty slot, or null if the bank is empty. */
+/**
+ * Pick an unused problem for a language+topic+difficulty slot, or null if that
+ * slot of the bank is empty. The language filter is HARD on purpose: a Python
+ * bank starts empty and every problem is a cold generate until it fills, which
+ * is the honest cost of never serving the wrong language's test data.
+ */
 export function findUnusedProblem(
+  language: Language,
   topic: Topic,
   difficulty: Difficulty
 ): ProblemRecord | null {
-  const row = findUnusedStmt.get(topic, difficulty) as ProblemRow | undefined;
+  const row = findUnusedStmt.get(language, topic, difficulty) as ProblemRow | undefined;
   return row ? rowToProblem(row) : null;
 }
 
@@ -270,9 +328,11 @@ export function markProblemUsed(id: string): void {
   markUsedStmt.run(id);
 }
 
-const countBankStmt = db.prepare(`SELECT COUNT(*) AS n FROM problems`);
-export function bankSize(): number {
-  return (countBankStmt.get() as { n: number }).n;
+const countBankStmt = db.prepare(`SELECT COUNT(*) AS n FROM problems WHERE language = ?`);
+
+/** How many problems the bank holds for one language. */
+export function bankSize(language: Language): number {
+  return (countBankStmt.get(language) as { n: number }).n;
 }
 
 // -----------------------------------------------------------------------------
@@ -280,10 +340,10 @@ export function bankSize(): number {
 // -----------------------------------------------------------------------------
 const insertAttemptStmt = db.prepare(`
   INSERT INTO attempts (
-    id, problemId, pattern, difficulty, solved, hintsUsed,
+    id, problemId, language, pattern, difficulty, solved, hintsUsed,
     testsPassed, testsTotal, code, createdAt, prediction, mistakeTags
   ) VALUES (
-    @id, @problemId, @pattern, @difficulty, @solved, @hintsUsed,
+    @id, @problemId, @language, @pattern, @difficulty, @solved, @hintsUsed,
     @testsPassed, @testsTotal, @code, @createdAt, @prediction, @mistakeTags
   )
 `);
@@ -291,6 +351,15 @@ const insertAttemptStmt = db.prepare(`
 export interface AttemptInput {
   id: string;
   problemId: string;
+  /**
+   * REQUIRED, and denormalised against `problems.language` on purpose: six
+   * accessors read `attempts` with no join at all, and folding "Python
+   * indentation" and "JS hoisting" into one syntax-error tally is worse than
+   * having no tally. It must come from the PROBLEM being submitted, never from
+   * the active setting — the two disagree the moment the setting is changed
+   * mid-sitting.
+   */
+  language: Language;
   pattern: string;
   difficulty: Difficulty;
   solved: boolean;
@@ -309,6 +378,7 @@ export function insertAttempt(a: AttemptInput): void {
   insertAttemptStmt.run({
     id: a.id,
     problemId: a.problemId,
+    language: a.language,
     pattern: a.pattern,
     difficulty: a.difficulty,
     solved: a.solved ? 1 : 0,
@@ -329,12 +399,18 @@ const historyStmt = db.prepare(`
     COALESCE(p.title, '(deleted problem)') AS problemTitle
   FROM attempts a
   LEFT JOIN problems p ON p.id = a.problemId
+  WHERE a.language = ?
   ORDER BY a.createdAt DESC
   LIMIT ?
 `);
 
-export function getHistory(limit = 50): AttemptRecord[] {
-  const rows = historyStmt.all(limit) as Array<{
+/**
+ * Recent attempts, newest first. Filtered on `attempts.language` rather than the
+ * joined problem's, so an attempt whose problem was deleted still appears (the
+ * LEFT JOIN and its '(deleted problem)' title exist for exactly that case).
+ */
+export function getHistory(language: Language, limit = 50): AttemptRecord[] {
+  const rows = historyStmt.all(language, limit) as Array<{
     id: string;
     problemId: string;
     problemTitle: string;
@@ -409,11 +485,22 @@ const creditsByTopicStmt = db.prepare(`
          a.solved AS solved, a.hintsUsed AS hintsUsed
   FROM attempts a
   JOIN problems p ON p.id = a.problemId
+  WHERE p.language = ?
 `);
 
-/** Distinct hint-free solves per (topic, difficulty). Untouched topics are absent. */
-export function getCleanSolvesByTopic(): Map<Topic, Record<Difficulty, number>> {
-  return foldCredits(creditsByTopicStmt.all() as CreditRow[]) as Map<
+/**
+ * Distinct hint-free solves per (topic, difficulty) for ONE language. Untouched
+ * topics are absent.
+ *
+ * Filtered on `problems.language`, matching this query's existing rule that the
+ * PROBLEM is authoritative for topic/difficulty credit (a handful of old
+ * attempts carry a `pattern` that disagrees with their problem's topic). The
+ * ladder forks with the bank: solving 3 easy two-pointer problems in Python
+ * banks nothing toward the JavaScript ladder, which is the whole point of a
+ * tier that means "you can do this, in this language".
+ */
+export function getCleanSolvesByTopic(language: Language): Map<Topic, Record<Difficulty, number>> {
+  return foldCredits(creditsByTopicStmt.all(language) as CreditRow[]) as Map<
     Topic,
     Record<Difficulty, number>
   >;
@@ -424,12 +511,15 @@ const creditsForTopicStmt = db.prepare(`
          a.solved AS solved, a.hintsUsed AS hintsUsed
   FROM attempts a
   JOIN problems p ON p.id = a.problemId
-  WHERE p.topic = ?
+  WHERE p.language = ? AND p.topic = ?
 `);
 
 /** One topic's distinct hint-free solves per difficulty (dense, never null). */
-export function getCleanSolvesForTopic(topic: Topic): Record<Difficulty, number> {
-  const rows = creditsForTopicStmt.all(topic) as CreditRow[];
+export function getCleanSolvesForTopic(
+  language: Language,
+  topic: Topic
+): Record<Difficulty, number> {
+  const rows = creditsForTopicStmt.all(language, topic) as CreditRow[];
   return foldCredits(rows).get(topic) ?? emptyCleanSolves();
 }
 
@@ -437,11 +527,14 @@ const creditsByPatternStmt = db.prepare(`
   SELECT pattern AS key, problemId AS problemId, difficulty AS difficulty,
          solved AS solved, hintsUsed AS hintsUsed
   FROM attempts
+  WHERE language = ?
 `);
 
 /** Distinct hint-free solves per (pattern, difficulty) — PatternStat's input. */
-export function getCleanSolvesByPattern(): Map<string, Record<Difficulty, number>> {
-  return foldCredits(creditsByPatternStmt.all() as CreditRow[]);
+export function getCleanSolvesByPattern(
+  language: Language
+): Map<string, Record<Difficulty, number>> {
+  return foldCredits(creditsByPatternStmt.all(language) as CreditRow[]);
 }
 
 // -----------------------------------------------------------------------------
@@ -456,19 +549,20 @@ const progressStmt = db.prepare(`
     SUM(CASE WHEN solved = 1 THEN 1 ELSE 0 END) AS solved,
     MAX(createdAt)                        AS lastSeen
   FROM attempts
+  WHERE language = ?
   GROUP BY pattern
   ORDER BY pattern ASC
 `);
 
-export function getProgress(): PatternStat[] {
-  const rows = progressStmt.all() as Array<{
+export function getProgress(language: Language): PatternStat[] {
+  const rows = progressStmt.all(language) as Array<{
     pattern: string;
     attempted: number;
     solved: number;
     lastSeen: string | null;
   }>;
 
-  const clean = getCleanSolvesByPattern();
+  const clean = getCleanSolvesByPattern(language);
 
   return rows.map((r) => ({
     pattern: r.pattern,
@@ -486,6 +580,7 @@ export function getProgress(): PatternStat[] {
 // -----------------------------------------------------------------------------
 export interface SkillRow {
   topic: Topic;
+  language: Language;
   currentDifficulty: Difficulty;
   box: number;
   ease: number;
@@ -500,6 +595,7 @@ export interface SkillRow {
 
 interface SkillStateDbRow {
   topic: string;
+  language: string;
   currentDifficulty: string;
   box: number;
   ease: number;
@@ -515,6 +611,7 @@ interface SkillStateDbRow {
 function rowToSkill(r: SkillStateDbRow): SkillRow {
   return {
     topic: r.topic as Topic,
+    language: toLanguage(r.language),
     currentDifficulty: r.currentDifficulty as Difficulty,
     box: r.box,
     ease: r.ease,
@@ -528,17 +625,21 @@ function rowToSkill(r: SkillStateDbRow): SkillRow {
   };
 }
 
-const getAllSkillStmt = db.prepare(`SELECT * FROM skill_state`);
-const getSkillStmt = db.prepare(`SELECT * FROM skill_state WHERE topic = ?`);
+const getAllSkillStmt = db.prepare(`SELECT * FROM skill_state WHERE language = ?`);
+const getSkillStmt = db.prepare(`SELECT * FROM skill_state WHERE language = ? AND topic = ?`);
 
-/** All per-topic skill rows (topics never practiced simply have no row). */
-export function getSkillState(): SkillRow[] {
-  const rows = getAllSkillStmt.all() as SkillStateDbRow[];
+/**
+ * All per-topic skill rows for ONE language (topics never practiced in that
+ * language simply have no row, and the cold-start path in scheduler.service
+ * already handles that).
+ */
+export function getSkillState(language: Language): SkillRow[] {
+  const rows = getAllSkillStmt.all(language) as SkillStateDbRow[];
   return rows.map(rowToSkill);
 }
 
-export function getSkillForTopic(topic: Topic): SkillRow | null {
-  const row = getSkillStmt.get(topic) as SkillStateDbRow | undefined;
+export function getSkillForTopic(language: Language, topic: Topic): SkillRow | null {
+  const row = getSkillStmt.get(language, topic) as SkillStateDbRow | undefined;
   return row ? rowToSkill(row) : null;
 }
 
@@ -561,17 +662,12 @@ function clampEase(e: number): number {
 // the old statement would upsert into the wrong row against the new one. A
 // rollback therefore has to revert both together — reverting the code alone is
 // not a smaller, safer step.
-//
-// The language is a literal for now. Phase 1b threads a required `language`
-// parameter down through the accessors, at which point this becomes @language
-// and every missed call site is a compile error rather than a silent write to
-// the JavaScript ladder.
 const upsertSkillStmt = db.prepare(`
   INSERT INTO skill_state (
     topic, language, currentDifficulty, box, ease, streak, attempts, solved, hintsSum,
     lastResult, lastSeenAt, dueAt
   ) VALUES (
-    @topic, 'javascript', @currentDifficulty, @box, @ease, @streak, @attempts, @solved, @hintsSum,
+    @topic, @language, @currentDifficulty, @box, @ease, @streak, @attempts, @solved, @hintsSum,
     @lastResult, @lastSeenAt, @dueAt
   )
   ON CONFLICT(topic, language) DO UPDATE SET
@@ -601,19 +697,22 @@ const upsertSkillStmt = db.prepare(`
  * kept only so readers that already have a SkillRow don't need a second query.
  *
  * MUST be called AFTER the attempt row is inserted — the derivation counts it.
- * The topic is chosen because problem.topic is in hand at submit time.
+ * The topic is chosen because problem.topic is in hand at submit time, and the
+ * language must come from that same problem: a submit updates the ladder of the
+ * language the problem was written in, never the one currently selected.
  */
 export function updateSkillOnAttempt(
+  language: Language,
   topic: Topic,
   solved: boolean,
   hintsUsed: number
 ): void {
-  const prev = getSkillForTopic(topic);
+  const prev = getSkillForTopic(language, topic);
   const nowMs = Date.now();
   const nowIso = new Date(nowMs).toISOString();
 
   const currentDifficulty: Difficulty = workingDifficulty(
-    tierLevel(getCleanSolvesForTopic(topic))
+    tierLevel(getCleanSolvesForTopic(language, topic))
   );
   let box = prev?.box ?? 0;
   let ease = prev?.ease ?? 2.5;
@@ -648,6 +747,7 @@ export function updateSkillOnAttempt(
 
   upsertSkillStmt.run({
     topic,
+    language,
     currentDifficulty,
     box,
     ease,
@@ -664,18 +764,22 @@ export function updateSkillOnAttempt(
 // -----------------------------------------------------------------------------
 // Bank / attempt helpers used by the adaptive generator.
 // -----------------------------------------------------------------------------
-const bankTitlesStmt = db.prepare(`SELECT title FROM problems WHERE topic = ?`);
+const bankTitlesStmt = db.prepare(`SELECT title FROM problems WHERE language = ? AND topic = ?`);
 
-/** All banked problem titles for a topic — used as `avoidTitles` for variations. */
-export function getBankTitles(topic: Topic): string[] {
-  const rows = bankTitlesStmt.all(topic) as Array<{ title: string }>;
+/**
+ * All banked problem titles for a language+topic — used as `avoidTitles` for
+ * variations. Language-scoped so a fresh Python bank isn't told to avoid the
+ * titles of 35 JavaScript problems the user has never seen in Python.
+ */
+export function getBankTitles(language: Language, topic: Topic): string[] {
+  const rows = bankTitlesStmt.all(language, topic) as Array<{ title: string }>;
   return rows.map((r) => r.title);
 }
 
 const recentProblemDigestsStmt = db.prepare(`
   SELECT title, prompt
   FROM problems
-  WHERE topic = ?
+  WHERE language = ? AND topic = ?
   ORDER BY createdAt DESC
   LIMIT ?
 `);
@@ -686,10 +790,11 @@ const recentProblemDigestsStmt = db.prepare(`
  * only stops repeated NAMES, not repeated algorithms.
  */
 export function getRecentProblemDigests(
+  language: Language,
   topic: Topic,
   limit = 4
 ): Array<{ title: string; prompt: string }> {
-  return recentProblemDigestsStmt.all(topic, limit) as Array<{
+  return recentProblemDigestsStmt.all(language, topic, limit) as Array<{
     title: string;
     prompt: string;
   }>;
@@ -699,14 +804,17 @@ const recentSolvedStmt = db.prepare(`
   SELECT p.*
   FROM attempts a
   JOIN problems p ON p.id = a.problemId
-  WHERE p.topic = ? AND a.solved = 1
+  WHERE p.language = ? AND p.topic = ? AND a.solved = 1
   ORDER BY a.createdAt DESC
   LIMIT 1
 `);
 
-/** The most recently solved problem for a topic (seed for a variation). */
-export function getRecentSolvedProblem(topic: Topic): ProblemRecord | null {
-  const row = recentSolvedStmt.get(topic) as ProblemRow | undefined;
+/** The most recently solved problem for a language+topic (seed for a variation). */
+export function getRecentSolvedProblem(
+  language: Language,
+  topic: Topic
+): ProblemRecord | null {
+  const row = recentSolvedStmt.get(language, topic) as ProblemRow | undefined;
   return row ? rowToProblem(row) : null;
 }
 
@@ -739,6 +847,8 @@ export function isSolutionRevealed(problemId: string): boolean {
 // -----------------------------------------------------------------------------
 export interface SessionRow {
   id: string;
+  /** The language this sitting started in — it schedules in that one throughout. */
+  language: Language;
   createdAt: string;
   plan: SessionPlan;
   served: number;
@@ -747,6 +857,7 @@ export interface SessionRow {
 
 interface SessionDbRow {
   id: string;
+  language: string;
   createdAt: string;
   plan: string;
   served: number;
@@ -754,16 +865,22 @@ interface SessionDbRow {
 }
 
 const insertSessionStmt = db.prepare(`
-  INSERT INTO sessions (id, createdAt, plan, served, lastTopic)
-  VALUES (?, ?, ?, 0, NULL)
+  INSERT INTO sessions (id, language, createdAt, plan, served, lastTopic)
+  VALUES (?, ?, ?, ?, 0, NULL)
 `);
 
-export function createSession(id: string, plan: SessionPlan): void {
-  insertSessionStmt.run(id, new Date().toISOString(), JSON.stringify(plan));
+/**
+ * Open a grind sitting in a language. Stored rather than re-read from settings
+ * on every `/next`, so flipping the global setting mid-sitting cannot hand the
+ * player a problem in a language the session's plan was never built for.
+ */
+export function createSession(language: Language, id: string, plan: SessionPlan): void {
+  insertSessionStmt.run(id, language, new Date().toISOString(), JSON.stringify(plan));
 }
 
 const getSessionStmt = db.prepare(`SELECT * FROM sessions WHERE id = ?`);
 
+/** One sitting by id — no language parameter; the row reports its own. */
 export function getSession(id: string): SessionRow | null {
   const row = getSessionStmt.get(id) as SessionDbRow | undefined;
   if (!row) return null;
@@ -775,6 +892,7 @@ export function getSession(id: string): SessionRow | null {
   }
   return {
     id: row.id,
+    language: toLanguage(row.language),
     createdAt: row.createdAt,
     plan,
     served: row.served,
@@ -869,10 +987,18 @@ export function clearReview(problemId: string): void {
   clearReviewStmt.run({ problemId, clearedAt: new Date().toISOString() });
 }
 
+// The two review READS join `problems` — the queue itself is keyed on problemId
+// and needs no language column, but "what should I be served next" must not
+// reach across languages. A JS problem surfacing mid-Python-sitting would be
+// served through the Python harness and fail for reasons that teach nothing.
+// (INNER JOIN also drops rows whose problem was deleted, which the scheduler
+// would only have discarded a step later anyway.)
 const dueReviewStmt = db.prepare(`
-  SELECT problemId, reason, attempts FROM review_queue
-  WHERE clearedAt IS NULL AND dueAt <= ?
-  ORDER BY dueAt ASC
+  SELECT r.problemId AS problemId, r.reason AS reason, r.attempts AS attempts
+  FROM review_queue r
+  JOIN problems p ON p.id = r.problemId
+  WHERE p.language = ? AND r.clearedAt IS NULL AND r.dueAt <= ?
+  ORDER BY r.dueAt ASC
   LIMIT 1
 `);
 
@@ -882,9 +1008,9 @@ export interface DueReview {
   attempts: number;
 }
 
-/** The earliest due, un-cleared review item, or null. */
-export function getDueReview(): DueReview | null {
-  const row = dueReviewStmt.get(new Date().toISOString()) as
+/** The earliest due, un-cleared review item in this language, or null. */
+export function getDueReview(language: Language): DueReview | null {
+  const row = dueReviewStmt.get(language, new Date().toISOString()) as
     | { problemId: string; reason: string; attempts: number }
     | undefined;
   if (!row) return null;
@@ -896,12 +1022,15 @@ export function getDueReview(): DueReview | null {
 }
 
 const reviewDueCountStmt = db.prepare(`
-  SELECT COUNT(*) AS n FROM review_queue WHERE clearedAt IS NULL AND dueAt <= ?
+  SELECT COUNT(*) AS n
+  FROM review_queue r
+  JOIN problems p ON p.id = r.problemId
+  WHERE p.language = ? AND r.clearedAt IS NULL AND r.dueAt <= ?
 `);
 
-/** How many review items are currently due. */
-export function getReviewDueCount(): number {
-  return (reviewDueCountStmt.get(new Date().toISOString()) as { n: number }).n;
+/** How many review items are currently due in this language. */
+export function getReviewDueCount(language: Language): number {
+  return (reviewDueCountStmt.get(language, new Date().toISOString()) as { n: number }).n;
 }
 
 /** Whether a problem currently has a live (un-cleared) review row. */
@@ -1132,7 +1261,7 @@ const mistakeContextStmt = db.prepare(`
          COALESCE(p.title, '') AS title, COALESCE(p.topic, a.pattern) AS topic
   FROM attempts a
   LEFT JOIN problems p ON p.id = a.problemId
-  WHERE a.mistakeTags IS NOT NULL
+  WHERE a.language = ? AND a.mistakeTags IS NOT NULL
   ORDER BY a.createdAt DESC
 `);
 
@@ -1149,9 +1278,13 @@ export interface MistakeContext {
 /**
  * Recurring mistake tags with the most recent attempt that carried them, so a
  * mistake lesson can be grounded in a specific problem the user actually missed.
+ *
+ * Language-scoped on `attempts.language` (not the join) so a deleted problem
+ * still contributes its tags: "Python indentation" and "JS hoisting" in one
+ * tally would generate a mistake lesson about neither.
  */
-export function getMistakeContexts(): MistakeContext[] {
-  const rows = mistakeContextStmt.all() as Array<{
+export function getMistakeContexts(language: Language): MistakeContext[] {
+  const rows = mistakeContextStmt.all(language) as Array<{
     mistakeTags: string;
     pattern: string;
     problemId: string;
@@ -1192,7 +1325,7 @@ const walkthroughStmt = db.prepare(`
          MAX(a.hintsUsed) AS hintsUsed, MAX(a.solved) AS solved, MAX(a.createdAt) AS lastAt
   FROM attempts a
   JOIN problems p ON p.id = a.problemId
-  WHERE a.hintsUsed > 0 OR a.solved = 0
+  WHERE p.language = ? AND (a.hintsUsed > 0 OR a.solved = 0)
   GROUP BY a.problemId
   ORDER BY lastAt DESC
   LIMIT ?
@@ -1207,8 +1340,11 @@ export interface WalkthroughCandidate {
 }
 
 /** Problems the user leaned on hints for (or missed) — walkthrough material. */
-export function getWalkthroughCandidates(limit = 20): WalkthroughCandidate[] {
-  const rows = walkthroughStmt.all(limit) as Array<{
+export function getWalkthroughCandidates(
+  language: Language,
+  limit = 20
+): WalkthroughCandidate[] {
+  const rows = walkthroughStmt.all(language, limit) as Array<{
     problemId: string;
     title: string;
     topic: string;
@@ -1245,6 +1381,7 @@ const attemptsByProblemStmt = db.prepare(`
     COALESCE(p.topic, a.pattern)           AS topic
   FROM attempts a
   LEFT JOIN problems p ON p.id = a.problemId
+  WHERE a.language = ?
   ORDER BY a.createdAt ASC
 `);
 
@@ -1267,8 +1404,8 @@ export interface ProblemAttemptSeries {
  * to pass, minutes to solve) — all of which need the WHOLE series per problem,
  * which the flat getHistory() list can't express.
  */
-export function getAttemptsByProblem(): ProblemAttemptSeries[] {
-  const rows = attemptsByProblemStmt.all() as Array<{
+export function getAttemptsByProblem(language: Language): ProblemAttemptSeries[] {
+  const rows = attemptsByProblemStmt.all(language) as Array<{
     problemId: string;
     solved: number;
     testsPassed: number;
@@ -1302,7 +1439,7 @@ const dailyActivityStmt = db.prepare(`
     COUNT(*)                                    AS attempts,
     SUM(CASE WHEN solved = 1 THEN 1 ELSE 0 END) AS solved
   FROM attempts
-  WHERE createdAt >= ?
+  WHERE language = ? AND createdAt >= ?
   GROUP BY date(createdAt)
   ORDER BY date(createdAt) ASC
 `);
@@ -1318,14 +1455,14 @@ export interface DailyActivityRow {
  * Attempt + solve counts per UTC day over the last `days` days. Days with no
  * activity are simply absent — reflect.compute.buildActivity fills the grid.
  */
-export function getDailyActivity(days = 84): DailyActivityRow[] {
+export function getDailyActivity(language: Language, days = 84): DailyActivityRow[] {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  return dailyActivityStmt.all(since) as DailyActivityRow[];
+  return dailyActivityStmt.all(language, since) as DailyActivityRow[];
 }
 
 const taggedAttemptsStmt = db.prepare(`
   SELECT mistakeTags, createdAt FROM attempts
-  WHERE mistakeTags IS NOT NULL
+  WHERE language = ? AND mistakeTags IS NOT NULL
   ORDER BY createdAt ASC
 `);
 
@@ -1339,8 +1476,8 @@ export interface TaggedAttemptRow {
  * count-per-tag rollup throws away. The reflect dashboard needs the timeline to
  * split each tag into recent vs earlier halves ("is this shrinking?").
  */
-export function getTaggedAttempts(): TaggedAttemptRow[] {
-  const rows = taggedAttemptsStmt.all() as Array<{ mistakeTags: string; createdAt: string }>;
+export function getTaggedAttempts(language: Language): TaggedAttemptRow[] {
+  const rows = taggedAttemptsStmt.all(language) as Array<{ mistakeTags: string; createdAt: string }>;
   const out: TaggedAttemptRow[] = [];
   for (const r of rows) {
     let parsed: unknown;
@@ -1357,12 +1494,12 @@ export function getTaggedAttempts(): TaggedAttemptRow[] {
 }
 
 const distinctSolvedStmt = db.prepare(`
-  SELECT COUNT(DISTINCT problemId) AS n FROM attempts WHERE solved = 1
+  SELECT COUNT(DISTINCT problemId) AS n FROM attempts WHERE language = ? AND solved = 1
 `);
 
-/** Distinct problems solved at least once (the "solved" tile). */
-export function getSolvedProblemCount(): number {
-  return (distinctSolvedStmt.get() as { n: number }).n;
+/** Distinct problems solved at least once in this language (the "solved" tile). */
+export function getSolvedProblemCount(language: Language): number {
+  return (distinctSolvedStmt.get(language) as { n: number }).n;
 }
 
 const hintFreeStmt = db.prepare(`
@@ -1370,13 +1507,85 @@ const hintFreeStmt = db.prepare(`
     COUNT(*)                                       AS total,
     SUM(CASE WHEN hintsUsed = 0 THEN 1 ELSE 0 END) AS hintFree
   FROM attempts
+  WHERE language = ?
 `);
 
-/** Fraction of all attempts made with zero hints, 0..1 (0 when there are none). */
-export function getHintFreeRate(): number {
-  const row = hintFreeStmt.get() as { total: number; hintFree: number | null };
+/** Fraction of this language's attempts made with zero hints, 0..1 (0 when none). */
+export function getHintFreeRate(language: Language): number {
+  const row = hintFreeStmt.get(language) as { total: number; hintFree: number | null };
   if (!row.total) return 0;
   return (row.hintFree ?? 0) / row.total;
+}
+
+// -----------------------------------------------------------------------------
+// Settings — the server-side key/value store.
+// -----------------------------------------------------------------------------
+// One row per setting, `value` holding JSON. Both halves of that are load-bearing
+// for what comes next: the AI-provider wizard adds `provider`, `model` and
+// `apiKeyRef` as ROWS, never as a migration, and JSON means a value that starts
+// life as a string can grow a shape without becoming a schema change either.
+//
+// Reads are deliberately forgiving (a corrupt row reads as absent) because a
+// settings table that can hard-fail startup is a settings table that can brick
+// the app over a value nobody can edit without SQL.
+const getSettingStmt = db.prepare(`SELECT value FROM settings WHERE key = ?`);
+const setSettingStmt = db.prepare(`
+  INSERT INTO settings (key, value, updatedAt) VALUES (@key, @value, @updatedAt)
+  ON CONFLICT(key) DO UPDATE SET value = @value, updatedAt = @updatedAt
+`);
+
+/** Read one setting, or null when it is absent or unparseable. */
+export function getSetting<T = unknown>(key: string): T | null {
+  const row = getSettingStmt.get(key) as { value: string } | undefined;
+  if (!row) return null;
+  try {
+    return JSON.parse(row.value) as T;
+  } catch {
+    console.warn(`[db] settings row "${key}" is not valid JSON — treating it as unset`);
+    return null;
+  }
+}
+
+/** Upsert one setting. The value is stored as JSON, whatever its shape. */
+export function setSetting(key: string, value: unknown): void {
+  setSettingStmt.run({
+    key,
+    value: JSON.stringify(value),
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/** The settings key the active language lives under. */
+export const ACTIVE_LANGUAGE_KEY = 'language';
+
+/**
+ * The language the app generates and serves in right now.
+ *
+ * Falls back to DEFAULT_LANGUAGE when the row is absent (every install starts
+ * that way — nothing writes this row until someone picks a language) and also
+ * when it holds a value no build of this app understands, which is what a
+ * downgrade after selecting a language looks like. Never throws: this is called
+ * on the read path of nearly every route.
+ */
+export function getActiveLanguage(): Language {
+  const stored = getSetting<unknown>(ACTIVE_LANGUAGE_KEY);
+  if (stored === null) return DEFAULT_LANGUAGE;
+  if (isLanguage(stored)) return stored;
+  console.warn(
+    `[db] active language setting is ${JSON.stringify(stored)}, which this build does not ` +
+      `support — falling back to ${DEFAULT_LANGUAGE}`
+  );
+  return DEFAULT_LANGUAGE;
+}
+
+/**
+ * Set the active language. Takes a `Language`, so the compiler has already
+ * rejected an unknown value here — validation of untrusted input belongs at the
+ * HTTP boundary (routes/settings.ts), which is the only place a string arrives
+ * from outside this repo.
+ */
+export function setActiveLanguage(language: Language): void {
+  setSetting(ACTIVE_LANGUAGE_KEY, language);
 }
 
 export { db };

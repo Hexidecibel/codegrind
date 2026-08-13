@@ -11,6 +11,7 @@ import {
   getTaggedAttempts,
   getSolvedProblemCount,
   getHintFreeRate,
+  getActiveLanguage,
 } from '../services/db.js';
 import {
   PREREQS,
@@ -42,11 +43,17 @@ reflectRoutes.get('/reflect', (c) => {
   try {
     const now = Date.now();
 
+    // Reflect shows ONE language at a time — the active one. Everything below is
+    // scoped to it; Phase 4 splits out the two genuinely global metrics
+    // (lessonsRead, because the corpus is shared, and streak, because a habit
+    // is a habit whichever language you practiced in).
+    const language = getActiveLanguage();
+
     // --- per-topic skill, one row per TOPIC (untouched topics get zeros) ------
     // cleanSolves is the tier ladder's only input; everything progress-shaped
     // (tier, score, served difficulty) is derived from it in reflect.compute.
-    const skillByTopic = new Map(getSkillState().map((s) => [s.topic, s]));
-    const cleanByTopic = getCleanSolvesByTopic();
+    const skillByTopic = new Map(getSkillState(language).map((s) => [s.topic, s]));
+    const cleanByTopic = getCleanSolvesByTopic(language);
     const skills: ReflectSkill[] = TOPICS.map((topic) => {
       const s = skillByTopic.get(topic);
       return {
@@ -98,7 +105,7 @@ reflectRoutes.get('/reflect', (c) => {
     });
 
     // --- the rest ------------------------------------------------------------
-    const activity = buildActivity(getDailyActivity(ACTIVITY_DAYS), ACTIVITY_DAYS, now);
+    const activity = buildActivity(getDailyActivity(language, ACTIVITY_DAYS), ACTIVITY_DAYS, now);
     let lessonsRead = 0;
     for (const n of reads.values()) lessonsRead += n;
 
@@ -106,17 +113,17 @@ reflectRoutes.get('/reflect', (c) => {
       tree,
       nextUnlock: computeNextUnlock(skills),
       tiles: {
-        solved: getSolvedProblemCount(),
+        solved: getSolvedProblemCount(language),
         topicsReached: tree.filter((n) => n.state !== 'locked').length,
         streak: computeDayStreak(activity),
-        hintFreeRate: getHintFreeRate(),
+        hintFreeRate: getHintFreeRate(language),
         tiersCleared,
         lessonsRead,
-        reviewDue: getReviewDueCount(),
+        reviewDue: getReviewDueCount(language),
       },
       activity,
-      trend: computeTrend(getAttemptsByProblem()),
-      mistakes: splitMistakes(getTaggedAttempts()),
+      trend: computeTrend(getAttemptsByProblem(language)),
+      mistakes: splitMistakes(getTaggedAttempts(language)),
     };
 
     return c.json(payload);
