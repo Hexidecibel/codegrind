@@ -25,7 +25,9 @@ import type {
   StudyIndexResponse,
   StudyReadResponse,
   ReflectResponse,
+  SettingsResponse,
 } from '@/shared/types';
+import type { Language } from '@/shared/languages';
 
 /** Shape returned by GET /api/session/:id (resume). */
 export interface SessionState {
@@ -152,6 +154,27 @@ export function revealSolution(problemId: string): Promise<RevealResponse> {
   return request<RevealResponse>('/api/reveal', {
     method: 'POST',
     body: JSON.stringify({ problemId }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Settings — server-side, because the language decides what gets GENERATED
+// ---------------------------------------------------------------------------
+/**
+ * The active language is not a display preference and so cannot live in
+ * localStorage: generation happens on the server, hours before any client asks
+ * for a problem (bin/seed-bank, the warm-ahead jobs). A preference the server
+ * cannot read is not a preference, it is a filter.
+ */
+export function getSettings(): Promise<SettingsResponse> {
+  return request<SettingsResponse>('/api/settings');
+}
+
+/** PUT /api/settings — partial update; returns the whole resulting state. */
+export function updateSettings(patch: { language?: Language }): Promise<SettingsResponse> {
+  return request<SettingsResponse>('/api/settings', {
+    method: 'PUT',
+    body: JSON.stringify(patch),
   });
 }
 

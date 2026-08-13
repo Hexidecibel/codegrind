@@ -5,6 +5,7 @@ import {
   matchLevel,
   type AssistanceLevel,
 } from './assistance';
+import { LANGUAGES, LANGUAGE_META } from '@/shared/languages';
 
 describe('assistanceToMonacoOptions', () => {
   it('level 1 (Raw) is a bare plaintext notepad', () => {
@@ -65,6 +66,55 @@ describe('assistanceToMonacoOptions', () => {
   it('each preset round-trips through matchLevel', () => {
     for (const lvl of [1, 2, 3, 4] as AssistanceLevel[]) {
       expect(matchLevel(presetToOverrides(lvl))).toBe(lvl);
+    }
+  });
+});
+
+describe('the problem language', () => {
+  it('selects the grammar when highlighting is on', () => {
+    expect(assistanceToMonacoOptions(3, undefined, 'python').language).toBe('python');
+    expect(assistanceToMonacoOptions(3, undefined, 'java').language).toBe('java');
+    expect(assistanceToMonacoOptions(3, undefined, 'javascript').language).toBe('javascript');
+  });
+
+  it('still falls back to plaintext at the Raw rung, whatever the language', () => {
+    // Raw is a notepad on purpose; the language must not smuggle highlighting
+    // back in through the side door.
+    for (const l of LANGUAGES) {
+      expect(assistanceToMonacoOptions(1, undefined, l).language).toBe('plaintext');
+    }
+  });
+
+  it('defaults to JavaScript when no language is supplied', () => {
+    // The default keeps the two pure-preset call sites (and every pre-existing
+    // test above) honest without threading a problem through them.
+    expect(assistanceToMonacoOptions(2).language).toBe('javascript');
+  });
+
+  it('takes the indent width from the language, not from the rung', () => {
+    for (const l of LANGUAGES) {
+      for (const lvl of [1, 2, 3, 4] as AssistanceLevel[]) {
+        expect(assistanceToMonacoOptions(lvl, undefined, l).options.tabSize).toBe(
+          LANGUAGE_META[l].indentSize,
+        );
+      }
+    }
+    expect(assistanceToMonacoOptions(3, undefined, 'python').options.tabSize).toBe(4);
+    expect(assistanceToMonacoOptions(3, undefined, 'javascript').options.tabSize).toBe(2);
+  });
+
+  it('pins spaces-not-tabs for every language and every rung', () => {
+    // In Python a literal tab is a real failure and an invisible one. This is
+    // pinned rather than language-conditional precisely so no future edit can
+    // make it conditional and get Python wrong.
+    for (const l of LANGUAGES) {
+      for (const lvl of [1, 2, 3, 4] as AssistanceLevel[]) {
+        const { options } = assistanceToMonacoOptions(lvl, undefined, l);
+        expect(options.insertSpaces, `${l}/${lvl}`).toBe(true);
+        // Without this Monaco re-derives both settings from the buffer's own
+        // text and discards the two above.
+        expect(options.detectIndentation, `${l}/${lvl}`).toBe(false);
+      }
     }
   });
 });

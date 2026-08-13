@@ -103,13 +103,45 @@ function endCapture() {
 // Change the rules here and the build fails until the fixture agrees.
 //
 // The rules: arrays are order-SENSITIVE, objects are key-order-INSENSITIVE,
-// NaN equals NaN (which `===` denies), and no type coercion ever — 1 is not "1".
+// NaN equals NaN (which `===` denies), fractional numbers compare within a
+// tolerance (see numbersEqual), and no type coercion ever — 1 is not "1".
+
+/** Absolute floor, so values straddling zero don't need an infinite ratio. */
+const FLOAT_ABS_TOL = 1e-9;
+/** Relative slack everywhere else. */
+const FLOAT_REL_TOL = 1e-9;
+
+/**
+ * Number equality: `abs(a-b) <= max(1e-9, 1e-9*max(|a|,|b|))`, behind three
+ * guards. See conformance/equality-cases.json → encoding.floatTolerance for the
+ * full argument; the short version:
+ *
+ * - NaN equals NaN, which `===` denies.
+ * - **Non-finite values never reach the tolerance.** `abs(inf - -inf)` is `inf`
+ *   and so is `1e-9 * inf`, and `inf <= inf` is true — an unguarded tolerance
+ *   quietly declares the two infinities equal.
+ * - **Two integers compare exactly.** A relative 1e-9 near 2^53 is a slack of
+ *   ~9 million, which would accept a count that is off by one. Only a value
+ *   carrying a fraction has rounding noise to forgive; a count does not.
+ *
+ * Without the tolerance itself, any problem that averages anything bakes
+ * 0.30000000000000004 into `expected` at canonicalization and then rejects the
+ * correct answer — with a diff the player cannot act on.
+ */
+function numbersEqual(a, b) {
+  if (a === b) return true; // exact, and -0 === 0 as JSON requires
+  if (Number.isNaN(a) && Number.isNaN(b)) return true;
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  if (Number.isInteger(a) && Number.isInteger(b)) return false;
+  const tol = Math.max(FLOAT_ABS_TOL, FLOAT_REL_TOL * Math.max(Math.abs(a), Math.abs(b)));
+  return Math.abs(a - b) <= tol;
+}
 
 function deepEqual(a, b) {
+  // Numbers first: `a === b` would short-circuit past the tolerance, and the
+  // number/number pair is the only one it applies to.
+  if (typeof a === 'number' && typeof b === 'number') return numbersEqual(a, b);
   if (a === b) return true;
-  if (typeof a === 'number' && typeof b === 'number' && Number.isNaN(a) && Number.isNaN(b)) {
-    return true;
-  }
   if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
     return false;
   }

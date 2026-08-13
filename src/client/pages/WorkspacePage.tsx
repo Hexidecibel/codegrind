@@ -6,6 +6,7 @@ import { useLocalStorage } from '@/client/hooks/useLocalStorage';
 import { useControlSize } from '@/client/hooks/useMediaQuery';
 import { Button } from '@/client/components/ui/button';
 import { TopicPicker } from '@/client/components/TopicPicker';
+import { LanguagePicker } from '@/client/components/LanguagePicker';
 import { SolveSurface } from '@/client/components/SolveSurface';
 
 /**
@@ -56,6 +57,13 @@ export function WorkspacePage() {
 
   const toolbarExtras = (
     <>
+      {/*
+        Next to topic/difficulty because it is the same KIND of control: all
+        three steer what the next problem will be. Switching it reloads from the
+        newly active language's bank, because the problem on screen belongs to
+        the old one and nothing about it changes retroactively.
+      */}
+      <LanguagePicker disabled={busy} onChange={() => void loadNext(false)} />
       <TopicPicker
         topic={topic}
         difficulty={difficulty}

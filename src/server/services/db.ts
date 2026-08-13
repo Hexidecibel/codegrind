@@ -338,6 +338,30 @@ export function findUnusedProblem(
   return row ? rowToProblem(row) : null;
 }
 
+const countServableStmt = db.prepare(`
+  SELECT COUNT(*) AS n FROM problems
+  WHERE language = ? AND topic = ? AND difficulty = ? AND used = 0 AND canonicalized = 1
+`);
+
+/**
+ * How many problems are sitting ready to be served for one slot.
+ *
+ * The WHERE clause is deliberately identical to `findUnusedStmt` above — this
+ * counts exactly the rows that one would hand out, so "0" here and "null" there
+ * can never disagree. bin/seed-bank uses it as its skip-if-exists guard, which
+ * is the whole reason seeding is now idempotent: a re-run that finds the slot
+ * already stocked spends nothing rather than generating a duplicate at full LLM
+ * cost. If this and findUnusedStmt ever drift, seeding starts topping up slots
+ * that are already full, or refuses to fill ones that are empty.
+ */
+export function servableBankSize(
+  language: Language,
+  topic: Topic,
+  difficulty: Difficulty
+): number {
+  return (countServableStmt.get(language, topic, difficulty) as { n: number }).n;
+}
+
 const markUsedStmt = db.prepare(`UPDATE problems SET used = 1 WHERE id = ?`);
 export function markProblemUsed(id: string): void {
   markUsedStmt.run(id);

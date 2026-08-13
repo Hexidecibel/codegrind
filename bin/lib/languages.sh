@@ -23,12 +23,18 @@
 # match the public class it declares. That is a compiler constraint, not a
 # preference, and it has no meaning at all in a code editor.
 #
-# STATUS: javascript is the only language wired up end to end. The python and
-# java rows below are real values, not placeholders — but nothing builds or runs
-# them yet, because their `test-harness/<lang>/` directories do not exist.
-# `cg_buildable_languages` is what keeps that honest: it reports what is on disk
-# rather than what is in this table, so bin/build-runner-image cannot fail on a
-# language that has not been written yet.
+# STATUS: javascript and python are wired up end to end. The java row is a real
+# set of values, not placeholders — but nothing builds or runs it yet, because
+# `test-harness/java/` does not exist. `cg_buildable_languages` is what keeps
+# that honest: it reports what is on disk rather than what is in this table, so
+# bin/build-runner-image cannot fail on a language that has not been written yet.
+#
+# The python row's numbers were measured, not guessed: 29 000 recursion frames
+# complete inside `--memory=256m` (the harness reserves a 64 MB thread stack so
+# a legitimate deep DFS is not killed at CPython's default depth of 1000), and
+# 31 000 returns a clean RecursionError rather than a segfault. Raising the
+# memory cap would not raise the depth — sys.setrecursionlimit is the binding
+# constraint, and it lives in the harness.
 
 # The order the rest of the tooling iterates in. Matches LANGUAGES in
 # src/shared/languages.ts — the two lists are the same set, deliberately, so a

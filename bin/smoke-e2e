@@ -1,0 +1,230 @@
+#!/usr/bin/env bash
+# Drive one language all the way through the live app: set the active language,
+# get a problem, run it, submit the reference solution, get coaching — then
+# assert what the database recorded.
+#
+#   bin/smoke-e2e python                       # bank first, generate if empty
+#   bin/smoke-e2e javascript --generate        # force a fresh Claude generate
+#   bin/smoke-e2e python --topic arrays --difficulty easy
+#
+# THIS IS NOT FREE AND IT IS NOT READ-ONLY.
+#   - `--generate` costs one Claude generation call; every submit costs one
+#     coaching call.
+#   - It records a REAL attempt against a REAL problem, so it moves
+#     /api/reflect, /api/history and skill_state. That is the point: the thing
+#     being verified is that an attempt lands with the right language on it.
+#     Re-capture the baseline afterwards (bin/capture-baseline) or the next
+#     bin/verify-migration will report the new rows as a regression.
+#
+# The reference solution is read straight from SQLite, read-only. The API
+# deliberately never exposes it before a solve (toPlayerProblem strips it), and
+# routing around that here is what lets this script produce an ACCEPTED verdict
+# rather than only proving that a wrong answer is rejected.
+#
+# Exit: 0 = every assertion held, 1 = something failed.
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR" || exit 1
+
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+if [[ -f "$REPO_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+DB="${DATA_DIR:-$REPO_DIR/data}/codegrind.db"
+PORT="${PORT:-9416}"
+
+LANGUAGE="${1:?usage: bin/smoke-e2e <language> [--generate] [--topic T] [--difficulty D]}"
+shift
+TOPIC="arrays"
+DIFFICULTY="easy"
+GENERATE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --generate)   GENERATE=1; shift ;;
+    --topic)      TOPIC="${2:?}"; shift 2 ;;
+    --difficulty) DIFFICULTY="${2:?}"; shift 2 ;;
+    *) echo "unknown flag: $1" >&2; exit 2 ;;
+  esac
+done
+
+# shellcheck source=lib/languages.sh
+source "${REPO_DIR}/bin/lib/languages.sh"
+cg_require_language "${LANGUAGE}"
+
+API="http://127.0.0.1:${PORT}"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+FAILURES=0
+
+say()  { printf '%s\n' "$*"; }
+ok()   { printf '  ok   %s\n' "$*"; }
+bad()  { printf '  FAIL %s\n' "$*"; FAILURES=$((FAILURES + 1)); }
+
+say "codegrind :: smoke-e2e (${LANGUAGE}, ${DIFFICULTY}/${TOPIC})"
+say "  api  ${API}"
+say "  db   ${DB}"
+say ""
+
+# -----------------------------------------------------------------------------
+say "== 1. activate the language"
+# -----------------------------------------------------------------------------
+active="$(curl -sS -X PUT "${API}/api/settings" \
+  -H 'Content-Type: application/json' \
+  -d "{\"language\":\"${LANGUAGE}\"}" | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).language')"
+[[ "$active" == "$LANGUAGE" ]] && ok "active language is ${active}" || bad "active language is ${active}"
+
+# -----------------------------------------------------------------------------
+say ""
+say "== 2. serve a problem"
+# -----------------------------------------------------------------------------
+if [[ $GENERATE -eq 1 ]]; then
+  say "  (forcing a fresh Claude generate — this costs a call and takes 15-30s)"
+  curl -sS --max-time 300 -X POST "${API}/api/problems/generate" \
+    -H 'Content-Type: application/json' \
+    -d "{\"topic\":\"${TOPIC}\",\"difficulty\":\"${DIFFICULTY}\"}" > "$TMP/problem.json"
+else
+  curl -sS --max-time 300 \
+    "${API}/api/problems/next?topic=${TOPIC}&difficulty=${DIFFICULTY}" > "$TMP/problem.json"
+fi
+
+PROBLEM_ID="$(node -e '
+  const p = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  if (p.error) { console.error("  server said: " + p.error); process.exit(1); }
+  process.stdout.write(p.id);
+' "$TMP/problem.json")" || { say "  FAIL could not obtain a problem"; exit 1; }
+
+node -e '
+  const p = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const want = process.argv[2];
+  const pad = (s) => `  ${s}`;
+  console.log(pad(`ok   served "${p.title}" (${p.id})`));
+  if (p.language === want) console.log(pad(`ok   problem.language is ${p.language}`));
+  else { console.log(pad(`FAIL problem.language is ${p.language}, expected ${want}`)); process.exit(1); }
+' "$TMP/problem.json" "$LANGUAGE" || FAILURES=$((FAILURES + 1))
+
+# -----------------------------------------------------------------------------
+say ""
+say "== 3. canonicalization + the reference solution"
+# -----------------------------------------------------------------------------
+DB="$DB" PID="$PROBLEM_ID" OUT="$TMP/ref.txt" node -e '
+const fs = require("node:fs");
+const Database = require("better-sqlite3");
+const db = new Database(process.env.DB, { readonly: true });
+const row = db.prepare("SELECT language, canonicalized, referenceSolution FROM problems WHERE id = ?").get(process.env.PID);
+db.close();
+if (!row) { console.log("  FAIL problem row not found"); process.exit(1); }
+let bad = 0;
+if (row.canonicalized === 1) console.log("  ok   problems.canonicalized = 1");
+else { console.log(`  FAIL problems.canonicalized = ${row.canonicalized}`); bad++; }
+console.log(`  ok   problems.language = ${row.language}`);
+fs.writeFileSync(process.env.OUT, row.referenceSolution ?? "");
+if (!row.referenceSolution) { console.log("  FAIL no reference solution stored"); bad++; }
+process.exit(bad ? 1 : 0);
+' || FAILURES=$((FAILURES + 1))
+
+# -----------------------------------------------------------------------------
+say ""
+say "== 4. POST /api/run (sample tests, no AI)"
+# -----------------------------------------------------------------------------
+node -e '
+const fs = require("node:fs");
+const body = JSON.stringify({ problemId: process.argv[2], code: fs.readFileSync(process.argv[3], "utf8") });
+fs.writeFileSync(process.argv[4], body);
+' _ "$PROBLEM_ID" "$TMP/ref.txt" "$TMP/run-body.json"
+
+curl -sS --max-time 120 -X POST "${API}/api/run" \
+  -H 'Content-Type: application/json' --data-binary "@$TMP/run-body.json" > "$TMP/run.json"
+
+node -e '
+const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (r.error) { console.log(`  FAIL /api/run errored: ${r.error}`); process.exit(1); }
+console.log(`  ${r.verdict === "accepted" ? "ok  " : "FAIL"} verdict=${r.verdict} ${r.passed}/${r.total} sample tests`);
+if (r.verdict !== "accepted") {
+  for (const t of r.results.filter((t) => !t.passed).slice(0, 3)) {
+    console.log(`       ${t.name}: expected ${t.expected} got ${t.actual} ${t.stderr ?? ""}`);
+  }
+  process.exit(1);
+}
+' "$TMP/run.json" || FAILURES=$((FAILURES + 1))
+
+# -----------------------------------------------------------------------------
+say ""
+say "== 5. POST /api/submit (hidden tests + coaching)"
+# -----------------------------------------------------------------------------
+curl -sS --max-time 300 -X POST "${API}/api/submit" \
+  -H 'Content-Type: application/json' --data-binary "@$TMP/run-body.json" > "$TMP/submit.json"
+
+node -e '
+const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (s.error) { console.log(`  FAIL /api/submit errored: ${s.error}`); process.exit(1); }
+let bad = 0;
+const r = s.result;
+if (r.verdict === "accepted") console.log(`  ok   verdict=accepted ${r.passed}/${r.total} hidden tests`);
+else {
+  console.log(`  FAIL verdict=${r.verdict} ${r.passed}/${r.total}`);
+  for (const t of r.results.filter((t) => !t.passed).slice(0, 3)) {
+    console.log(`       ${t.name}: expected ${t.expected} got ${t.actual} ${t.stderr ?? ""}`);
+  }
+  bad++;
+}
+const c = s.coaching;
+if (c && c.approach && c.patternRecognition) console.log(`  ok   coaching brief returned (pattern: ${c.pattern})`);
+else { console.log("  FAIL coaching brief missing or empty"); bad++; }
+if (s.referenceSolution) console.log("  ok   reference solution revealed after a solve");
+else { console.log("  FAIL reference solution withheld after a solve"); bad++; }
+process.exit(bad ? 1 : 0);
+' "$TMP/submit.json" || FAILURES=$((FAILURES + 1))
+
+# -----------------------------------------------------------------------------
+say ""
+say "== 6. what the database recorded"
+# -----------------------------------------------------------------------------
+DB="$DB" PID="$PROBLEM_ID" WANT="$LANGUAGE" TOPIC="$TOPIC" node -e '
+const Database = require("better-sqlite3");
+const db = new Database(process.env.DB, { readonly: true });
+let bad = 0;
+
+const a = db.prepare(
+  "SELECT language, solved, hintsUsed FROM attempts WHERE problemId = ? ORDER BY createdAt DESC LIMIT 1"
+).get(process.env.PID);
+if (!a) { console.log("  FAIL no attempt row was written"); bad++; }
+else {
+  if (a.language === process.env.WANT) console.log(`  ok   attempts.language = ${a.language}`);
+  else { console.log(`  FAIL attempts.language = ${a.language}, expected ${process.env.WANT}`); bad++; }
+  console.log(`  ok   attempt solved=${a.solved} hintsUsed=${a.hintsUsed}`);
+}
+
+// skill_state is keyed (topic, language): the row for THIS language must exist,
+// and the other languages` rows for the same topic must be untouched by it.
+const rows = db.prepare("SELECT language, attempts, solved FROM skill_state WHERE topic = ?").all(process.env.TOPIC);
+const mine = rows.find((r) => r.language === process.env.WANT);
+if (mine) console.log(`  ok   skill_state (${process.env.TOPIC}, ${process.env.WANT}) attempts=${mine.attempts} solved=${mine.solved}`);
+else { console.log(`  FAIL no skill_state row for (${process.env.TOPIC}, ${process.env.WANT})`); bad++; }
+for (const r of rows.filter((r) => r.language !== process.env.WANT)) {
+  console.log(`  ..   skill_state (${process.env.TOPIC}, ${r.language}) attempts=${r.attempts} solved=${r.solved}  [other language, shown for contrast]`);
+}
+
+// Isolation: nothing in this language`s bank may carry another language`s rows.
+const wrong = db.prepare(
+  "SELECT COUNT(*) AS n FROM problems WHERE language = ? AND id IN (SELECT problemId FROM attempts WHERE language <> ?)"
+).get(process.env.WANT, process.env.WANT).n;
+if (wrong === 0) console.log("  ok   no attempt is filed under a different language than its problem");
+else { console.log(`  FAIL ${wrong} problem(s) have an attempt in another language`); bad++; }
+
+db.close();
+process.exit(bad ? 1 : 0);
+' || FAILURES=$((FAILURES + 1))
+
+say ""
+if [[ $FAILURES -gt 0 ]]; then
+  say "FAIL — ${FAILURES} check group(s) failed for ${LANGUAGE}."
+  exit 1
+fi
+say "PASS — ${LANGUAGE} generate/serve → run → submit → coaching → record all behaved."
+exit 0

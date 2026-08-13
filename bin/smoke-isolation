@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# Prove the language partition holds: a session in one language can never be
+# served another language's problem.
+#
+#   bin/smoke-isolation                 # every language with bank stock
+#   bin/smoke-isolation --topic hashing --difficulty easy
+#
+# THE TEST ONLY MEANS SOMETHING IN A SLOT THAT IS STOCKED IN BOTH LANGUAGES.
+# Asking for a Python problem when only Python problems exist proves nothing —
+# there was nothing else to hand back. This script therefore picks a
+# topic+difficulty that BOTH banks hold, so `findUnusedProblem`'s language
+# filter is the only thing standing between the request and the wrong bank. If
+# no such slot exists it says so and exits 2 rather than reporting a pass it did
+# not earn.
+#
+# NOT READ-ONLY: /api/problems/next marks the problem it serves as used, so each
+# run consumes one banked problem per language. It never generates (that would
+# cost an LLM call and would also defeat the point — a generated problem is
+# trivially in the right language).
+#
+# It also leaves the active language set to whatever it checked LAST. Set it
+# back deliberately afterwards; bin/smoke-isolation --restore <lang> does that.
+#
+# Exit: 0 = the partition holds, 1 = it leaked, 2 = could not run the check.
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR" || exit 2
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+if [[ -f "$REPO_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+DB="${DATA_DIR:-$REPO_DIR/data}/codegrind.db"
+PORT="${PORT:-9416}"
+API="http://127.0.0.1:${PORT}"
+
+TOPIC=""
+DIFFICULTY=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --topic)      TOPIC="${2:?}"; shift 2 ;;
+    --difficulty) DIFFICULTY="${2:?}"; shift 2 ;;
+    --restore)
+      curl -sS -X PUT "${API}/api/settings" -H 'Content-Type: application/json' \
+        -d "{\"language\":\"${2:?}\"}" >/dev/null
+      printf 'active language restored to %s\n' "$2"
+      exit 0 ;;
+    *) echo "unknown flag: $1" >&2; exit 2 ;;
+  esac
+done
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+FAILURES=0
+
+printf 'codegrind :: smoke-isolation\n\n'
+
+# -----------------------------------------------------------------------------
+# Pick a slot both banks can serve.
+# -----------------------------------------------------------------------------
+read -r SLOT_TOPIC SLOT_DIFF SLOT_LANGS <<<"$(
+  DB="$DB" WANT_TOPIC="$TOPIC" WANT_DIFF="$DIFFICULTY" node -e '
+    const Database = require("better-sqlite3");
+    const db = new Database(process.env.DB, { readonly: true });
+    const rows = db.prepare(`
+      SELECT language, topic, difficulty, COUNT(*) AS ready
+      FROM problems WHERE used = 0 AND canonicalized = 1
+      GROUP BY language, topic, difficulty
+    `).all();
+    db.close();
+    const slots = new Map();
+    for (const r of rows) {
+      if (process.env.WANT_TOPIC && r.topic !== process.env.WANT_TOPIC) continue;
+      if (process.env.WANT_DIFF && r.difficulty !== process.env.WANT_DIFF) continue;
+      const k = `${r.topic} ${r.difficulty}`;
+      if (!slots.has(k)) slots.set(k, []);
+      slots.get(k).push(r.language);
+    }
+    // Most languages first, then most stock, so the check is as strong as the
+    // bank allows.
+    const best = [...slots.entries()].filter(([, l]) => l.length > 1).sort((a, b) => b[1].length - a[1].length)[0];
+    if (!best) process.exit(1);
+    process.stdout.write(`${best[0]} ${best[1].sort().join(",")}`);
+  '
+)" || {
+  printf 'INCOMPLETE: no topic+difficulty slot is stocked in more than one language.\n'
+  printf '            Seed a second language first (bin/seed-bank --language python),\n'
+  printf '            or this check can only ever prove that the only bank was used.\n'
+  exit 2
+}
+
+printf 'Contested slot: %s/%s, stocked in: %s\n' "$SLOT_DIFF" "$SLOT_TOPIC" "$SLOT_LANGS"
+printf 'Every request below could be answered from any of those banks.\n\n'
+
+# -----------------------------------------------------------------------------
+# One request per language; the served problem must match the active setting.
+# -----------------------------------------------------------------------------
+IFS=',' read -r -a LANGS <<< "$SLOT_LANGS"
+for lang in "${LANGS[@]}"; do
+  active="$(curl -sS -X PUT "${API}/api/settings" -H 'Content-Type: application/json' \
+    -d "{\"language\":\"${lang}\"}" | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).language')"
+  if [[ "$active" != "$lang" ]]; then
+    printf '  FAIL could not activate %s (got %s)\n' "$lang" "$active"
+    FAILURES=$((FAILURES + 1))
+    continue
+  fi
+
+  curl -sS --max-time 300 \
+    "${API}/api/problems/next?topic=${SLOT_TOPIC}&difficulty=${SLOT_DIFF}" > "$TMP/p.json"
+
+  WANT="$lang" node -e '
+    const p = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    if (p.error) { console.log(`  FAIL ${process.env.WANT}: server said ${p.error}`); process.exit(1); }
+    if (p.language === process.env.WANT) {
+      console.log(`  ok   active=${process.env.WANT} -> served a ${p.language} problem ("${p.title}")`);
+      process.exit(0);
+    }
+    console.log(`  FAIL active=${process.env.WANT} -> served a ${p.language} problem ("${p.title}")`);
+    process.exit(1);
+  ' "$TMP/p.json" || FAILURES=$((FAILURES + 1))
+done
+
+# -----------------------------------------------------------------------------
+printf '\n== stored-data invariants\n'
+# -----------------------------------------------------------------------------
+DB="$DB" node -e '
+const Database = require("better-sqlite3");
+const db = new Database(process.env.DB, { readonly: true });
+let bad = 0;
+
+// An attempt must be filed under its problem`s language. Nothing enforces this
+// in SQL -- attempts.language is denormalized on purpose, so six accessors can
+// read attempts alone without a join -- which makes it exactly the invariant
+// worth asserting rather than assuming.
+const mismatched = db.prepare(`
+  SELECT COUNT(*) AS n FROM attempts a JOIN problems p ON p.id = a.problemId
+  WHERE a.language <> p.language
+`).get().n;
+if (mismatched === 0) console.log("  ok   every attempt.language matches its problem.language");
+else { console.log(`  FAIL ${mismatched} attempt(s) disagree with their problem`); bad++; }
+
+// skill_state is keyed (topic, language): the same topic in two languages must
+// be two independent rows, and a fresh language must start COLD rather than
+// inheriting the incumbent`s ladder.
+const shared = db.prepare(`
+  SELECT topic, COUNT(*) AS langs FROM skill_state GROUP BY topic HAVING COUNT(*) > 1
+`).all();
+if (shared.length === 0) console.log("  ..   no topic is practiced in two languages yet");
+for (const s of shared) {
+  const rows = db.prepare("SELECT language, attempts, solved FROM skill_state WHERE topic = ?").all(s.topic);
+  const desc = rows.map((r) => `${r.language}=${r.attempts}/${r.solved}`).join("  ");
+  const distinct = new Set(rows.map((r) => `${r.attempts}/${r.solved}`)).size;
+  // Identical counters across languages would be the signature of an unlock
+  // having been transferred rather than each ladder being climbed separately.
+  if (distinct > 1) console.log(`  ok   ${s.topic}: independent ladders (${desc})`);
+  else console.log(`  ..   ${s.topic}: ${desc} -- equal by coincidence, not proof of sharing`);
+}
+
+// There is deliberately no session->problem assertion here: `sessions` stores
+// (id, createdAt, plan, served, lastTopic, language) and never records which
+// PROBLEMS it served, so the link does not exist in the schema to check. The
+// property is enforced upstream instead — a sitting`s language is decided once
+// at /api/session/start and stored, and every later pick reads it back off the
+// session row rather than off the live setting, so flipping the language
+// mid-sitting cannot redirect it. The attempts-vs-problems check above is what
+// would catch a violation after the fact.
+
+db.close();
+process.exit(bad ? 1 : 0);
+' || FAILURES=$((FAILURES + 1))
+
+printf '\n'
+if [[ $FAILURES -gt 0 ]]; then
+  printf 'FAIL — the language partition leaked in %d place(s).\n' "$FAILURES"
+  exit 1
+fi
+printf 'PASS — each language was served only its own problems from a slot both banks could answer.\n'
+printf 'NOTE  the active language is now "%s". Set it back deliberately:\n' "${LANGS[-1]}"
+printf '      bin/smoke-isolation --restore javascript\n'
+exit 0

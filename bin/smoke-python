@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# The four Python-specific hazards, each proven where it actually bites.
+#
+#   bin/smoke-python
+#
+# These are separate from bin/smoke-e2e on purpose. smoke-e2e asks "does the app
+# drive this language end to end"; this asks "does the Python RUNTIME behave",
+# and the answers live at two different layers:
+#
+#   1. deep recursion   — CPython's default limit is 1000 frames, which kills a
+#                         legitimate DFS at the input sizes the expert rubric
+#                         asks for. Proven through bin/run-submission, because
+#                         it is a property of the harness's threading, not of
+#                         any stored problem.
+#   2. print()          — a stray print used to be written straight into the
+#                         container's stdout, so the caller's JSON.parse failed
+#                         and correct code came back as an unexplained `error`.
+#   3. IndentationError — must surface as the `compile_error` VERDICT, and that
+#                         mapping lives in sandbox.service, above the runner. So
+#                         this one is proven through the live API, which is the
+#                         only place the verdict exists.
+#   4. float tolerance  — averaging anything produces 0.30000000000000004, and
+#                         without a tolerance the canonicalizer bakes that into
+#                         `expected` and then rejects the correct answer.
+#
+# Read-only with respect to the database: /api/run records nothing. Costs no
+# LLM calls.
+#
+# Exit: 0 = every proof held, 1 = something failed.
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR" || exit 1
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+if [[ -f "$REPO_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+DB="${DATA_DIR:-$REPO_DIR/data}/codegrind.db"
+PORT="${PORT:-9416}"
+API="http://127.0.0.1:${PORT}"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+FAILURES=0
+note() { printf '  %s\n' "$*"; }
+fail() { printf '  FAIL %s\n' "$*"; FAILURES=$((FAILURES + 1)); }
+
+printf 'codegrind :: smoke-python\n\n'
+
+# =============================================================================
+printf '== 1. deep recursion (>1000 frames) via bin/run-submission\n'
+# =============================================================================
+cat > "$TMP/deep.py" <<'PY'
+def solve(n):
+    def go(k):
+        return 0 if k == 0 else k + go(k - 1)
+    return go(n)
+PY
+cat > "$TMP/deep.json" <<'JSON'
+{"functionName":"solve","tests":[
+ {"name":"5000 frames","args":[5000],"expected":12502500},
+ {"name":"20000 frames","args":[20000],"expected":200010000}
+]}
+JSON
+bin/run-submission python "$TMP/deep.py" "$TMP/deep.json" > "$TMP/deep.out" 2>/dev/null
+node -e '
+const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (r.passed === r.total && r.total === 2) console.log(`  ok   ${r.passed}/${r.total} passed at 5k and 20k frames (CPython default is 1000)`);
+else { console.log(`  FAIL ${r.passed}/${r.total}: ${JSON.stringify(r.results?.map(x=>x.stderr).filter(Boolean))}`); process.exit(1); }
+' "$TMP/deep.out" || FAILURES=$((FAILURES + 1))
+
+# =============================================================================
+printf '\n== 2. float tolerance via bin/run-submission\n'
+# =============================================================================
+cat > "$TMP/avg.py" <<'PY'
+def solve(nums):
+    return sum(nums) / len(nums)
+PY
+# 0.1 + 0.2 averaged over 2 is 0.15000000000000002 -- the `expected` below is
+# the clean decimal a human would write, which is exactly the mismatch the
+# tolerance exists to absorb.
+cat > "$TMP/avg.json" <<'JSON'
+{"functionName":"solve","tests":[
+ {"name":"average with rounding noise","args":[[0.1,0.2]],"expected":0.15},
+ {"name":"thirds","args":[[0.1,0.2,0.3]],"expected":0.2},
+ {"name":"a genuinely wrong average is still wrong","args":[[1,2]],"expected":2.0}
+]}
+JSON
+bin/run-submission python "$TMP/avg.py" "$TMP/avg.json" > "$TMP/avg.out" 2>/dev/null
+node -e '
+const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+let bad = 0;
+const [noise, thirds, wrong] = r.results;
+if (noise?.passed) console.log(`  ok   ${noise.actual} accepted against expected 0.15`);
+else { console.log(`  FAIL rounding noise rejected: ${JSON.stringify(noise)}`); bad++; }
+if (thirds?.passed) console.log(`  ok   ${thirds.actual} accepted against expected 0.2`);
+else { console.log(`  FAIL rounding noise rejected: ${JSON.stringify(thirds)}`); bad++; }
+if (wrong && !wrong.passed) console.log(`  ok   a real difference (1.5 vs 2) is still rejected`);
+else { console.log("  FAIL the tolerance swallowed a genuinely wrong answer"); bad++; }
+process.exit(bad ? 1 : 0);
+' "$TMP/avg.out" || FAILURES=$((FAILURES + 1))
+
+# =============================================================================
+printf '\n== 3. print() and IndentationError through the LIVE API\n'
+# =============================================================================
+# Both need a real stored Python problem, because the thing being proven is the
+# VERDICT the server derives -- which only exists above the runner.
+PID="$(DB="$DB" node -e '
+const Database = require("better-sqlite3");
+const db = new Database(process.env.DB, { readonly: true });
+const row = db.prepare(
+  "SELECT id FROM problems WHERE language = ? AND canonicalized = 1 ORDER BY createdAt DESC LIMIT 1"
+).get("python");
+db.close();
+if (!row) process.exit(1);
+process.stdout.write(row.id);
+')"
+if [[ -z "${PID:-}" ]]; then
+  fail "no canonicalized python problem in the bank — run bin/seed-bank --language python"
+else
+  REF="$(DB="$DB" PID="$PID" node -e '
+    const Database = require("better-sqlite3");
+    const db = new Database(process.env.DB, { readonly: true });
+    const r = db.prepare("SELECT referenceSolution FROM problems WHERE id = ?").get(process.env.PID);
+    db.close();
+    process.stdout.write(r.referenceSolution);
+  ')"
+
+  post_run() { # $1 = file holding the code, $2 = label, $3 = expected verdict
+    node -e '
+      const fs = require("node:fs");
+      fs.writeFileSync(process.argv[4], JSON.stringify({
+        problemId: process.argv[2], code: fs.readFileSync(process.argv[3], "utf8") }));
+    ' _ "$PID" "$1" "$TMP/body.json"
+    curl -sS --max-time 120 -X POST "${API}/api/run" -H 'Content-Type: application/json' \
+      --data-binary "@$TMP/body.json" > "$TMP/resp.json"
+    LABEL="$2" WANT="$3" node -e '
+      const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+      const want = process.env.WANT;
+      if (r.verdict === want) {
+        const extra = r.phase ? ` phase="${r.phase}"` : "";
+        const printed = r.results?.find((t) => t.stdout)?.stdout;
+        console.log(`  ok   ${process.env.LABEL}: verdict=${r.verdict}${extra}` +
+          (printed ? ` (captured stdout: ${JSON.stringify(printed.trim().slice(0, 40))})` : ""));
+        process.exit(0);
+      }
+      console.log(`  FAIL ${process.env.LABEL}: verdict=${r.verdict}, expected ${want}`);
+      console.log(`       ${JSON.stringify(r.results?.[0] ?? r).slice(0, 300)}`);
+      process.exit(1);
+    ' "$TMP/resp.json"
+  }
+
+  # --- print() must not corrupt the payload --------------------------------
+  { printf 'print("noisy banner from module scope")\n\n'
+    printf '%s\n' "$REF"
+  } > "$TMP/noisy.py"
+  post_run "$TMP/noisy.py" 'a solution that print()s' 'accepted' || FAILURES=$((FAILURES + 1))
+
+  # --- IndentationError must be compile_error, not "0 of N failed" ---------
+  # A mis-indented STATEMENT, not a mis-indented comment: Python's tokenizer
+  # ignores a comment's column entirely, so an over-indented `#` line parses
+  # perfectly and proves nothing. (It cost one run of this script to find out.)
+  #
+  # The broken function is prepended rather than spliced into the reference so
+  # the failure does not depend on the shape of whatever problem happens to be
+  # newest in the bank. A parse error ANYWHERE in the file means no test ever
+  # runs, which is the whole reason `compile_error` exists as a verdict distinct
+  # from "0 of 12 passed".
+  { printf 'def _mis_indented():\n    x = 1\n      y = 2\n    return x + y\n\n\n'
+    printf '%s\n' "$REF"
+  } > "$TMP/broken.py"
+  printf '  ..   (an over-indented STATEMENT prepended to the reference)\n'
+  post_run "$TMP/broken.py" 'an IndentationError' 'compile_error' || FAILURES=$((FAILURES + 1))
+fi
+
+printf '\n'
+if [[ $FAILURES -gt 0 ]]; then
+  printf 'FAIL — %d Python proof(s) failed.\n' "$FAILURES"
+  exit 1
+fi
+printf 'PASS — deep recursion, float tolerance, stdout capture and compile_error all behaved.\n'
+exit 0

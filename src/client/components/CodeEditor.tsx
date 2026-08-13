@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { useIsDesktop } from '@/client/hooks/useMediaQuery';
 import type { AssistanceSettings } from '@/client/lib/assistance';
+import type { Language } from '@/shared/languages';
 
 /**
  * The imperative surface SolveSurface needs from whichever editor is mounted.
@@ -37,6 +38,14 @@ export interface CodeEditorImplProps {
   value: string;
   onChange: (value: string) => void;
   settings: AssistanceSettings;
+  /**
+   * The PROBLEM's language — grammar, indent width and (for Python, where it is
+   * a correctness issue rather than a style one) spaces-not-tabs. It is read off
+   * `Problem.language` rather than the active setting: the setting can be flipped
+   * while a tab sits open on a problem in the other language, and the editor must
+   * follow what is on screen.
+   */
+  language: Language;
   /** ⌘/Ctrl+Enter. Must be referentially stable — it's baked into a keymap. */
   onRun: () => void;
   /** ⌘/Ctrl+Shift+Enter. Must be referentially stable. */

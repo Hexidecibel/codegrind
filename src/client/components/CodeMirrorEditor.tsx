@@ -35,9 +35,27 @@ import {
 } from '@codemirror/autocomplete';
 import { highlightSelectionMatches } from '@codemirror/search';
 import { javascript } from '@codemirror/lang-javascript';
+import { python } from '@codemirror/lang-python';
 import { oneDark } from '@codemirror/theme-one-dark';
 import type { AssistanceOverrides } from '@/client/lib/assistance';
 import type { CodeEditorImplProps } from '@/client/components/CodeEditor';
+import { LANGUAGE_META, type Language } from '@/shared/languages';
+
+/**
+ * CM6 grammar per language. Unlike Monaco — whose default ESM entry registers
+ * every grammar it ships, Python and Java included, at no extra cost — CM6
+ * grammars are separate packages that must be imported to exist.
+ *
+ * `java` is absent on purpose: @codemirror/lang-java is not a dependency, and
+ * Phase 5 adds it alongside the Java harness. A language with no entry here
+ * falls back to no grammar at all, which is a plain (still editable, still
+ * usable) buffer rather than a crash — the mobile editor degrades to the "Raw"
+ * look for that one language instead of breaking the page.
+ */
+const GRAMMARS: Partial<Record<Language, () => Extension>> = {
+  javascript,
+  python,
+};
 
 /**
  * Cosmetic layer over oneDark. 16px (vs Monaco's 14) is deliberate: iOS Safari
@@ -76,23 +94,31 @@ const BASE_THEME = EditorView.theme(
  */
 function extensionsFor(
   o: AssistanceOverrides,
+  language: Language,
   onRun: () => void,
   onSubmit: () => void,
 ): Extension[] {
+  // Indent width comes from the language, and the unit is ALWAYS spaces. In
+  // Python a hard tab is a real failure and an invisible one, and CM6's
+  // indentUnit is what every indent command (Enter, the phone's indent buttons,
+  // indentOnInput) inserts — so this string is the whole tabs-vs-spaces policy.
+  const indent = ' '.repeat(LANGUAGE_META[language].indentSize);
   const ext: Extension[] = [
     history(),
     // Horizontal scrolling in a code editor is miserable on a phone; Monaco's
     // desktop default (no wrap) does not translate.
     EditorView.lineWrapping,
-    EditorState.tabSize.of(2),
-    indentUnit.of('  '),
+    EditorState.tabSize.of(LANGUAGE_META[language].indentSize),
+    indentUnit.of(indent),
     oneDark,
     BASE_THEME,
     keymap.of([...defaultKeymap, ...historyKeymap]),
   ];
 
   if (o.syntaxHighlighting) {
-    ext.push(javascript(), codeFolding(), keymap.of(foldKeymap));
+    const grammar = GRAMMARS[language];
+    if (grammar) ext.push(grammar());
+    ext.push(codeFolding(), keymap.of(foldKeymap));
   }
   if (o.lineNumbers) {
     ext.push(lineNumbers(), highlightActiveLineGutter(), highlightActiveLine());
@@ -149,6 +175,7 @@ export function CodeMirrorEditor({
   value,
   onChange,
   settings,
+  language,
   onRun,
   onSubmit,
   onReady,
@@ -161,10 +188,11 @@ export function CodeMirrorEditor({
     () =>
       extensionsFor(
         settings.overrides,
+        language,
         () => handlers.current.onRun(),
         () => handlers.current.onSubmit(),
       ),
-    [settings.overrides],
+    [settings.overrides, language],
   );
 
   const handleCreate = useCallback(

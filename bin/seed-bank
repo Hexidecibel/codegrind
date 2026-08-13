@@ -1,7 +1,31 @@
 #!/usr/bin/env bash
-# Seed a small starter problem bank (real Claude generate path). Thin wrapper
-# around bin/seed-bank.ts so it can be run directly like the other bin scripts.
+# Seed a starter problem bank (real Claude generate path). Thin wrapper around
+# bin/seed-bank.ts so it can be run directly like the other bin scripts.
+#
+#   bin/seed-bank --help
+#
+# THIS SPENDS REAL MONEY: one Claude generation call per problem, plus a sandbox
+# run of the reference solution to canonicalize its tests. It is idempotent —
+# an already-stocked slot is skipped — so a re-run after a partial failure only
+# pays for what is still missing.
 set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_DIR}"
-exec npx tsx bin/seed-bank.ts
+
+# ANTHROPIC_API_KEY lives in .env (materialized from .cush-secrets by bin/inject);
+# systemd hands it to the SERVICE, but a CLI run gets nothing unless it reads the
+# file itself. Without this the whole seed aborts on the first call with
+# "ANTHROPIC_API_KEY not set" — which is at least loud, but it aborts after the
+# plan has been printed, so it reads like the seeding worked until you look.
+# bin/capture-baseline and bin/verify-migration do exactly this, for exactly the
+# same reason; this script was simply missing it.
+if [[ -f "${REPO_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_DIR}/.env"
+  set +a
+fi
+
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+exec npx tsx bin/seed-bank.ts "$@"

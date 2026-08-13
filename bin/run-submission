@@ -75,6 +75,27 @@ trap cleanup EXIT
 cp "${SOLUTION_SRC}" "${WORK}/${SRCNAME}"
 cp "${TESTS_SRC}" "${WORK}/tests.json"
 
+# -----------------------------------------------------------------------------
+# The bind mount is read-only to the CONTAINER, but it still has to be readable
+# by whatever UID the image's USER resolves to on the HOST side of the mount.
+# -----------------------------------------------------------------------------
+# `mktemp -d` makes a 0700 directory owned by the invoking user, and that was
+# invisibly fine for exactly one language: node:22-slim's `node` user is uid
+# 1000, the same uid this script runs as. python:3.12-slim has no application
+# user of its own, so its harness runs as `nobody` (65534) — which could not
+# traverse the 0700 directory and reported "could not read solution" for EVERY
+# submission. A whole language looking permanently broken, from a mode bit.
+#
+# 0711 rather than 0755: the container needs to TRAVERSE the directory and read
+# two files it already knows the names of; nothing needs to list it. The
+# contents are the player's own code and the problem's tests, and they exist for
+# a few seconds, but there is no reason to widen further than the mount needs.
+#
+# Ancestor directories are not involved: the mount attaches this inode directly
+# at /work, so /home/hexi being 0750 does not matter.
+chmod 0711 "${WORK}"
+chmod 0644 "${WORK}/${SRCNAME}" "${WORK}/tests.json"
+
 # `timeout` returns 124 on kill; docker run propagates the container exit code
 # otherwise. We do NOT `set -e`-abort on a non-zero here — let the caller see
 # stdout (which may be empty on a killed container) and the exit code.

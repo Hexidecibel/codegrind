@@ -21,6 +21,13 @@ import {
   type LessonKind,
   type TrackOutlineItem,
 } from '../../shared/types.js';
+import type { Language } from '../../shared/languages.js';
+import {
+  CORPUS_LANGUAGE,
+  perLanguage,
+  profileFor,
+  type LanguageProfile,
+} from './llm.language.js';
 
 // ---------------------------------------------------------------------------
 // Anthropic client — lazily constructed so importing this module never requires
@@ -83,21 +90,48 @@ function extractToolInput(
 // ===========================================================================
 // 1. generateProblem
 // ===========================================================================
-const GENERATE_SYSTEM = `You are an expert interview coach and problem author. You produce ONE self-contained LeetCode-style coding problem for a candidate practicing interview patterns in JavaScript.
+/**
+ * Built once per language at module load — never per call.
+ *
+ * This text is sent with `cache_control: { type: 'ephemeral' }`, which caches
+ * the tools-and-system prefix of the request. Assembling it inside
+ * `generateProblem` would work today and keep working right up until somebody
+ * folded the topic or the difficulty into it, at which point every request is a
+ * cache miss and nothing reports it. There is no per-call scope here to read a
+ * dynamic value from, so that mistake is not available.
+ *
+ * For `javascript` the assembled string is byte-identical to the constant this
+ * replaced. That is the regression argument: JavaScript generation sends the
+ * prompt it has always sent.
+ */
+export const GENERATE_SYSTEM_BY_LANGUAGE: Record<Language, string> = perLanguage(
+  (p: LanguageProfile) =>
+    `You are an expert interview coach and problem author. You produce ONE self-contained LeetCode-style coding problem for a candidate practicing interview patterns in ${p.displayName}.
 
 Hard requirements — the problem MUST be auto-gradeable:
-- The solution is a single PURE, DETERMINISTIC JavaScript function. No I/O, no randomness, no Date/network, no global state.
-- Provide a clear function signature via starterCode: a named function declaration with the right parameters and an empty body (or a "// your code here" comment and a reasonable default return). Use plain JS (no TypeScript types).
+- The solution is a single PURE, DETERMINISTIC ${p.displayName} function. No I/O, no randomness, no Date/network, no global state.
+${p.signatureRule}
 - The exported/tested function name must exactly match the name in starterCode.
 - Every test is { name, args, expected } where args is the ARGUMENT LIST (array) spread into the function, and expected is the exact return value (deep-equal compared). Inputs and outputs must be JSON-serializable (numbers, strings, booleans, null, arrays, plain objects).
 - Provide 2-3 visible sampleTests and 8-12 hiddenTests. Hidden tests MUST cover edge cases (empty input, single element, duplicates, negatives, boundaries, large-but-deterministic cases) beyond the samples.
-- referenceSolution is COMPLETE, CORRECT JavaScript defining the same function name; it must pass every sample and hidden test. Return ONLY the function definition(s), no surrounding prose or exports.
+${p.referenceRule}
 - The prompt is Markdown: a concise problem statement. examples[] are human-readable illustrations. constraints[] are short bullet strings.
-- pattern is the underlying algorithmic pattern tag (e.g. "two-pointer", "sliding-window", "hashing", "binary-search", "dynamic-programming").
+- pattern is the underlying algorithmic pattern tag (e.g. "two-pointer", "sliding-window", "hashing", "binary-search", "dynamic-programming").${
+      p.authoringRules.length ? `\n${p.authoringRules.join('\n')}` : ''
+    }
 
-Match the requested topic and difficulty. Keep it crisp and fair — the kind of question that actually shows up in interviews. Return your problem by calling the emit_problem tool exactly once.`;
+Match the requested topic and difficulty. Keep it crisp and fair — the kind of question that actually shows up in interviews. Return your problem by calling the emit_problem tool exactly once.`
+);
 
-const EMIT_PROBLEM_TOOL: Anthropic.Tool = {
+/**
+ * The tool schema varies too — two of its field descriptions name the language.
+ * It is precomputed for the same reason the system prompt is: `tools` sits in
+ * front of `system` in the request, so it is INSIDE the cached prefix. A tool
+ * definition rebuilt per call is as cache-hostile as a system prompt rebuilt
+ * per call, and considerably easier to overlook.
+ */
+export const EMIT_PROBLEM_TOOL_BY_LANGUAGE: Record<Language, Anthropic.Tool> = perLanguage(
+  (p: LanguageProfile): Anthropic.Tool => ({
   name: 'emit_problem',
   description: 'Emit one complete, auto-gradeable coding problem.',
   input_schema: {
@@ -130,7 +164,7 @@ const EMIT_PROBLEM_TOOL: Anthropic.Tool = {
       },
       starterCode: {
         type: 'string',
-        description: 'JS starter: named function signature with an empty/stub body.',
+        description: p.starterCodeSchema,
       },
       sampleTests: {
         type: 'array',
@@ -160,7 +194,7 @@ const EMIT_PROBLEM_TOOL: Anthropic.Tool = {
       },
       referenceSolution: {
         type: 'string',
-        description: 'Complete correct JS defining functionName; passes all tests.',
+        description: p.referenceSolutionSchema,
       },
     },
     required: [
@@ -176,7 +210,8 @@ const EMIT_PROBLEM_TOOL: Anthropic.Tool = {
       'referenceSolution',
     ],
   },
-};
+  })
+);
 
 function coerceTests(raw: unknown): TestCase[] {
   if (!Array.isArray(raw)) return [];
@@ -251,8 +286,19 @@ export interface GenerateProblemOpts {
 // two unfamiliar techniques at once (binary-search-on-the-answer AND an O(n)
 // counting trick) teaches neither. Hard is ONE hard idea, carefully
 // implemented; composition is what `expert` is for.
+//
+// ONE BULLET IN `expert` IS PER-LANGUAGE, and it is the only one that could not
+// simply have the language's name swapped into it. The original read "integer
+// edges that stay inside JS safe-integer range", which conflates a TRANSPORT
+// constraint with a LANGUAGE one: the ±(2^53-1) bound holds for all three
+// languages because every `expected` is stored and compared after a round-trip
+// through Node's JSON.parse, and it holds even where the language could
+// represent more. What differs is why a model would breach it and what breaks
+// when it does — silent precision loss in JS, arbitrary-precision ints in
+// Python, 32-bit wraparound in Java. See LanguageProfile.integerRubric.
 // ---------------------------------------------------------------------------
-const DIFFICULTY_BRIEF: Partial<Record<Difficulty, string>> = {
+export const DIFFICULTY_BRIEF_BY_LANGUAGE: Record<Language, Partial<Record<Difficulty, string>>> =
+  perLanguage((p: LanguageProfile) => ({
   hard: `This is a HARD problem — one rung below expert. Hard means ONE hard idea, implemented carefully. Every one of these must hold:
 
 - EXACTLY ONE HARD IDEA: the intended solution turns on a single non-obvious insight — one reduction, one invariant, one data structure used in a way the candidate hasn't had to reach for before. The difficulty comes from seeing that idea and implementing it correctly, not from how many ideas are stacked.
@@ -275,19 +321,20 @@ hiddenTests must be ADVERSARIAL — aimed at the plausible-but-wrong solutions, 
 - ties and duplicates where an unstable comparator or a >= vs > choice flips the result
 - the exact boundary where an off-by-one in the reduction changes the answer
 - degenerate structure: empty, single element, all-identical, strictly increasing, strictly decreasing, all-negative
-- integer edges that stay inside JS safe-integer range (near ±2^31 and well inside ±(2^53-1)); never rely on overflow and never emit a value that loses precision
+${p.integerRubric}
 - one larger structured case of AT MOST ~200 elements, written out explicitly in args (it must stay JSON-serializable), built from a rule that punishes an accidental O(n^2) or a wrong tie-break. Keep it to 200: the whole problem is emitted as literal JSON in a single tool call, and a few thousand elements would truncate the response and throw the problem away. Punish wrong solutions structurally, not by sheer size
 
 referenceSolution must be the INTENDED optimal solution, not a brute force, and the whole hidden suite must run comfortably inside a few seconds.`,
-};
+  }));
 
 function buildGenerateUserMessage(
+  language: Language,
   topic: Topic,
   difficulty: Difficulty,
   opts?: GenerateProblemOpts
 ): string {
   let msg = `Create one ${difficulty} problem for the topic/pattern "${topic}". Make it self-contained and deterministic so it can be auto-graded.`;
-  const brief = DIFFICULTY_BRIEF[difficulty];
+  const brief = DIFFICULTY_BRIEF_BY_LANGUAGE[language][difficulty];
   if (brief) msg += `\n\n${brief}`;
   if (opts?.variationOf) {
     msg += `\n\nThis should be a VARIATION that drills the SAME core technique as the problem titled "${opts.variationOf.title}" (pattern: ${opts.variationOf.pattern}) — but in a genuinely new scenario/shape (different framing, inputs, or domain), NOT a reworded copy.`;
@@ -306,12 +353,20 @@ function buildGenerateUserMessage(
   return msg;
 }
 
+/**
+ * `language` leads and is required, matching the db accessors: a defaulted
+ * language would turn every missed call site into a silent JavaScript
+ * generation that looks perfectly correct until the problem is graded by the
+ * wrong harness. Required means a missed site is a compile error.
+ */
 export async function generateProblem(
+  language: Language,
   topic: Topic,
   difficulty: Difficulty,
   opts?: GenerateProblemOpts
 ): Promise<GeneratedProblem> {
   const anthropic = getAnthropic();
+  const profile = profileFor(language);
   const response = await anthropic.messages.create({
     model: ANTHROPIC_MODEL,
     // A problem carries its whole hidden test suite as literal JSON, so the
@@ -322,13 +377,19 @@ export async function generateProblem(
     // literal JSON, and thinking here would compete with the test suite for
     // the same 16000 tokens — the exact truncation this budget exists to avoid.
     thinking: NO_THINKING,
-    system: [{ type: 'text', text: GENERATE_SYSTEM, cache_control: { type: 'ephemeral' } }],
-    tools: [EMIT_PROBLEM_TOOL],
+    system: [
+      {
+        type: 'text',
+        text: GENERATE_SYSTEM_BY_LANGUAGE[language],
+        cache_control: { type: 'ephemeral' },
+      },
+    ],
+    tools: [EMIT_PROBLEM_TOOL_BY_LANGUAGE[language]],
     tool_choice: { type: 'tool', name: 'emit_problem' },
     messages: [
       {
         role: 'user',
-        content: buildGenerateUserMessage(topic, difficulty, opts),
+        content: buildGenerateUserMessage(language, topic, difficulty, opts),
       },
     ],
   });
@@ -352,7 +413,7 @@ export async function generateProblem(
   const starterCode =
     typeof input.starterCode === 'string' && input.starterCode.trim()
       ? input.starterCode
-      : `function ${functionName}() {\n  // your code here\n}`;
+      : profile.starterStub(functionName);
   const referenceSolution =
     typeof input.referenceSolution === 'string' ? input.referenceSolution : '';
 
@@ -383,7 +444,10 @@ export async function generateProblem(
 // ===========================================================================
 // 2. coach
 // ===========================================================================
-const COACH_SYSTEM = `You are a direct, encouraging technical interview coach. A candidate just submitted a JavaScript solution which was run against real hidden tests. You are given the problem, the reference solution, the candidate's code, and the ACTUAL per-test results.
+/** Per language, and precomputed — same cached-prefix argument as generation. */
+export const COACH_SYSTEM_BY_LANGUAGE: Record<Language, string> = perLanguage(
+  (p: LanguageProfile) =>
+    `You are a direct, encouraging technical interview coach. A candidate just submitted a ${p.displayName} solution which was run against real hidden tests. You are given the problem, the reference solution, the candidate's code, and the ACTUAL per-test results.
 
 Your job: a structured coaching brief focused on INTERVIEW PATTERN MASTERY.
 - approach: paraphrase what the candidate's code actually does, in plain language. Be accurate about their real approach.
@@ -395,7 +459,8 @@ Your job: a structured coaching brief focused on INTERVIEW PATTERN MASTERY.
 - mistakeTags: choose ZERO OR MORE tags describing the recurring failure modes this submission shows, chosen ONLY from this fixed vocabulary: ${MISTAKE_TAGS.join(', ')}. Return an EMPTY array if the solution was clean. Do NOT invent tags outside this list.
 - calibration: ONLY when the candidate provided a pre-solve prediction (given below). Write one short sentence comparing their PREDICTED approach/time/space against what their code ACTUALLY does — name the gap plainly (e.g. "You predicted O(n) but your nested scan is O(n^2)"). If they were right, affirm it briefly. If no prediction was provided, return an empty string.
 
-Be specific and honest. Reference the real test names and outcomes. Call emit_coaching exactly once.`;
+Be specific and honest. Reference the real test names and outcomes. Call emit_coaching exactly once.`
+);
 
 const EMIT_COACHING_TOOL: Anthropic.Tool = {
   name: 'emit_coaching',
@@ -469,6 +534,9 @@ export async function coach(
 ): Promise<CoachingBrief> {
   const anthropic = getAnthropic();
   const passed = results.filter((r) => r.passed).length;
+  // Off the PROBLEM, never off the active setting — the problem is what the
+  // reference solution and every `expected` were written in.
+  const fence = profileFor(problem.language).promptFence;
 
   const predictionBlock = prediction
     ? `\n\nCANDIDATE'S PRE-SOLVE PREDICTION (compare against their actual code for the calibration field):
@@ -486,12 +554,12 @@ ${problem.prompt}
 Function under test: ${problem.functionName}
 
 REFERENCE SOLUTION:
-\`\`\`javascript
+\`\`\`${fence}
 ${problem.referenceSolution}
 \`\`\`
 
 CANDIDATE'S SUBMISSION:
-\`\`\`javascript
+\`\`\`${fence}
 ${userCode}
 \`\`\`
 
@@ -510,7 +578,13 @@ ${summarizeResults(results)}${predictionBlock}`;
     // call mid-JSON and the whole brief is lost.
     max_tokens: 8000,
     thinking: ADAPTIVE_THINKING,
-    system: [{ type: 'text', text: COACH_SYSTEM, cache_control: { type: 'ephemeral' } }],
+    system: [
+      {
+        type: 'text',
+        text: COACH_SYSTEM_BY_LANGUAGE[problem.language],
+        cache_control: { type: 'ephemeral' },
+      },
+    ],
     tools: [EMIT_COACHING_TOOL],
     tool_choice: { type: 'tool', name: 'emit_coaching' },
     messages: [{ role: 'user', content: userMessage }],
@@ -578,7 +652,7 @@ ${problem.prompt}
 Function under test: ${problem.functionName}
 
 CANDIDATE'S CURRENT CODE:
-\`\`\`javascript
+\`\`\`${profileFor(problem.language).promptFence}
 ${userCode || '(empty)'}
 \`\`\`
 
@@ -774,6 +848,7 @@ export async function askFollowup(
   results: TestResult[] = []
 ): Promise<string> {
   const anthropic = getAnthropic();
+  const askFence = profileFor(problem.language).promptFence;
 
   const resultsBlock = results.length
     ? `
@@ -792,12 +867,12 @@ ${problem.prompt}
 Function under test: ${problem.functionName}
 
 REFERENCE SOLUTION:
-\`\`\`javascript
+\`\`\`${askFence}
 ${problem.referenceSolution}
 \`\`\`
 
 MY SUBMITTED CODE:
-\`\`\`javascript
+\`\`\`${askFence}
 ${userCode || '(empty)'}
 \`\`\`${resultsBlock}
 
@@ -837,11 +912,26 @@ I'll ask questions about it now.`;
 // ===========================================================================
 // 6. generatePrimer — durable per-pattern cheat-sheet card (forced tool-use)
 // ===========================================================================
-const PRIMER_SYSTEM = `You are an expert coding-interview coach writing a concise, DURABLE primer that helps a candidate RECOGNIZE and APPLY one algorithmic pattern. This is a reusable cheat-sheet card, not tied to any single problem — write it to still be useful months from now.
+// ---------------------------------------------------------------------------
+// The study corpus is written in ONE language, on purpose.
+// ---------------------------------------------------------------------------
+// Lesson and primer PROSE is language-free by construction — LESSON_SYSTEM
+// forbids a fenced block in a body and puts code in a separate field, and all
+// 114 stored lessons hold to it. Only the snippet is language-bound, so the
+// corpus is authored once and Phase 4 translates the snippets into
+// `code_translations` and overlays them at read time.
+//
+// Forking these prompts per language instead would fork the corpus: 90-180
+// generation calls per language against 18 batched translation calls for the
+// whole thing. So these two prompts are bound to CORPUS_LANGUAGE rather than
+// built per language, and that is a decision rather than an omission.
+const CORPUS_PROFILE = profileFor(CORPUS_LANGUAGE);
+
+export const PRIMER_SYSTEM = `You are an expert coding-interview coach writing a concise, DURABLE primer that helps a candidate RECOGNIZE and APPLY one algorithmic pattern. This is a reusable cheat-sheet card, not tied to any single problem — write it to still be useful months from now.
 
 Produce:
 - recognitionCues: 3-6 short signals in a problem statement that should make the candidate reach for this pattern (the cues an interviewer plants).
-- template: a reusable, GENERIC JavaScript code skeleton for the pattern — the canonical shape (loops, pointers, structures) with placeholder comments, NOT a solution to a specific problem. Plain JS, no TypeScript types.
+${CORPUS_PROFILE.templateRule}
 - pitfalls: 3-5 common mistakes people make applying this pattern (off-by-one, wrong bounds, forgetting a case, etc.).
 - example: ONE canonical example — a well-known problem title for this pattern and the single key insight that makes it click.
 
@@ -860,7 +950,7 @@ const EMIT_PRIMER_TOOL: Anthropic.Tool = {
       },
       template: {
         type: 'string',
-        description: 'Reusable generic JS code skeleton for the pattern (placeholders, not a specific solution).',
+        description: `Reusable generic ${CORPUS_PROFILE.displayName} code skeleton for the pattern (placeholders, not a specific solution).`,
       },
       pitfalls: {
         type: 'array',
@@ -1016,14 +1106,14 @@ export async function generateTrackOutline(topic: Topic): Promise<TrackOutlineIt
 // ===========================================================================
 // 8. generateLessonBody — one written lesson (forced tool, cached forever)
 // ===========================================================================
-const LESSON_SYSTEM = `You are an expert coding-interview coach writing ONE lesson in a reading track. The reader is in bed with their phone, reading straight through. Write for that: calm, direct, second person, no filler, no "in this lesson we will". Get to the substance in the first sentence.
+export const LESSON_SYSTEM = `You are an expert coding-interview coach writing ONE lesson in a reading track. The reader is in bed with their phone, reading straight through. Write for that: calm, direct, second person, no filler, no "in this lesson we will". Get to the substance in the first sentence.
 
 Length: one screenful — roughly 200-350 words of Markdown. Use short paragraphs and at most two small headings (## level). Bullets are fine when the content is genuinely a list. NEVER put a fenced code block in the body; if the lesson needs code, put it in the separate \`code\` field and refer to it as "the snippet below".
 
 You are given the pattern's primer (its recognition cues, canonical skeleton and pitfalls) so this lesson stays consistent with what the reader already read. Do not restate the primer — build on it.
 
 Also produce:
-- code: OPTIONAL plain JavaScript illustrating this lesson's specific point. Omit it entirely when prose alone is clearer. No TypeScript types, no imports, no console noise.
+- ${CORPUS_PROFILE.snippetRule}
 - takeaway: ONE sentence, the single thing to remember from this lesson.
 
 Call emit_lesson exactly once.`;
@@ -1040,7 +1130,7 @@ const EMIT_LESSON_TOOL: Anthropic.Tool = {
       },
       code: {
         type: 'string',
-        description: 'Optional plain-JS snippet illustrating this lesson. Omit when not needed.',
+        description: `Optional plain-${CORPUS_PROFILE.displayName} snippet illustrating this lesson. Omit when not needed.`,
       },
       takeaway: {
         type: 'string',
@@ -1057,7 +1147,7 @@ Recognition cues:
 ${primer.recognitionCues.map((c) => `- ${c}`).join('\n') || '- (none recorded)'}
 
 Canonical skeleton:
-\`\`\`javascript
+\`\`\`${CORPUS_PROFILE.promptFence}
 ${primer.template || '(none recorded)'}
 \`\`\`
 
@@ -1201,7 +1291,7 @@ PROBLEM: ${problem.title}
 ${problem.prompt}
 
 REFERENCE SOLUTION:
-\`\`\`javascript
+\`\`\`${profileFor(problem.language).promptFence}
 ${problem.referenceSolution}
 \`\`\``,
       },

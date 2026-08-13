@@ -50,10 +50,13 @@ BASELINE_DIR="${BASELINE_DIR:-/home/hexi/backups/codegrind/baseline}"
 # -----------------------------------------------------------------------------
 # Edit this table (and re-capture BASELINE_DIR) whenever the real numbers move
 # because the user practiced, not because a migration ran.
+# Moved at Phase 3 by real activity, not by a migration: +1 javascript problem
+# and +8 seeded python problems (37 -> 46), +1 javascript and +1 python solve
+# (63 -> 65), and the cold ('arrays','python') ladder (4 -> 5).
 EXPECTED_ROWS=(
-  "problems:37"
-  "attempts:63"
-  "skill_state:4"
+  "problems:46"
+  "attempts:65"
+  "skill_state:5"
   "sessions:8"
   "review_queue:11"
   "pattern_primers:18"
@@ -183,12 +186,12 @@ const db = new Database(process.env.DB, { readonly: true });
 let bad = 0;
 
 const CREDITS = `
-  SELECT p.topic AS key, a.problemId AS problemId, p.difficulty AS difficulty,
-         a.solved AS solved, a.hintsUsed AS hintsUsed
+  SELECT p.topic AS key, p.language AS language, a.problemId AS problemId,
+         p.difficulty AS difficulty, a.solved AS solved, a.hintsUsed AS hintsUsed
   FROM attempts a
   JOIN problems p ON p.id = a.problemId
 `;
-const ORDER = ` ORDER BY p.topic, a.problemId, p.difficulty, a.solved, a.hintsUsed`;
+const ORDER = ` ORDER BY p.topic, p.language, a.problemId, p.difficulty, a.solved, a.hintsUsed`;
 
 const has = (table, column) =>
   db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
@@ -202,15 +205,26 @@ if (!fs.existsSync(process.env.CREDITS_BASELINE)) {
   if (got === want) console.log(`  ok   tier credit rows identical to the baseline`);
   else { console.log(`  FAIL tier credit rows differ from the baseline`); bad++; }
 
-  // --- the behavioural check: the JS-filtered read must equal the old read --
+  // --- the behavioural check: the JS-filtered read must equal the JS baseline -
   // countCleanSolves is pure, so identical input rows are identical tier
-  // credit. This is getCleanSolvesByTopic("javascript") === the pre-migration
-  // getCleanSolvesByTopic(), proven without re-implementing the fold.
+  // credit. This is getCleanSolvesByTopic("javascript") === the javascript
+  // rows of the baseline, proven without re-implementing the fold.
+  //
+  // Both sides are filtered. Before a second language was banked the baseline
+  // WAS entirely javascript, so comparing the filtered read against the whole
+  // file worked by accident; with python rows in the capture that comparison
+  // starts failing for a reason that has nothing to do with javascript.
   if (has("problems", "language")) {
-    const filtered = JSON.stringify(
-      db.prepare(CREDITS + ` WHERE p.language = ?` + ORDER).all("javascript"), null, 2);
-    if (filtered === want) console.log(`  ok   javascript-filtered tier credits equal the pre-migration read`);
-    else { console.log(`  FAIL javascript-filtered tier credits differ from the pre-migration read`); bad++; }
+    const wantRows = JSON.parse(want);
+    if (wantRows.length && wantRows[0].language === undefined) {
+      console.log(`  ..   baseline predates the language column — re-capture it (bin/capture-baseline)`);
+    } else {
+      const wantJs = JSON.stringify(wantRows.filter((r) => r.language === "javascript"), null, 2);
+      const gotJs = JSON.stringify(
+        db.prepare(CREDITS + ` WHERE p.language = ?` + ORDER).all("javascript"), null, 2);
+      if (gotJs === wantJs) console.log(`  ok   javascript-filtered tier credits match the baseline`);
+      else { console.log(`  FAIL javascript-filtered tier credits differ from the baseline`); bad++; }
+    }
   }
 }
 
@@ -220,11 +234,25 @@ const migrated = LANG_TABLES.every((t) => has(t, "language"));
 if (!migrated) {
   console.log(`  ..   language columns not present yet — multi-language checks pending`);
 } else {
+  // Every row must carry a language this build KNOWS — not "javascript".
+  //
+  // Until Phase 3 those were the same assertion, because javascript was the
+  // only language that could exist and "all rows javascript" was the strongest
+  // statement available. Seeding a python bank makes that assertion false BY
+  // DESIGN, and leaving it in place would turn the first correct multi-language
+  // database into a migration failure. What still has to hold is that no row
+  // carries NULL, empty, or a language outside the registry — which is what
+  // catches a botched backfill or a stray hand-written UPDATE.
+  const KNOWN = ["javascript", "python", "java"];
+  const placeholders = KNOWN.map(() => "?").join(", ");
   for (const t of LANG_TABLES) {
-    const n = db.prepare(`SELECT COUNT(*) AS n FROM "${t}" WHERE language IS NULL OR language <> ?`)
-      .get("javascript").n;
-    if (n === 0) console.log(`  ok   ${t.padEnd(20)} all rows javascript`);
-    else { console.log(`  FAIL ${t.padEnd(20)} ${n} row(s) not javascript`); bad++; }
+    const n = db.prepare(
+      `SELECT COUNT(*) AS n FROM "${t}" WHERE language IS NULL OR language NOT IN (${placeholders})`
+    ).get(...KNOWN).n;
+    const breakdown = db.prepare(`SELECT language, COUNT(*) AS n FROM "${t}" GROUP BY language ORDER BY language`)
+      .all().map((r) => `${r.language}=${r.n}`).join(" ");
+    if (n === 0) console.log(`  ok   ${t.padEnd(20)} ${breakdown}`);
+    else { console.log(`  FAIL ${t.padEnd(20)} ${n} row(s) with an unknown language (${breakdown})`); bad++; }
   }
 
   const pk = db.prepare(`PRAGMA table_info(skill_state)`).all()

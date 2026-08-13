@@ -110,7 +110,7 @@ export async function generateAndStore(
     // left the player staring at "Failed to load next problem" with no recovery.
     let raw: GeneratedProblem;
     try {
-      raw = await generateProblem(topic, difficulty, opts);
+      raw = await generateProblem(language, topic, difficulty, opts);
     } catch (err) {
       lastError = err;
       console.warn(
