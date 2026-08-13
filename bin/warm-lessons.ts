@@ -22,6 +22,10 @@ import {
   generateLessonBody,
 } from '../src/server/services/llm.service.js';
 import { primerToLesson } from '../src/server/services/study.service.js';
+// This script WRITES the shared corpus, so every read below asks for the
+// corpus language rather than the active one — an overlay read here would
+// derive lesson 0 from a translated skeleton and store it as the original.
+import { CORPUS_LANGUAGE } from '../src/server/services/llm.language.js';
 
 // ---------------------------------------------------------------------------
 // Args
@@ -114,7 +118,7 @@ async function warmTopic(topic: Topic, args: Args): Promise<void> {
 
   // 1. Primer — lesson 0 is DERIVED from it, so it is the cheapest way to get
   //    a topic's first screenful. Reuses whatever the Library already cached.
-  let primer = getPrimer(topic);
+  let primer = getPrimer(CORPUS_LANGUAGE, topic);
   const needPrimer = !primer;
   if (plan('primer', needPrimer, args.dryRun)) {
     try {
@@ -134,7 +138,7 @@ async function warmTopic(topic: Topic, args: Args): Promise<void> {
 
   // 2. Lesson 0 — pure mapping of the primer. Free, no API call.
   const lesson0Id = `${topic}:0`;
-  if (getLesson(lesson0Id)) {
+  if (getLesson(CORPUS_LANGUAGE, lesson0Id)) {
     console.log('    lesson 0: cached, skipping');
     tally.lesson0Skipped++;
   } else if (args.dryRun) {
@@ -176,8 +180,8 @@ async function warmTopic(topic: Topic, args: Args): Promise<void> {
   for (const item of outline.slice(0, args.lessons)) {
     const id = `${topic}:${item.seq}`;
     const label = `lesson ${item.seq} "${item.title}"`;
-    if (!plan(label, !getLesson(id), args.dryRun)) {
-      if (getLesson(id)) tally.bodiesSkipped++;
+    if (!plan(label, !getLesson(CORPUS_LANGUAGE, id), args.dryRun)) {
+      if (getLesson(CORPUS_LANGUAGE, id)) tally.bodiesSkipped++;
       continue;
     }
     try {

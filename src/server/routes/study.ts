@@ -8,6 +8,7 @@ import {
   type StudyPosition,
   type StudyReadResponse,
 } from '../../shared/types.js';
+import type { Language } from '../../shared/languages.js';
 import {
   getLesson,
   markLessonRead,
@@ -64,6 +65,7 @@ function positionFor(slot: StudySlot | undefined, state: StudyQueueState): Study
  * than stalled on forever.
  */
 function serveFrom(
+  language: Language,
   queue: StudySlot[],
   start: number,
   limit: number
@@ -79,7 +81,7 @@ function serveFrom(
       if (isSlotFailed(slot)) continue; // don't stall on a dead slot
       break;
     }
-    const lesson = getLesson(slot.id);
+    const lesson = getLesson(language, slot.id);
     if (!lesson) continue; // planner/cache raced — skip rather than 500
     lessons.push(lesson);
     served.push(slot);
@@ -88,17 +90,24 @@ function serveFrom(
   return { lessons, served, nextIndex: i };
 }
 
-/** Shared body for /feed and /jump/:topic once the start index is decided. */
+/**
+ * Shared body for /feed and /jump/:topic once the start index is decided.
+ *
+ * `language` reaches two places and no others: the snippet each served lesson
+ * carries, and the translation job warmAhead schedules for the topics right
+ * behind it. The prose, the ordering and the read receipts are shared corpus.
+ */
 function buildFeed(
+  language: Language,
   state: StudyQueueState,
   queue: StudySlot[],
   start: number,
   limit: number
 ): StudyFeedResponse {
-  const { lessons, served, nextIndex } = serveFrom(queue, start, limit);
+  const { lessons, served, nextIndex } = serveFrom(language, queue, start, limit);
 
   // Warm the holes ahead BEFORE reading `warming`, but never await any of it.
-  warmAhead(queue.slice(Math.max(start, 0)));
+  warmAhead(language, queue.slice(Math.max(start, 0)));
 
   const next = queue[nextIndex];
   const warming = !!next && !next.cached && isSlotWarming(next);
@@ -122,7 +131,8 @@ studyRoutes.get('/study/feed', (c) => {
     const after = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'));
 
-    const state = buildStudyState(getActiveLanguage());
+    const language = getActiveLanguage();
+    const state = buildStudyState(language);
     const queue = studyQueue(state);
 
     let start = 0;
@@ -131,7 +141,7 @@ studyRoutes.get('/study/feed', (c) => {
       if (idx >= 0) start = idx + 1;
     }
 
-    return c.json(buildFeed(state, queue, start, limit));
+    return c.json(buildFeed(language, state, queue, start, limit));
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     console.error('[study]', message);
@@ -146,7 +156,8 @@ studyRoutes.get('/study/jump/:topic', (c) => {
     return c.json({ error: `topic must be one of: ${TOPICS.join(', ')}` }, 400);
   }
   try {
-    const state = buildStudyState(getActiveLanguage());
+    const language = getActiveLanguage();
+    const state = buildStudyState(language);
     let queue = studyQueue(state);
 
     // Only the topic's own TRACK counts as "somewhere to jump to" — a
@@ -155,7 +166,7 @@ studyRoutes.get('/study/jump/:topic', (c) => {
     const idx = queue.findIndex((s) => s.topic === topic && s.source === 'track');
     if (idx >= 0) {
       // Unread material left in this topic — start there.
-      return c.json(buildFeed(state, queue, idx, DEFAULT_LIMIT));
+      return c.json(buildFeed(language, state, queue, idx, DEFAULT_LIMIT));
     }
 
     // Fully read: re-read the topic from the top, then fall back into the
@@ -174,7 +185,7 @@ studyRoutes.get('/study/jump/:topic', (c) => {
     const seen = new Set(reread.map((s) => s.id));
     queue = [...reread, ...queue.filter((s) => !seen.has(s.id))];
 
-    return c.json(buildFeed(state, queue, 0, DEFAULT_LIMIT));
+    return c.json(buildFeed(language, state, queue, 0, DEFAULT_LIMIT));
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     console.error('[study]', message);

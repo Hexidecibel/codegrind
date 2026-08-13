@@ -9,22 +9,17 @@ import {
   AlertTriangle,
   RotateCcw,
 } from 'lucide-react';
-import type {
-  Problem,
-  SessionPlan,
-  SchedulerWhy,
-  SubmitResponse,
-  Topic,
-  Primer,
-} from '@/shared/types';
+import type { SubmitResponse, Topic, Primer } from '@/shared/types';
 import {
   startSession,
   nextInSession,
   getSession,
   getProgress,
   getPrimer,
+  getSettings,
 } from '@/client/lib/api';
 import { useLocalStorage } from '@/client/hooks/useLocalStorage';
+import { staleForLanguage, type GrindSnapshot } from '@/client/lib/grind-snapshot';
 import { useControlSize, useIsDesktop } from '@/client/hooks/useMediaQuery';
 import { Button } from '@/client/components/ui/button';
 import { Badge } from '@/client/components/ui/badge';
@@ -32,18 +27,6 @@ import { SolveSurface } from '@/client/components/SolveSurface';
 import { CoachBanner } from '@/client/components/CoachBanner';
 import { PatternPrimer } from '@/client/components/PatternPrimer';
 import { humanize } from '@/client/lib/format';
-
-/** Everything needed to resume a grind session across a refresh. */
-interface GrindSnapshot {
-  sessionId: string;
-  plan: SessionPlan;
-  problem: Problem;
-  why: SchedulerWhy;
-  upNext?: string;
-  solved: number;
-  streak: number;
-  topics: Topic[];
-}
 
 function uniqueTopics(topics: Topic[], next: Topic): Topic[] {
   return topics.includes(next) ? topics : [...topics, next];
@@ -107,7 +90,22 @@ export function GrindPage() {
     };
   }, [whyKind, whyTopic]);
 
-  // On mount, validate a persisted session still exists server-side.
+  // On mount, validate the persisted session two ways before resuming it.
+  //
+  // 1. It still exists server-side (the original check).
+  // 2. Its problem is in the language the app is CURRENTLY set to.
+  //
+  // The second one is not cosmetic. The snapshot holds a whole `Problem`, and
+  // the language picker lives on another page — so switching to Python and
+  // coming back here would otherwise put a JavaScript problem on screen inside
+  // a session that schedules, runs and grades everything after it as Python.
+  // The problem's own language is the only honest answer to "what is this",
+  // because it is baked into the reference solution every `expected` came from;
+  // that is why `Problem.language` crosses the API boundary at all.
+  //
+  // Dropping the snapshot is the right repair rather than reloading a fresh
+  // problem into it: the plan, the solved/streak counters and the topic list
+  // all describe the old language's sitting too.
   useEffect(() => {
     if (validated.current) return;
     validated.current = true;
@@ -115,8 +113,16 @@ export function GrindPage() {
     let cancelled = false;
     (async () => {
       try {
+        // A settings fetch that FAILS must not be read as a mismatch — an
+        // unreachable server is not a reason to throw away a live session, so
+        // the check is skipped rather than failed.
+        const settings = await getSettings().catch(() => null);
+        if (staleForLanguage(snapshot, settings?.language ?? null)) {
+          if (!cancelled) setSnapshot(null);
+          return;
+        }
         await getSession(snapshot.sessionId);
-        // Session lives — keep the persisted problem/plan as-is.
+        // Session lives and matches — keep the persisted problem/plan as-is.
       } catch {
         // 404 (or gone) — drop it and fall back to the start hero.
         if (!cancelled) setSnapshot(null);

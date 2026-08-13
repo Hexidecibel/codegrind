@@ -1306,3 +1306,187 @@ ${problem.referenceSolution}
     title: `Walkthrough: ${problem.title}`,
   });
 }
+
+// ===========================================================================
+// 11. translateSnippets — the code half of the shared study corpus
+// ===========================================================================
+// The corpus is written ONCE, in CORPUS_LANGUAGE, because its prose is
+// language-free by construction. That leaves exactly one language-bound thing
+// in it: the snippet. This is the call that forks it.
+//
+// IT IS BATCHED, AND THE BATCHING IS THE WHOLE ARGUMENT. Forking the corpus by
+// re-generating it per language costs 90-180 generation calls each. Translating
+// it costs ONE call per topic — roughly nine snippets (a primer template plus
+// the topic's lesson bodies) in a single request — so the whole 18-topic corpus
+// is ~18 calls. A per-snippet loop would spend an order of magnitude more for a
+// strictly worse result, because a batch also lets the model keep one topic's
+// snippets consistent with each other.
+//
+// It is also LAZY: study.service warms only the topics the reader is about to
+// reach, so a language nobody reads costs nothing at all.
+
+/** One snippet to translate, addressed by its `code_translations.sourceId`. */
+export interface TranslatableSnippet {
+  /** `lesson:<lessons.id>` or `primer:<pattern>`. Round-trips unchanged. */
+  id: string;
+  code: string;
+}
+
+const EMIT_TRANSLATIONS_TOOL: Anthropic.Tool = {
+  name: 'emit_translations',
+  description: 'Emit the translated form of every snippet, keyed by its original id.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      translations: {
+        type: 'array',
+        description: 'One entry per snippet given, in the same order, with the same ids.',
+        items: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              description: 'The id the snippet arrived with, byte for byte.',
+            },
+            code: {
+              type: 'string',
+              description: 'The translated snippet. Code only — no fences, no prose.',
+            },
+          },
+          required: ['id', 'code'],
+        },
+      },
+    },
+    required: ['translations'],
+  },
+};
+
+/**
+ * The system prompt for one (source, target) pair, built at most once.
+ *
+ * Everywhere else in this file the cached system prompts are precomputed at
+ * module load, because there is then no per-call scope a dynamic value could be
+ * interpolated from. A translation prompt is a function of two languages rather
+ * than one, so it is memoized on the pair instead: same property (the text can
+ * only ever depend on the two profiles, and each distinct text is built once),
+ * without a Record<Language, Record<Language, string>> nobody would read.
+ */
+const translateSystems = new Map<string, string>();
+
+function translateSystem(from: LanguageProfile, to: LanguageProfile): string {
+  const key = `${from.language}>${to.language}`;
+  const cached = translateSystems.get(key);
+  if (cached !== undefined) return cached;
+
+  const text = `You are translating CODE SNIPPETS in a coding-interview study corpus from ${from.displayName} to ${to.displayName}.
+
+Each snippet illustrates ONE teaching point: a worked fragment inside a written lesson, or the reusable skeleton on a pattern primer card. The prose around it is language-free and is NOT being rewritten, so your translation still has to be the thing that prose is describing.
+
+Rules:
+- Translate EVERY snippet you are given, and return each one under the id it arrived with, byte for byte. Never merge, split, drop, reorder or invent an id.
+- Translate the IDEA, not the syntax. Write what an idiomatic ${to.displayName} author would write to make the same point; do not transliterate a ${from.displayName} construct that has a natural ${to.displayName} equivalent.
+- Keep the same shape and size: the same steps in the same order, a comparable number of lines. These are one-screen teaching snippets, not programs.
+- Keep the comments, translated. A comment naming a ${from.displayName} construct must name the ${to.displayName} one instead.
+- Keep identifier names, because the surrounding prose refers to them by name. Re-case them only where ${to.displayName} convention genuinely requires it.
+- A snippet may be a FRAGMENT rather than a runnable unit. Leave it a fragment. Never add imports it does not need, an entry point, a test harness, output statements, or explanatory prose around the code.
+- ${to.snippetStyle}
+- Emit code only: no markdown, no fences, no commentary.
+
+Call emit_translations exactly once, with an entry for every id.`;
+
+  translateSystems.set(key, text);
+  return text;
+}
+
+/**
+ * Translate a batch of corpus snippets in one forced-tool-use call.
+ *
+ * Returns a map of sourceId -> translated code containing only ids that were
+ * ASKED for and came back with real content. A missing id is not an error and
+ * never throws: the read path falls back to the stored corpus-language snippet,
+ * so a partial translation degrades to a partly-translated topic rather than to
+ * an empty code block.
+ */
+export async function translateSnippets(
+  snippets: TranslatableSnippet[],
+  from: Language,
+  to: Language
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (from === to) return out;
+
+  const wanted = snippets.filter((s) => s.id && s.code.trim());
+  if (!wanted.length) return out;
+
+  const fromProfile = profileFor(from);
+  const toProfile = profileFor(to);
+  const anthropic = getAnthropic();
+
+  const body = wanted
+    .map(
+      (s) => `id: ${s.id}
+\`\`\`${fromProfile.promptFence}
+${s.code}
+\`\`\``
+    )
+    .join('\n\n');
+
+  const response = await anthropic.messages.create({
+    model: ANTHROPIC_MODEL,
+    // A topic's whole snippet set, in and out, plus headroom. Each snippet is a
+    // one-screen teaching fragment, so ~9 of them is a few hundred lines; a
+    // truncated batch loses the tail of the topic, which is why this is not
+    // sized to the average.
+    max_tokens: 8000,
+    // Disabled: a mechanical, well-specified rewrite emitted as a forced tool
+    // call. There is no plan to make.
+    thinking: NO_THINKING,
+    system: [
+      { type: 'text', text: translateSystem(fromProfile, toProfile), cache_control: { type: 'ephemeral' } },
+    ],
+    tools: [EMIT_TRANSLATIONS_TOOL],
+    tool_choice: { type: 'tool', name: 'emit_translations' },
+    messages: [
+      {
+        role: 'user',
+        content: `Translate these ${wanted.length} snippet(s) to ${toProfile.displayName}.
+
+${body}`,
+      },
+    ],
+  });
+
+  const input = extractToolInput(response, 'emit_translations');
+  const raw = Array.isArray(input.translations) ? input.translations : [];
+  const asked = new Set(wanted.map((s) => s.id));
+
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { id, code } = entry as { id?: unknown; code?: unknown };
+    // An id we never sent is a hallucinated row; storing it would poison the
+    // overlay for a lesson that has no such translation.
+    if (typeof id !== 'string' || !asked.has(id)) continue;
+    if (typeof code !== 'string') continue;
+    const trimmed = stripCodeFence(code);
+    if (!trimmed) continue;
+    out.set(id, trimmed);
+  }
+
+  return out;
+}
+
+/**
+ * Undo the one instruction models ignore most reliably: "no fences".
+ *
+ * A fenced snippet stored verbatim renders as literal backticks inside the
+ * lesson's <pre>, which looks like a corrupted corpus rather than like a model
+ * that over-formatted.
+ */
+function stripCodeFence(raw: string): string {
+  const text = raw.trim();
+  if (!text.startsWith('```')) return text;
+  const lines = text.split('\n');
+  lines.shift(); // opening fence + optional info string
+  if (lines.length && lines[lines.length - 1].trim() === '```') lines.pop();
+  return lines.join('\n').trim();
+}

@@ -53,15 +53,20 @@ BASELINE_DIR="${BASELINE_DIR:-/home/hexi/backups/codegrind/baseline}"
 # Moved at Phase 3 by real activity, not by a migration: +1 javascript problem
 # and +8 seeded python problems (37 -> 46), +1 javascript and +1 python solve
 # (63 -> 65), and the cold ('arrays','python') ladder (4 -> 5).
+#
+# Moved again at Phase 4's live verification, likewise by real activity: two
+# bank misses generated a problem each (46 -> 48), and reading the Study feed in
+# two languages had warmAhead write 15 lesson bodies (114 -> 129). `attempts` did
+# NOT move, which is why /api/reflect stayed byte-identical across the phase.
 EXPECTED_ROWS=(
-  "problems:46"
+  "problems:48"
   "attempts:65"
   "skill_state:5"
   "sessions:8"
   "review_queue:11"
   "pattern_primers:18"
   "lesson_tracks:18"
-  "lessons:114"
+  "lessons:129"
   "lesson_reads:19"
   "revealed_solutions:0"
 )
@@ -288,12 +293,58 @@ if (!migrated) {
     console.log(`  ..   problems.canonicalized not present yet -- v3 pending`);
   }
 
-  const wantCt =
-    db.prepare(`SELECT COUNT(*) AS n FROM lessons WHERE json_extract(data, ?) <> ?`).get("$.code", "").n +
-    db.prepare(`SELECT COUNT(*) AS n FROM pattern_primers WHERE json_extract(data, ?) <> ?`).get("$.template", "").n;
-  const gotCt = db.prepare(`SELECT COUNT(*) AS n FROM code_translations`).get().n;
-  if (gotCt === wantCt) console.log(`  ok   code_translations       ${gotCt} (lessons-with-code + primers)`);
-  else { console.log(`  FAIL code_translations expected ${wantCt}, got ${gotCt}`); bad++; }
+  // What `code_translations` must say about the CORPUS language.
+  //
+  // This check used to be a count: exactly one row per lesson-with-a-snippet
+  // plus one per primer, 130 of them, which is what the Phase 1 backfill wrote.
+  // Two things since made that number the wrong assertion, both of them normal
+  // operation rather than damage:
+  //
+  //   - Phase 4 translates topics into other languages, so the TABLE grows.
+  //     (Fixed by scoping the count to javascript.)
+  //   - Every lesson the Study warm writes after the migration is a new
+  //     lesson-with-a-snippet and no javascript row, because the overlay
+  //     deliberately never reads one: `getLesson` short-circuits on the corpus
+  //     language and serves the stored bytes. So the backfilled rows are a
+  //     historical snapshot that legitimately stops being complete.
+  //
+  // What IS permanently true, and is the failure worth catching, is that no
+  // javascript row may DISAGREE with the snippet it was copied from — that is
+  // what a translation written into the corpus-language slot would look like,
+  // and it is the one way this table could corrupt the shared corpus.
+  const jsRows = db.prepare(`SELECT COUNT(*) AS n FROM code_translations WHERE language = ?`).get("javascript").n;
+  const drifted = db.prepare(`
+    SELECT COUNT(*) AS n FROM code_translations t
+    JOIN lessons l ON ? || l.id = t.sourceId
+    WHERE t.language = ? AND t.code <> json_extract(l.data, ?)
+  `).get("lesson:", "javascript", "$.code").n
+    + db.prepare(`
+    SELECT COUNT(*) AS n FROM code_translations t
+    JOIN pattern_primers p ON ? || p.pattern = t.sourceId
+    WHERE t.language = ? AND t.code <> json_extract(p.data, ?)
+  `).get("primer:", "javascript", "$.template").n;
+  if (drifted === 0) console.log(`  ok   code_translations       ${jsRows} javascript rows, none drifted from the corpus`);
+  else { console.log(`  FAIL ${drifted} javascript code_translations row(s) disagree with the stored snippet`); bad++; }
+
+  // Translations of that corpus, per language. Informational — a topic is
+  // translated lazily, so any number here is legitimate — but a row addressing
+  // a sourceId that no longer exists is not: it is dead weight the overlay will
+  // never read, and the sign that a lesson id changed under it.
+  const perLang = db.prepare(`
+    SELECT language, COUNT(*) AS n FROM code_translations WHERE language <> ? GROUP BY language ORDER BY language
+  `).all("javascript");
+  console.log(`  ok   translations           ${perLang.length ? perLang.map((r) => `${r.language}=${r.n}`).join(" ") : "(none yet — lazily warmed)"}`);
+
+  // The prefixes are BOUND, never inlined: this whole node program is a
+  // single-quoted argument to `node -e`, so a quoted SQL literal would end the
+  // shell string. Same reason every other query in this script uses ?.
+  const orphans = db.prepare(`
+    SELECT COUNT(*) AS n FROM code_translations t
+    WHERE NOT EXISTS (SELECT 1 FROM lessons l WHERE ? || l.id = t.sourceId)
+      AND NOT EXISTS (SELECT 1 FROM pattern_primers p WHERE ? || p.pattern = t.sourceId)
+  `).get("lesson:", "primer:").n;
+  if (orphans === 0) console.log(`  ok   translations           every sourceId still resolves`);
+  else { console.log(`  FAIL code_translations has ${orphans} row(s) whose sourceId no longer exists`); bad++; }
 }
 
 db.close();

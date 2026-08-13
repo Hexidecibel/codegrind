@@ -405,7 +405,19 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
       // it gets a second, content-level check: every carried-over row must have
       // landed on the default language. A copy that wrote the columns in the
       // wrong order fails here even though the count matched.
-      if (tableExists(db, 'skill_state') && columnExists(db, 'skill_state', 'language')) {
+      //
+      // GATED ON `needsSkillPk`, and that gate is load-bearing rather than an
+      // optimisation. The invariant being asserted is "the COPY put every
+      // pre-existing row on the default language" — which is a statement about
+      // rows this transaction just moved, not about the table. Run
+      // unconditionally, it re-reads as "no skill_state row may ever be in
+      // another language", which was true only for as long as the app was
+      // JavaScript-only: the first Python submit writes ('arrays','python'),
+      // and from then on EVERY subsequent startup aborts its own migration and
+      // crash-loops the service against a database that is in fact perfect.
+      // (Latent from Phase 1a; reachable from the first Python solve in
+      // Phase 3; found in Phase 4 by importing db.ts from a CLI script.)
+      if (needsSkillPk && tableExists(db, 'skill_state') && columnExists(db, 'skill_state', 'language')) {
         const stray = (
           db
             .prepare(`SELECT COUNT(*) AS n FROM skill_state WHERE language <> ?`)

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Translate the shared study corpus's SNIPPETS into another language.
+#
+# The corpus is written ONCE (its prose is language-free by construction), so
+# only the code inside a lesson or primer forks. This is the eager half of that
+# fork; the Study feed does the same work lazily one topic ahead of the reader,
+# through the same service call.
+#
+# ONE batched API call per topic — the primer skeleton plus that topic's lesson
+# snippets in a single request. That is ~18 calls for the whole corpus, against
+# the 90-180 generation calls re-authoring it per language would cost.
+#
+# Idempotent: an already-translated topic is skipped and costs nothing.
+#
+#   bin/translate-corpus --dry-run                  # the plan, spend nothing
+#   bin/translate-corpus -L python --limit 2        # prove the path cheaply
+#   bin/translate-corpus -L python -t arrays        # one topic
+#   bin/translate-corpus -L python                  # the whole corpus (~18 calls)
+set -euo pipefail
+
+REPO="/home/hexi/local/src/codegrind"
+cd "$REPO"
+
+# Same Node pin as bin/build / bin/deploy — better-sqlite3 is compiled against
+# the ABI of the Node the systemd unit runs (v22.22.0).
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+# The service gets its env from systemd's EnvironmentFile; a CLI run has to load
+# it itself (ANTHROPIC_API_KEY, DATA_DIR). bin/inject materializes this file.
+if [[ -f "$REPO/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO/.env"
+  set +a
+fi
+
+exec npx tsx bin/translate-corpus.ts "$@"
