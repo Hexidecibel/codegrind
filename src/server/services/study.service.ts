@@ -21,6 +21,9 @@ import {
   getPrimer,
   getPrimerPatterns,
   getLesson,
+  getCorpusSnippets,
+  getTranslatedSourceIds,
+  putCodeTranslations,
   insertLesson,
   insertPrimer,
   insertTrackOutline,
@@ -35,7 +38,9 @@ import {
   generateMistakeLesson,
   generateWalkthroughLesson,
   generatePrimer,
+  translateSnippets,
 } from './llm.service.js';
+import { CORPUS_LANGUAGE } from './llm.language.js';
 import {
   primerToLesson,
   PREFETCH_DEPTH,
@@ -76,8 +81,13 @@ function materializeDerivedLessons(): void {
   for (const pattern of getPrimerPatterns()) {
     if (!(TOPICS as readonly string[]).includes(pattern)) continue;
     const id = `${pattern}:0`;
-    if (getLesson(id)) continue;
-    const primer = getPrimer(pattern);
+    // CORPUS_LANGUAGE, not the active language, on BOTH reads: this function
+    // copies a primer's skeleton into a lessons row, and the lessons table is
+    // the shared corpus. Reading the overlay here would write a translated
+    // snippet into the corpus, where every other language would then inherit
+    // it — a one-way corruption with no error anywhere.
+    if (getLesson(CORPUS_LANGUAGE, id)) continue;
+    const primer = getPrimer(CORPUS_LANGUAGE, pattern);
     if (!primer) continue;
     insertLesson(primerToLesson({ ...primer, pattern }));
   }
@@ -192,7 +202,9 @@ function once(id: string, work: () => Promise<void>): Promise<void> {
 
 /** Ensure a topic has a cached primer (needed to derive seq 0 and to ground bodies). */
 export function ensurePrimer(topic: Topic): Promise<void> {
-  if (getPrimer(topic)) return Promise.resolve();
+  // CORPUS_LANGUAGE: this is a write path (the primer it reads becomes lesson
+  // 0's snippet) and generatePrimer authors in the corpus language regardless.
+  if (getPrimer(CORPUS_LANGUAGE, topic)) return Promise.resolve();
   return once(`primer:${topic}`, async () => {
     const primer = await generatePrimer(topic);
     insertPrimer(primer);
@@ -211,7 +223,10 @@ export function ensureOutline(topic: Topic): Promise<void> {
 
 /** Ensure one slot's lesson body exists. Cheap no-op when it is already cached. */
 export function ensureLesson(slot: StudySlot): Promise<void> {
-  if (slot.cached || getLesson(slot.id)) return Promise.resolve();
+  // CORPUS_LANGUAGE everywhere in this function: it decides whether a lesson
+  // needs WRITING, and writes the shared corpus row when it does. Existence is
+  // language-free; only the snippet an already-written lesson serves is not.
+  if (slot.cached || getLesson(CORPUS_LANGUAGE, slot.id)) return Promise.resolve();
 
   // seq 0 is derived, never generated — it just needs its topic's primer.
   if (slot.source === 'track' && slot.seq === 0) return ensurePrimer(slot.topic);
@@ -239,7 +254,7 @@ export function ensureLesson(slot: StudySlot): Promise<void> {
     const outline = getTrackOutline(slot.topic);
     const item = outline?.find((o) => o.seq === slot.seq);
     if (!item) throw new Error(`no outline item for ${slot.id}`);
-    let primer = getPrimer(slot.topic);
+    let primer = getPrimer(CORPUS_LANGUAGE, slot.topic);
     if (!primer) {
       primer = await generatePrimer(slot.topic);
       insertPrimer(primer);
@@ -250,11 +265,63 @@ export function ensureLesson(slot: StudySlot): Promise<void> {
   });
 }
 
+/** The in-flight/failure key for one topic's translation batch. */
+function translationKey(language: Language, topic: Topic): string {
+  return `translate:${language}:${topic}`;
+}
+
+/**
+ * Ensure every snippet this topic owns exists in `language`.
+ *
+ * ONE batched call per topic — the primer skeleton plus each of the topic's
+ * lesson snippets, in a single request. That is the economics of the whole
+ * shared-corpus decision: ~18 calls translate the entire corpus, against the
+ * 90-180 generation calls forking it would cost. A per-snippet loop would spend
+ * an order of magnitude more AND lose the internal consistency a batch buys.
+ *
+ * It rides the same `once()` machinery as lesson generation, so it inherits the
+ * in-flight dedupe and the failure cooldown for free; the cooldown check is
+ * explicit here because nothing upstream knows a translation key exists.
+ */
+export function ensureTranslations(language: Language, topic: Topic): Promise<void> {
+  // The corpus is already written in this language — there is nothing to fork.
+  if (language === CORPUS_LANGUAGE) return Promise.resolve();
+
+  const snippets = getCorpusSnippets(topic);
+  if (!snippets.length) return Promise.resolve();
+
+  const have = getTranslatedSourceIds(language);
+  const missing = snippets.filter((s) => !have.has(s.sourceId));
+  if (!missing.length) return Promise.resolve();
+
+  const key = translationKey(language, topic);
+  if (isRecentlyFailed(key)) return Promise.resolve();
+
+  return once(key, async () => {
+    // The WHOLE topic goes in the request even though only `missing` is stored,
+    // so the model sees the snippets it is being asked to stay consistent with.
+    const translated = await translateSnippets(
+      snippets.map((s) => ({ id: s.sourceId, code: s.code })),
+      CORPUS_LANGUAGE,
+      language
+    );
+    const rows = missing
+      .filter((s) => translated.has(s.sourceId))
+      .map((s) => ({ sourceId: s.sourceId, code: translated.get(s.sourceId)! }));
+    if (!rows.length) throw new Error(`no snippet of ${topic} came back in ${language}`);
+    putCodeTranslations(language, rows);
+  });
+}
+
 /**
  * Fire-and-forget: warm the next few holes in the queue plus the outlines the
  * reader is about to need. NEVER awaited by a request handler.
+ *
+ * `language` is what the reader is practicing in, and it steers ONLY the
+ * translation job — outlines and lesson bodies are the shared corpus and are
+ * warmed identically whatever language is active.
  */
-export function warmAhead(queue: StudySlot[], depth = PREFETCH_DEPTH): void {
+export function warmAhead(language: Language, queue: StudySlot[], depth = PREFETCH_DEPTH): void {
   // Outlines for the topics the reader is in / heading into — without one, a
   // topic plans only its seq-0 slot and the feed looks shorter than it is.
   const topics: Topic[] = [];
@@ -264,6 +331,16 @@ export function warmAhead(queue: StudySlot[], depth = PREFETCH_DEPTH): void {
     if (topics.length >= 2) break;
   }
   for (const t of topics) void ensureOutline(t);
+
+  // Snippets for the topics about to be READ, which is not the same list: a
+  // reread or a personalized slot has no outline to warm but its code still has
+  // to be in the right language. Bounded by `depth` for the same reason the
+  // body warm is — this is the reader's next few screens, not the corpus.
+  const ahead: Topic[] = [];
+  for (const slot of queue.slice(0, depth)) {
+    if (!ahead.includes(slot.topic)) ahead.push(slot.topic);
+  }
+  for (const t of ahead) void ensureTranslations(language, t);
 
   let warmed = 0;
   for (const slot of queue) {

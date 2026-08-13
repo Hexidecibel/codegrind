@@ -8,6 +8,7 @@ import {
   getReviewDueCount,
   getAttemptsByProblem,
   getDailyActivity,
+  getGlobalDailyActivity,
   getTaggedAttempts,
   getSolvedProblemCount,
   getHintFreeRate,
@@ -44,9 +45,17 @@ reflectRoutes.get('/reflect', (c) => {
     const now = Date.now();
 
     // Reflect shows ONE language at a time — the active one. Everything below is
-    // scoped to it; Phase 4 splits out the two genuinely global metrics
-    // (lessonsRead, because the corpus is shared, and streak, because a habit
-    // is a habit whichever language you practiced in).
+    // scoped to it EXCEPT the two genuinely global metrics:
+    //
+    //   lessonsRead  the lesson corpus is shared, so a lesson you read is read.
+    //                Already global: getLessonReadCounts joins lesson_reads to
+    //                lessons, and neither table carries a language.
+    //   streak       a habit metric. Python yesterday and JavaScript today is
+    //                two consecutive days of practice, not two broken streaks.
+    //
+    // Deliberately NOT side by side: Reflect shows the active language, because
+    // the DAG tree is already tight on a phone and doubling it would make the
+    // one view that answers "what do I do next" answer it twice.
     const language = getActiveLanguage();
 
     // --- per-topic skill, one row per TOPIC (untouched topics get zeros) ------
@@ -105,7 +114,13 @@ reflectRoutes.get('/reflect', (c) => {
     });
 
     // --- the rest ------------------------------------------------------------
+    // The heatmap stays per-language: it sits under a per-language dashboard and
+    // reads as "how much have I practiced THIS". The streak does not, so it gets
+    // its own series rather than being derived from the one on screen — which is
+    // also why computeDayStreak keeps taking an activity array and needs no
+    // change at all.
     const activity = buildActivity(getDailyActivity(language, ACTIVITY_DAYS), ACTIVITY_DAYS, now);
+    const habit = buildActivity(getGlobalDailyActivity(ACTIVITY_DAYS), ACTIVITY_DAYS, now);
     let lessonsRead = 0;
     for (const n of reads.values()) lessonsRead += n;
 
@@ -115,7 +130,7 @@ reflectRoutes.get('/reflect', (c) => {
       tiles: {
         solved: getSolvedProblemCount(language),
         topicsReached: tree.filter((n) => n.state !== 'locked').length,
-        streak: computeDayStreak(activity),
+        streak: computeDayStreak(habit),
         hintFreeRate: getHintFreeRate(language),
         tiersCleared,
         lessonsRead,

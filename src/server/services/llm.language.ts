@@ -81,6 +81,17 @@ export interface LanguageProfile {
   snippetRule: string;
   /** How a primer's reusable pattern skeleton is described. */
   templateRule: string;
+  /**
+   * What a corpus snippet must LOOK like in this language, as one sentence.
+   *
+   * `snippetRule` and `templateRule` are authoring instructions — they open
+   * with "OPTIONAL" and "omit it entirely when prose alone is clearer", which
+   * is exactly wrong for a translator that has been handed a snippet and must
+   * return it. This field is the style half of those sentences with the
+   * authoring half removed, so the translation prompt can state the house style
+   * without also telling the model it may decline to translate.
+   */
+  snippetStyle: string;
 }
 
 // -----------------------------------------------------------------------------
@@ -115,6 +126,8 @@ const JAVASCRIPT: LanguageProfile = {
     "code: OPTIONAL plain JavaScript illustrating this lesson's specific point. Omit it entirely when prose alone is clearer. No TypeScript types, no imports, no console noise.",
   templateRule:
     '- template: a reusable, GENERIC JavaScript code skeleton for the pattern — the canonical shape (loops, pointers, structures) with placeholder comments, NOT a solution to a specific problem. Plain JS, no TypeScript types.',
+  snippetStyle:
+    'Plain JavaScript with no TypeScript types, no imports or exports, and no console noise. Two-space indentation.',
 };
 
 const PYTHON: LanguageProfile = {
@@ -150,6 +163,8 @@ const PYTHON: LanguageProfile = {
     "code: OPTIONAL plain Python 3 illustrating this lesson's specific point. Omit it entirely when prose alone is clearer. No imports beyond the standard library, no print noise, 4-space indentation.",
   templateRule:
     '- template: a reusable, GENERIC Python 3 code skeleton for the pattern — the canonical shape (loops, pointers, structures) with placeholder comments, NOT a solution to a specific problem. Plain Python, 4-space indentation.',
+  snippetStyle:
+    'Plain Python 3 with 4-space indentation and never a tab, no imports beyond the standard library, and no print noise.',
 };
 
 // Phase 5 owns this one. It is authored rather than left empty because
@@ -188,6 +203,8 @@ const JAVA: LanguageProfile = {
     "code: OPTIONAL plain Java illustrating this lesson's specific point. Omit it entirely when prose alone is clearer. No package statement, no imports beyond java.util, no println noise.",
   templateRule:
     '- template: a reusable, GENERIC Java code skeleton for the pattern — the canonical shape (loops, pointers, structures) with placeholder comments, NOT a solution to a specific problem. No package statement.',
+  snippetStyle:
+    'Plain Java with no package statement, no imports beyond java.util, and no println noise. Four-space indentation.',
 };
 
 export const LANGUAGE_PROFILES: Record<Language, LanguageProfile> = {

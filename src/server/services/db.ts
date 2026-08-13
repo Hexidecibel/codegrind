@@ -14,6 +14,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { TOPICS } from '../../shared/types.js';
 import { DEFAULT_LANGUAGE, isLanguage, type Language } from '../../shared/languages.js';
+// The language the SHARED study corpus is authored in. Imported rather than
+// re-declared so there is exactly one answer to "which stored snippet is the
+// original"; llm.language.ts is a leaf of pure constants, so this pulls in no
+// SDK and no API key.
+import { CORPUS_LANGUAGE } from './llm.language.js';
 import type {
   ProblemRecord,
   Problem,
@@ -1079,15 +1084,109 @@ export function isReviewQueued(problemId: string): boolean {
 }
 
 // -----------------------------------------------------------------------------
+// code_translations — the one language-bound thing in a shared study corpus
+// -----------------------------------------------------------------------------
+// Lesson and primer PROSE is language-free by construction, so the corpus is
+// written once and only its snippets fork. `sourceId` addresses both corpora
+// with the `lesson:<lessons.id>` / `primer:<pattern>` prefix convention the
+// lessons table already uses for `mistake:` / `walkthrough:`.
+//
+// Reads here are OVERLAYS, not partitions: a miss falls back to the stored
+// corpus-language snippet rather than failing. That fallback is the whole
+// reason a half-translated topic is merely half-translated instead of a feed
+// full of empty code blocks.
+const getTranslationStmt = db.prepare(`
+  SELECT code FROM code_translations WHERE sourceId = ? AND language = ?
+`);
+
+const putTranslationStmt = db.prepare(`
+  INSERT INTO code_translations (sourceId, language, code, createdAt)
+  VALUES (@sourceId, @language, @code, @createdAt)
+  ON CONFLICT(sourceId, language) DO UPDATE SET code = @code, createdAt = @createdAt
+`);
+
+const translatedIdsStmt = db.prepare(`
+  SELECT sourceId FROM code_translations WHERE language = ?
+`);
+
+/** The `code_translations.sourceId` for a lesson row. */
+export function lessonSourceId(lessonId: string): string {
+  return `lesson:${lessonId}`;
+}
+
+/** The `code_translations.sourceId` for a primer card. */
+export function primerSourceId(pattern: string): string {
+  return `primer:${pattern}`;
+}
+
+/** One translated snippet, or null when this language has none for that source. */
+export function getCodeTranslation(language: Language, sourceId: string): string | null {
+  const row = getTranslationStmt.get(sourceId, language) as { code: string } | undefined;
+  return row ? row.code : null;
+}
+
+/** Every sourceId already translated into `language` — the "what is missing" set. */
+export function getTranslatedSourceIds(language: Language): Set<string> {
+  const rows = translatedIdsStmt.all(language) as Array<{ sourceId: string }>;
+  return new Set(rows.map((r) => r.sourceId));
+}
+
+/**
+ * Store a batch of translations in ONE transaction.
+ *
+ * A batch is one topic's worth of snippets from one API call, and it is written
+ * all-or-nothing so a crash mid-write cannot leave a topic where the primer
+ * reads Python and half its lessons read JavaScript.
+ */
+export const putCodeTranslations = db.transaction(
+  (language: Language, rows: Array<{ sourceId: string; code: string }>): number => {
+    const createdAt = new Date().toISOString();
+    let written = 0;
+    for (const row of rows) {
+      if (!row.sourceId || !row.code.trim()) continue;
+      putTranslationStmt.run({ sourceId: row.sourceId, language, code: row.code, createdAt });
+      written++;
+    }
+    return written;
+  }
+);
+
+/**
+ * Overlay a corpus snippet with this language's translation.
+ *
+ * CORPUS_LANGUAGE short-circuits: the stored snippet IS the corpus-language
+ * snippet, so JavaScript reads exactly the bytes it read before this function
+ * existed — no query, no chance of a backfilled row disagreeing with the row it
+ * was copied from. Every other language falls back to the same stored snippet
+ * when it has no translation yet.
+ */
+function overlayCode(language: Language, sourceId: string, stored: string | undefined): string | undefined {
+  if (language === CORPUS_LANGUAGE) return stored;
+  if (!stored) return stored; // nothing to translate; nothing to overlay
+  return getCodeTranslation(language, sourceId) ?? stored;
+}
+
+// -----------------------------------------------------------------------------
 // Pattern primers — cached per-pattern cheat-sheet cards.
 // -----------------------------------------------------------------------------
 const getPrimerStmt = db.prepare(`SELECT data FROM pattern_primers WHERE pattern = ?`);
 
-export function getPrimer(pattern: string): Primer | null {
+/**
+ * A primer card with its `template` overlaid for `language`.
+ *
+ * `language` is required and leading like every other language-aware accessor,
+ * but it means something weaker here: the card is SHARED and only its skeleton
+ * forks. Write paths that are about to store what they read (deriving lesson 0
+ * from a primer, grounding a generated lesson) must pass CORPUS_LANGUAGE, or a
+ * translated skeleton gets written back into the shared corpus.
+ */
+export function getPrimer(language: Language, pattern: string): Primer | null {
   const row = getPrimerStmt.get(pattern) as { data: string } | undefined;
   if (!row) return null;
   try {
-    return JSON.parse(row.data) as Primer;
+    const primer = JSON.parse(row.data) as Primer;
+    const template = overlayCode(language, primerSourceId(pattern), primer.template);
+    return template === primer.template ? primer : { ...primer, template: template ?? '' };
   } catch {
     return null;
   }
@@ -1167,11 +1266,19 @@ export function getAllTrackOutlines(): Map<Topic, TrackOutlineItem[]> {
 
 const getLessonStmt = db.prepare(`SELECT data FROM lessons WHERE id = ?`);
 
-export function getLesson(id: string): Lesson | null {
+/**
+ * One lesson with its `code` snippet overlaid for `language`.
+ *
+ * See getPrimer: the row is shared, only the snippet forks, and a write path
+ * about to re-store what it read must ask for CORPUS_LANGUAGE.
+ */
+export function getLesson(language: Language, id: string): Lesson | null {
   const row = getLessonStmt.get(id) as { data: string } | undefined;
   if (!row) return null;
   try {
-    return JSON.parse(row.data) as Lesson;
+    const lesson = JSON.parse(row.data) as Lesson;
+    const code = overlayCode(language, lessonSourceId(id), lesson.code);
+    return code === lesson.code ? lesson : { ...lesson, code };
   } catch {
     return null;
   }
@@ -1197,19 +1304,62 @@ export function insertLesson(lesson: Lesson): void {
 }
 
 const lessonsByTopicStmt = db.prepare(`
-  SELECT data FROM lessons WHERE topic = ? ORDER BY seq ASC
+  SELECT id, data FROM lessons WHERE topic = ? ORDER BY seq ASC
 `);
 
-export function getLessonsByTopic(topic: Topic): Lesson[] {
-  const rows = lessonsByTopicStmt.all(topic) as Array<{ data: string }>;
+export function getLessonsByTopic(language: Language, topic: Topic): Lesson[] {
+  const rows = lessonsByTopicStmt.all(topic) as Array<{ id: string; data: string }>;
   const out: Lesson[] = [];
   for (const r of rows) {
     try {
-      out.push(JSON.parse(r.data) as Lesson);
+      const lesson = JSON.parse(r.data) as Lesson;
+      const code = overlayCode(language, lessonSourceId(r.id), lesson.code);
+      out.push(code === lesson.code ? lesson : { ...lesson, code });
     } catch {
       // Skip an unparseable row rather than breaking the whole feed.
     }
   }
+  return out;
+}
+
+/**
+ * Every translatable snippet a topic owns, in the language the corpus is
+ * WRITTEN in — the input side of a translation batch.
+ *
+ * Deliberately not built from getLessonsByTopic + getPrimer: those are the
+ * overlaid read path, and feeding an already-overlaid snippet back into a
+ * translation would re-translate Python from Python. This reads the stored
+ * bytes and nothing else.
+ *
+ * The primer template comes first because it is the skeleton the topic's
+ * lessons refer back to, and a batch that translates it alongside them is what
+ * keeps the topic internally consistent.
+ */
+export function getCorpusSnippets(topic: Topic): Array<{ sourceId: string; code: string }> {
+  const out: Array<{ sourceId: string; code: string }> = [];
+
+  const primerRow = getPrimerStmt.get(topic) as { data: string } | undefined;
+  if (primerRow) {
+    try {
+      const primer = JSON.parse(primerRow.data) as Primer;
+      if (primer.template?.trim()) {
+        out.push({ sourceId: primerSourceId(topic), code: primer.template });
+      }
+    } catch {
+      // Corrupt row — nothing to translate.
+    }
+  }
+
+  const rows = lessonsByTopicStmt.all(topic) as Array<{ id: string; data: string }>;
+  for (const r of rows) {
+    try {
+      const lesson = JSON.parse(r.data) as Lesson;
+      if (lesson.code?.trim()) out.push({ sourceId: lessonSourceId(r.id), code: lesson.code });
+    } catch {
+      // Corrupt row — skip it.
+    }
+  }
+
   return out;
 }
 
@@ -1497,6 +1647,37 @@ export interface DailyActivityRow {
 export function getDailyActivity(language: Language, days = 84): DailyActivityRow[] {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   return dailyActivityStmt.all(language, since) as DailyActivityRow[];
+}
+
+const globalDailyActivityStmt = db.prepare(`
+  SELECT
+    date(createdAt)                             AS date,
+    COUNT(*)                                    AS attempts,
+    SUM(CASE WHEN solved = 1 THEN 1 ELSE 0 END) AS solved
+  FROM attempts
+  WHERE createdAt >= ?
+  GROUP BY date(createdAt)
+  ORDER BY date(createdAt) ASC
+`);
+
+/**
+ * The same rollup ACROSS every language — the streak's input, and the one
+ * deliberate exception to the required-language rule.
+ *
+ * A streak is a habit metric, not a skill metric. Python yesterday and
+ * JavaScript today is two consecutive days of practice; scoping it per language
+ * would report two broken streaks for someone who never missed a day, and would
+ * punish the exact behaviour (trying a second language) the app is being
+ * extended to allow. Everything else on the dashboard stays per-language,
+ * because everything else measures skill in a language.
+ *
+ * It is a separate function rather than a nullable parameter on
+ * getDailyActivity precisely so it cannot be reached by forgetting an argument:
+ * calling this is a decision somebody typed.
+ */
+export function getGlobalDailyActivity(days = 84): DailyActivityRow[] {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return globalDailyActivityStmt.all(since) as DailyActivityRow[];
 }
 
 const taggedAttemptsStmt = db.prepare(`

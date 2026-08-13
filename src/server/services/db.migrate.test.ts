@@ -660,6 +660,37 @@ describe('v2 — the skill_state rebuild', () => {
     ).toThrow(/UNIQUE|PRIMARY/i);
     db.close();
   });
+
+  it('still starts once a Python ladder exists — the crash-loop this nearly shipped', () => {
+    // A LATENT BUG, found by importing db.ts from a CLI script in Phase 4.
+    //
+    // The rebuild's content-level check ("every carried-over row landed on the
+    // default language") ran unconditionally, so it stopped meaning "the copy
+    // was correct" and started meaning "no skill_state row may ever be in
+    // another language". That held right up until the first Python submit wrote
+    // ('arrays','python') — after which EVERY subsequent startup aborted its
+    // own migration, against a database that was in fact perfect. migrate()
+    // runs at db.ts module scope, so the failure mode is the service
+    // crash-looping on a restart that has nothing to do with the migration.
+    //
+    // Reproduced exactly: migrate a database, add the Python row the app itself
+    // would add, then start up again.
+    const db = migrated();
+    db.prepare(
+      `INSERT INTO skill_state (topic, language, currentDifficulty) VALUES ('arrays','python','easy')`
+    ).run();
+
+    expect(() => migrate(db)).not.toThrow();
+    expect(() => migrate(db)).not.toThrow();
+
+    // And the row survived — the fix is a narrower assertion, not a deleted one.
+    expect(
+      db.prepare(`SELECT COUNT(*) AS n FROM skill_state WHERE language = 'python'`).get()
+    ).toEqual({ n: 1 });
+    expect(userVersion(db)).toBe(SCHEMA_VERSION);
+    db.close();
+  });
+
 });
 
 describe('v2 — idx_problems_slot, the silent no-op', () => {

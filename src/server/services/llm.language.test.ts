@@ -206,6 +206,24 @@ describe('the shared study corpus', () => {
     expect(LESSON_SYSTEM).toContain('JavaScript');
   });
 
+  it('gives every language a snippet style for the translator to state', () => {
+    // The translation prompt is the only consumer, and it is authored per PAIR
+    // rather than per language — so a language added without this field would
+    // produce a prompt that silently omits the house style instead of failing.
+    for (const language of LANGUAGES) {
+      const style = LANGUAGE_PROFILES[language].snippetStyle;
+      expect(style, language).toBeTruthy();
+      expect(style, language).not.toContain('undefined');
+      // Authoring language, not translation language: "OPTIONAL" and "omit it
+      // entirely" belong in snippetRule, and would tell a translator it may
+      // decline to translate.
+      expect(style, language).not.toMatch(/OPTIONAL|[Oo]mit it entirely/);
+      for (const foreign of FOREIGN_TOKENS[language]) {
+        expect(style, `${language} snippet style mentions ${foreign}`).not.toMatch(foreign);
+      }
+    }
+  });
+
   it('still forbids fenced code in a lesson body', () => {
     // The single load-bearing property behind "lessons are shared": if a body
     // could contain a fence, the prose would be language-bound and the whole
