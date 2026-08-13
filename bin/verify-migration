@@ -5,10 +5,12 @@
 # is safe to run against the live service at any point — before a migration (to
 # prove the baseline is real), and after (to prove nothing moved).
 #
-# Three layers, weakest first:
+# Four layers, weakest first:
 #   1. row counts      — catches a DROP, a failed copy, a duplicated rebuild
 #   2. clean solves    — catches a WRONG JOIN, which row counts cannot see
-#   3. API payloads    — catches everything above plus the derivations on top
+#   3. tier credits    — the OTHER join (problems.topic/difficulty), plus the
+#                        multi-language invariants once those columns exist
+#   4. API payloads    — catches everything above plus the derivations on top
 #
 # Layer 2 is the one that earns its keep: the tier ladder is computed from a
 # join of attempts to problems, and a migration that rebuilds either table with
@@ -160,7 +162,91 @@ process.exit(bad ? 1 : 0);
 [[ $? -ne 0 ]] && FAILURES=$((FAILURES + 1))
 
 # -----------------------------------------------------------------------------
-section "3. API payloads"
+section "3. tier credits + multi-language invariants"
+# -----------------------------------------------------------------------------
+# Layer 2 checks the attempts-only aggregation. This one checks the JOIN that
+# `getCleanSolvesByTopic()` actually folds — a different join, on a different
+# pair of columns — and then the language invariants, which only apply once the
+# multi-language migration has run. Before it has, they are reported as pending
+# rather than failed, so this script is meaningful on both sides of the change.
+export CREDITS_BASELINE="$BASELINE_DIR/credits-by-topic.json"
+node -e '
+const fs = require("node:fs");
+const Database = require("better-sqlite3");
+const db = new Database(process.env.DB, { readonly: true });
+let bad = 0;
+
+const CREDITS = `
+  SELECT p.topic AS key, a.problemId AS problemId, p.difficulty AS difficulty,
+         a.solved AS solved, a.hintsUsed AS hintsUsed
+  FROM attempts a
+  JOIN problems p ON p.id = a.problemId
+`;
+const ORDER = ` ORDER BY p.topic, a.problemId, p.difficulty, a.solved, a.hintsUsed`;
+
+const has = (table, column) =>
+  db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
+
+// --- tier credits, unfiltered: nothing moved -------------------------------
+if (!fs.existsSync(process.env.CREDITS_BASELINE)) {
+  console.log(`  SKIP tier credits — no credits-by-topic.json in the baseline`);
+} else {
+  const want = fs.readFileSync(process.env.CREDITS_BASELINE, "utf8").trim();
+  const got = JSON.stringify(db.prepare(CREDITS + ORDER).all(), null, 2);
+  if (got === want) console.log(`  ok   tier credit rows identical to the baseline`);
+  else { console.log(`  FAIL tier credit rows differ from the baseline`); bad++; }
+
+  // --- the behavioural check: the JS-filtered read must equal the old read --
+  // countCleanSolves is pure, so identical input rows are identical tier
+  // credit. This is getCleanSolvesByTopic("javascript") === the pre-migration
+  // getCleanSolvesByTopic(), proven without re-implementing the fold.
+  if (has("problems", "language")) {
+    const filtered = JSON.stringify(
+      db.prepare(CREDITS + ` WHERE p.language = ?` + ORDER).all("javascript"), null, 2);
+    if (filtered === want) console.log(`  ok   javascript-filtered tier credits equal the pre-migration read`);
+    else { console.log(`  FAIL javascript-filtered tier credits differ from the pre-migration read`); bad++; }
+  }
+}
+
+// --- language invariants ---------------------------------------------------
+const LANG_TABLES = ["problems", "attempts", "sessions", "skill_state"];
+const migrated = LANG_TABLES.every((t) => has(t, "language"));
+if (!migrated) {
+  console.log(`  ..   language columns not present yet — multi-language checks pending`);
+} else {
+  for (const t of LANG_TABLES) {
+    const n = db.prepare(`SELECT COUNT(*) AS n FROM "${t}" WHERE language IS NULL OR language <> ?`)
+      .get("javascript").n;
+    if (n === 0) console.log(`  ok   ${t.padEnd(20)} all rows javascript`);
+    else { console.log(`  FAIL ${t.padEnd(20)} ${n} row(s) not javascript`); bad++; }
+  }
+
+  const pk = db.prepare(`PRAGMA table_info(skill_state)`).all()
+    .filter((c) => c.pk > 0).sort((a, b) => a.pk - b.pk).map((c) => c.name).join(",");
+  if (pk === "topic,language") console.log(`  ok   skill_state key is (topic, language)`);
+  else { console.log(`  FAIL skill_state key is (${pk})`); bad++; }
+
+  // The silent no-op: CREATE INDEX IF NOT EXISTS matches on name, so an index
+  // that still lacks `language` is exactly what a skipped DROP looks like.
+  const idx = db.prepare(`SELECT sql FROM sqlite_master WHERE name = ?`).get("idx_problems_slot");
+  if (idx && /language/.test(idx.sql)) console.log(`  ok   idx_problems_slot carries language`);
+  else { console.log(`  FAIL idx_problems_slot does not carry language: ${idx ? idx.sql : "(missing)"}`); bad++; }
+
+  const wantCt =
+    db.prepare(`SELECT COUNT(*) AS n FROM lessons WHERE json_extract(data, ?) <> ?`).get("$.code", "").n +
+    db.prepare(`SELECT COUNT(*) AS n FROM pattern_primers WHERE json_extract(data, ?) <> ?`).get("$.template", "").n;
+  const gotCt = db.prepare(`SELECT COUNT(*) AS n FROM code_translations`).get().n;
+  if (gotCt === wantCt) console.log(`  ok   code_translations       ${gotCt} (lessons-with-code + primers)`);
+  else { console.log(`  FAIL code_translations expected ${wantCt}, got ${gotCt}`); bad++; }
+}
+
+db.close();
+process.exit(bad ? 1 : 0);
+'
+[[ $? -ne 0 ]] && FAILURES=$((FAILURES + 1))
+
+# -----------------------------------------------------------------------------
+section "4. API payloads"
 # -----------------------------------------------------------------------------
 if [[ $DB_ONLY -eq 1 ]]; then
   printf '  skipped (--db-only)\n'

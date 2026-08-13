@@ -12,6 +12,7 @@
 // every startup — because it IS re-run on every startup.
 
 import type { Database } from 'better-sqlite3';
+import { DEFAULT_LANGUAGE } from '../../shared/languages.js';
 
 /**
  * The schema generation this build of the app expects.
@@ -22,7 +23,7 @@ import type { Database } from 'better-sqlite3';
  * itself become a thing that needs migrating, and it is already there on every
  * SQLite file ever created (0 by default).
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /** Optional instrumentation — startup logging, and the seam tests observe. */
 export interface MigrateOptions {
@@ -90,6 +91,63 @@ export function hasPk(db: Database, table: string, cols: string[]): boolean {
   return actual.length === cols.length && actual.every((c, i) => c === cols[i]);
 }
 
+/** The stored CREATE statement for a schema object, or null if it doesn't exist. */
+function objectSql(db: Database, name: string): string | null {
+  const row = db.prepare(`SELECT sql FROM sqlite_master WHERE name = ?`).get(name) as
+    | { sql: string | null }
+    | undefined;
+  return row?.sql ?? null;
+}
+
+/** Does this table exist at all? (Rebuild steps must not fire on a fresh file.) */
+function tableExists(db: Database, table: string): boolean {
+  const row = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
+    .get(table) as { name: string } | undefined;
+  return row !== undefined;
+}
+
+function countRows(db: Database, table: string): number {
+  return (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n;
+}
+
+/**
+ * The tables this migration must never change the size of. Snapshotted at the
+ * top of the transaction and re-counted at the bottom; a disagreement throws,
+ * which rolls the whole thing back. `settings` and `code_translations` are
+ * absent on purpose — those two are supposed to grow.
+ *
+ * This is the check that catches the failure row counts are usually blamed for
+ * missing: a rebuild-and-copy that drops rows on the floor still leaves a
+ * perfectly valid-looking database, and it does it silently.
+ */
+const INVARIANT_TABLES = [
+  'problems',
+  'attempts',
+  'skill_state',
+  'sessions',
+  'review_queue',
+  'pattern_primers',
+  'lesson_tracks',
+  'lessons',
+  'lesson_reads',
+  'revealed_solutions',
+] as const;
+
+/**
+ * The language literal written into SQL by this migration.
+ *
+ * Interpolated from the shared registry so the two cannot disagree *at the
+ * moment this migration is authored*. It is not a live link: a `DEFAULT` is
+ * baked into a table definition when the column is added and is never
+ * re-evaluated, and rows already backfilled stay backfilled. Changing
+ * DEFAULT_LANGUAGE later is therefore a new migration, not a recompile.
+ *
+ * Safe to interpolate: `Language` is a union of compile-time literals, so
+ * there is no string here that TypeScript did not put there.
+ */
+const LANG = DEFAULT_LANGUAGE;
+
 // -----------------------------------------------------------------------------
 // The migration
 // -----------------------------------------------------------------------------
@@ -113,40 +171,231 @@ export function hasPk(db: Database, table: string, cols: string[]): boolean {
 export function migrate(db: Database, opts: MigrateOptions = {}): void {
   const from = db.pragma('user_version', { simple: true }) as number;
 
-  db.transaction(() => {
-    // --- ALWAYS-RUN -----------------------------------------------------------
-    // Retrieval loop / mistake ledger: nullable JSON columns on attempts.
-    addColumnIfMissing(db, 'attempts', 'prediction', 'TEXT'); // JSON Prediction | null
-    addColumnIfMissing(db, 'attempts', 'mistakeTags', 'TEXT'); // JSON string[] | null
+  // ---------------------------------------------------------------------------
+  // PRAGMA foreign_keys, OUTSIDE the transaction — and this is not a style call.
+  // ---------------------------------------------------------------------------
+  // `PRAGMA foreign_keys` is a documented NO-OP inside a transaction: SQLite
+  // silently ignores it and returns success, so a migration that "disables"
+  // constraints on the first line of its own transaction has disabled nothing
+  // and will discover that only when a rebuild's DROP TABLE fires a cascade.
+  //
+  // The rebuild below is create-copy-drop-rename, so it must run with foreign
+  // keys off. Read the real state first (db.ts turns them ON at startup; a test
+  // connection leaves them at SQLite's default OFF) and restore exactly that,
+  // in a finally — a migration that throws must not leave the connection with
+  // its integrity checking quietly switched off for the rest of the process.
+  const fkWasOn = db.pragma('foreign_keys', { simple: true }) === 1;
+  if (fkWasOn) db.pragma('foreign_keys = OFF');
 
-    // --- VERSIONED ------------------------------------------------------------
-    if (from < SCHEMA_VERSION) {
-      // v1 is the schema db.ts already creates with CREATE TABLE IF NOT EXISTS,
-      // so there is genuinely nothing expensive to do here yet. The gate and the
-      // transaction exist NOW so that the multi-language work is a diff to this
-      // block and nothing else.
-      //
-      // Phase 1 appends here and bumps SCHEMA_VERSION to 2:
-      //
-      //   if (from < 2) {
-      //     if (!columnExists(db, 'problems', 'language')) { ...ADD COLUMN... }
-      //     if (!hasPk(db, 'skill_state', ['topic', 'language'])) {
-      //       // SQLite cannot ALTER a PRIMARY KEY: create skill_state_new with
-      //       // the composite key, INSERT..SELECT the old rows in, drop, rename.
-      //     }
-      //   }
-      //
-      // Note the shape: each step asks the DATABASE whether it is needed, not
-      // the version number. The `from <` check only decides whether to bother
-      // asking.
-      opts.onStep?.('v1-baseline');
-    }
+  try {
+    db.transaction(() => {
+      // --- Row-count snapshot -------------------------------------------------
+      // Taken inside the transaction so the comparison at the bottom is against
+      // the same consistent read. See INVARIANT_TABLES.
+      const before = new Map<string, number>();
+      for (const t of INVARIANT_TABLES) {
+        if (tableExists(db, t)) before.set(t, countRows(db, t));
+      }
 
-    // Only advance the marker once every step above has committed to this same
-    // transaction — a rolled-back migration must not leave a version claiming it
-    // succeeded.
-    if (from < SCHEMA_VERSION) {
-      db.pragma(`user_version = ${SCHEMA_VERSION}`);
-    }
-  })();
+      // --- ALWAYS-RUN ---------------------------------------------------------
+      // Cheap and self-detecting: a PRAGMA read, then an O(1) metadata change.
+      // Deliberately NOT gated on user_version, so a database whose version
+      // marker lies (a restore from an old dump, a hand-edited pragma) still
+      // heals itself on the next boot.
+
+      // Retrieval loop / mistake ledger: nullable JSON columns on attempts.
+      addColumnIfMissing(db, 'attempts', 'prediction', 'TEXT'); // JSON Prediction | null
+      addColumnIfMissing(db, 'attempts', 'mistakeTags', 'TEXT'); // JSON string[] | null
+
+      // Multi-language: the additive half. NOT NULL with a DEFAULT means every
+      // existing row backfills without a rewrite — SQLite stores the default in
+      // the table header and synthesises it on read.
+      //
+      // `attempts.language` is denormalised against `problems.language` on
+      // purpose: six accessors read `attempts` with no join at all, and folding
+      // "Python indentation" and "JS hoisting" into one syntax-error tally is
+      // worse than having no tally. `sessions.language` so a sitting keeps
+      // scheduling in the language it started in.
+      const langDecl = `TEXT NOT NULL DEFAULT '${LANG}'`;
+      addColumnIfMissing(db, 'problems', 'language', langDecl);
+      addColumnIfMissing(db, 'attempts', 'language', langDecl);
+      addColumnIfMissing(db, 'sessions', 'language', langDecl);
+      // NOTE: skill_state.language is deliberately absent here. It is part of
+      // that table's PRIMARY KEY, and ALTER TABLE ADD COLUMN cannot extend a
+      // key — it arrives with the rebuild below.
+
+      // Server-side key/value store. The language selector needs it now; the
+      // provider/model wizard later adds ROWS, never another migration.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS settings (
+          key       TEXT PRIMARY KEY,
+          value     TEXT NOT NULL,   -- JSON, so a value can grow a shape later
+          updatedAt TEXT NOT NULL
+        );
+      `);
+
+      // The only genuinely language-bound bytes in the study corpus. Lesson and
+      // primer PROSE stays shared (verified: zero of 114 lesson bodies contain a
+      // fence), so only the snippet forks — which is what collapses five table
+      // rebuilds into one and keeps all 19 read receipts valid.
+      //
+      // `sourceId` reuses the `<kind>:<id>` prefix convention lessons.id already
+      // uses for `mistake:` / `walkthrough:`, so one column addresses both
+      // corpora without a discriminator column nobody would keep in sync.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS code_translations (
+          sourceId  TEXT NOT NULL,   -- 'lesson:<lessons.id>' | 'primer:<pattern>'
+          language  TEXT NOT NULL,
+          code      TEXT NOT NULL,
+          createdAt TEXT NOT NULL,
+          PRIMARY KEY (sourceId, language)
+        );
+      `);
+
+      // --- VERSIONED ----------------------------------------------------------
+      // Expensive or destructive. Gated on the version marker so a warm database
+      // doesn't pay on every boot — but each step still asks the DATABASE
+      // whether it is needed, and the two below can FORCE the gate open.
+      //
+      // Forcing matters most for the skill_state key. `upsertSkillStmt` says
+      // ON CONFLICT(topic, language); against the old single-column key that is
+      // a hard runtime error on the next submit. A version marker that lies
+      // about that step would turn a self-healing startup into a permanently
+      // broken app, so the marker does not get to be the last word on it.
+      const needsSkillPk = tableExists(db, 'skill_state') && !hasPk(db, 'skill_state', ['topic', 'language']);
+      const slotSql = objectSql(db, 'idx_problems_slot');
+      const needsSlotIndex =
+        tableExists(db, 'problems') && (slotSql === null || !/\blanguage\b/.test(slotSql));
+
+      if (from < 1) {
+        // v1 was the schema db.ts already creates with CREATE TABLE IF NOT
+        // EXISTS — nothing expensive, the marker just had to start somewhere.
+        opts.onStep?.('v1-baseline');
+      }
+
+      if (from < 2 || needsSkillPk || needsSlotIndex) {
+        if (needsSkillPk) {
+          // SQLite cannot ALTER a PRIMARY KEY, so: build the new shape, copy,
+          // drop, rename. Both column lists are written out in full — an
+          // INSERT..SELECT that relies on positional order is exactly how
+          // `topic` ends up in `language` while every row count stays perfect.
+          //
+          // The fork is a FULL RESET, no unlock transfer: the tier ladder means
+          // "distinct problems solved at this difficulty with zero hints", and
+          // you have not done that in Python. Existing rows land on the default
+          // language and the other languages start cold, which the cold-start
+          // path in scheduler.service already handles.
+          db.exec(`
+            CREATE TABLE skill_state_new (
+              topic             TEXT NOT NULL,
+              language          TEXT NOT NULL DEFAULT '${LANG}',
+              currentDifficulty TEXT NOT NULL DEFAULT 'easy',
+              box               INTEGER NOT NULL DEFAULT 0,
+              ease              REAL NOT NULL DEFAULT 2.5,
+              streak            INTEGER NOT NULL DEFAULT 0,
+              attempts          INTEGER NOT NULL DEFAULT 0,
+              solved            INTEGER NOT NULL DEFAULT 0,
+              hintsSum          INTEGER NOT NULL DEFAULT 0,
+              lastResult        TEXT,
+              lastSeenAt        TEXT,
+              dueAt             TEXT,
+              PRIMARY KEY (topic, language)
+            );
+
+            INSERT INTO skill_state_new (
+              topic, language, currentDifficulty, box, ease, streak,
+              attempts, solved, hintsSum, lastResult, lastSeenAt, dueAt
+            )
+            SELECT
+              topic, '${LANG}', currentDifficulty, box, ease, streak,
+              attempts, solved, hintsSum, lastResult, lastSeenAt, dueAt
+            FROM skill_state;
+
+            DROP TABLE skill_state;
+            ALTER TABLE skill_state_new RENAME TO skill_state;
+          `);
+          opts.onStep?.('v2-skill-state-pk');
+        }
+
+        if (needsSlotIndex) {
+          // THE SILENT NO-OP. `CREATE INDEX IF NOT EXISTS idx_problems_slot`
+          // in db.ts matches on NAME, not on definition — so editing that line
+          // to add `language` does exactly nothing to a database where the
+          // index already exists, and the bank filter degrades to a scan that
+          // still returns correct rows. It passes on a fresh database and
+          // silently rots on the real one. DROP first, always.
+          db.exec(`
+            DROP INDEX IF EXISTS idx_problems_slot;
+            CREATE INDEX idx_problems_slot ON problems(language, topic, difficulty, used);
+          `);
+          opts.onStep?.('v2-idx-problems-slot');
+        }
+
+        // Seed the translation table with what already exists: today's stored
+        // snippets ARE the JavaScript translation. INSERT OR IGNORE against the
+        // composite key makes this a no-op on re-run rather than a conflict, so
+        // it is safe for the forced-repair path above to drag it along.
+        if (tableExists(db, 'lessons')) {
+          db.exec(`
+            INSERT OR IGNORE INTO code_translations (sourceId, language, code, createdAt)
+            SELECT 'lesson:' || id, '${LANG}', json_extract(data, '$.code'), createdAt
+            FROM lessons
+            WHERE json_extract(data, '$.code') IS NOT NULL
+              AND json_extract(data, '$.code') <> ''
+          `);
+        }
+        if (tableExists(db, 'pattern_primers')) {
+          db.exec(`
+            INSERT OR IGNORE INTO code_translations (sourceId, language, code, createdAt)
+            SELECT 'primer:' || pattern, '${LANG}', json_extract(data, '$.template'), createdAt
+            FROM pattern_primers
+            WHERE json_extract(data, '$.template') IS NOT NULL
+              AND json_extract(data, '$.template') <> ''
+          `);
+        }
+        opts.onStep?.('v2-code-translations');
+      }
+
+      // --- Verification, INSIDE the transaction -------------------------------
+      // Throwing here rolls everything back, including the version bump. The
+      // correct failure mode for a migration is a loud crash-loop against an
+      // untouched database, not a half-migrated one that starts.
+      for (const [table, want] of before) {
+        const got = countRows(db, table);
+        if (got !== want) {
+          throw new Error(
+            `migration aborted: ${table} row count changed ${want} -> ${got}. ` +
+              `No table outside settings/code_translations may gain or lose rows; ` +
+              `the database has been rolled back.`
+          );
+        }
+      }
+
+      // The rebuild is the one step that rewrites rows rather than metadata, so
+      // it gets a second, content-level check: every carried-over row must have
+      // landed on the default language. A copy that wrote the columns in the
+      // wrong order fails here even though the count matched.
+      if (tableExists(db, 'skill_state') && columnExists(db, 'skill_state', 'language')) {
+        const stray = (
+          db
+            .prepare(`SELECT COUNT(*) AS n FROM skill_state WHERE language <> ?`)
+            .get(LANG) as { n: number }
+        ).n;
+        if (stray !== 0) {
+          throw new Error(
+            `migration aborted: ${stray} skill_state row(s) did not land on '${LANG}'.`
+          );
+        }
+      }
+
+      // Only advance the marker once every step above has committed to this same
+      // transaction — a rolled-back migration must not leave a version claiming it
+      // succeeded.
+      if (from < SCHEMA_VERSION) {
+        db.pragma(`user_version = ${SCHEMA_VERSION}`);
+      }
+    })();
+  } finally {
+    if (fkWasOn) db.pragma('foreign_keys = ON');
+  }
 }

@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# WAL-aware backup of the live codegrind database, with row counts verified.
+#
+#   bin/backup-db                 # -> $BACKUP_DIR/codegrind.<timestamp>.db
+#   bin/backup-db pre-phase1      # -> $BACKUP_DIR/codegrind.pre-phase1.<timestamp>.db
+#
+# WHY NOT `cp`: the database runs in WAL mode and the write-ahead log has never
+# been checkpointed — it is MEGABYTES against a sub-megabyte main file. `cp
+# data/codegrind.db backup.db` copies the main file only and silently produces a
+# backup missing most of the recent history, while exiting 0 and looking fine.
+#
+# better-sqlite3's db.backup() uses SQLite's online backup API: it walks the
+# pager, so it sees WAL frames, and it is safe against a live writer (the app
+# stays up). The result is a single self-contained file with no sidecars, which
+# is also why it is the right thing to hand a restore.
+#
+# The backup is then re-opened and every table's row count compared against the
+# live database. A backup nobody counted is a backup nobody has.
+#
+# Exit: 0 = backup written and verified, 1 = mismatch or failure.
+
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR" || exit 1
+
+# better-sqlite3 is ABI-pinned to the Node the systemd unit runs. Under Node 24
+# the native module does not merely fail to load, it hard-crashes the process.
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+if [[ -f "$REPO_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+DB="${DATA_DIR:-$REPO_DIR/data}/codegrind.db"
+BACKUP_DIR="${BACKUP_DIR:-/home/hexi/backups/codegrind}"
+LABEL="${1:-}"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+
+if [[ -n "$LABEL" ]]; then
+  OUT="$BACKUP_DIR/codegrind.${LABEL}.${STAMP}.db"
+else
+  OUT="$BACKUP_DIR/codegrind.${STAMP}.db"
+fi
+
+if [[ ! -f "$DB" ]]; then
+  printf 'FAIL: no database at %s\n' "$DB"
+  exit 1
+fi
+mkdir -p "$BACKUP_DIR" || exit 1
+
+printf 'codegrind :: backup-db\n'
+printf '  from %s\n' "$DB"
+printf '  to   %s\n\n' "$OUT"
+
+DB="$DB" OUT="$OUT" node -e '
+const Database = require("better-sqlite3");
+
+const src = new Database(process.env.DB, { readonly: true });
+
+// The online backup API, not a file copy: this is the WAL-aware path.
+src.backup(process.env.OUT)
+  .then(() => {
+    const copy = new Database(process.env.OUT, { readonly: true });
+
+    // Filtered in JS rather than SQL: this whole program is inside a
+    // single-quoted bash argument, so a SQL string literal cannot be written.
+    const tables = src
+      .prepare(`SELECT name, type FROM sqlite_master ORDER BY name`)
+      .all()
+      .filter((r) => r.type === "table" && !r.name.startsWith("sqlite_"))
+      .map((r) => r.name);
+
+    let bad = 0;
+    for (const t of tables) {
+      const a = src.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get().n;
+      const b = copy.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get().n;
+      if (a === b) console.log(`  ok   ${t.padEnd(20)} ${a}`);
+      else { console.log(`  FAIL ${t.padEnd(20)} live ${a}, backup ${b}`); bad++; }
+    }
+
+    const uv = src.pragma("user_version", { simple: true });
+    const uvb = copy.pragma("user_version", { simple: true });
+    if (uv === uvb) console.log(`  ok   ${"user_version".padEnd(20)} ${uv}`);
+    else { console.log(`  FAIL user_version live ${uv}, backup ${uvb}`); bad++; }
+
+    const integrity = copy.pragma("integrity_check", { simple: true });
+    if (integrity === "ok") console.log(`  ok   ${"integrity_check".padEnd(20)} ok`);
+    else { console.log(`  FAIL integrity_check ${integrity}`); bad++; }
+
+    copy.close();
+    src.close();
+    process.exit(bad ? 1 : 0);
+  })
+  .catch((e) => {
+    console.log(`  FAIL backup threw — ${e.message}`);
+    process.exit(1);
+  });
+'
+rc=$?
+
+printf '\n'
+if [[ $rc -ne 0 ]]; then
+  printf 'FAIL — backup not trustworthy. Do NOT migrate.\n'
+  exit 1
+fi
+printf 'PASS — %s (%s)\n' "$OUT" "$(du -h "$OUT" | cut -f1)"
+printf '%s\n' "$OUT" > "$BACKUP_DIR/.last-backup"
+exit 0

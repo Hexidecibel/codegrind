@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# Capture the "before" side of a migration: the API payloads and the one SQL
+# aggregation that row counts cannot see. bin/verify-migration reads these back.
+#
+#   bin/capture-baseline                                   # -> the default baseline dir
+#   bin/capture-baseline /home/hexi/backups/codegrind/baseline-phase1
+#
+# READ-ONLY: GETs the live API and opens SQLite with readonly:true.
+#
+# Captured:
+#   reflect.json      /api/reflect       the acceptance target — must come back
+#                                        byte-identical after the migration
+#   progress.json     /api/progress
+#   history.json      /api/history
+#   study_index.json  /api/study/index
+#   clean-solves.json the tier ladder's only input, re-derived straight from SQL
+#
+# The service MUST be up: a baseline captured from a down service is a file full
+# of nothing that later "matches" anything.
+#
+# Exit: 0 = all five written, 1 = something could not be captured.
+
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR" || exit 1
+
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+if [[ -f "$REPO_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+DB="${DATA_DIR:-$REPO_DIR/data}/codegrind.db"
+PORT="${PORT:-9416}"
+OUT_DIR="${1:-${BASELINE_DIR:-/home/hexi/backups/codegrind/baseline}}"
+
+printf 'codegrind :: capture-baseline\n'
+printf '  db   %s\n' "$DB"
+printf '  api  http://127.0.0.1:%s\n' "$PORT"
+printf '  out  %s\n\n' "$OUT_DIR"
+
+if [[ ! -f "$DB" ]]; then
+  printf 'FAIL: no database at %s\n' "$DB"
+  exit 1
+fi
+mkdir -p "$OUT_DIR" || exit 1
+
+FAILURES=0
+
+health="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+  "http://127.0.0.1:${PORT}/api/health" 2>/dev/null)"
+if [[ "$health" != "200" ]]; then
+  printf 'FAIL: the codegrind service is not answering on 127.0.0.1:%s (got "%s").\n' \
+    "$PORT" "${health:-no response}"
+  printf '      A baseline is only meaningful if it came from the running app.\n'
+  exit 1
+fi
+
+capture() { # name, url-path
+  local name="$1" path="$2" code
+  code="$(curl -sS --max-time 30 -o "$OUT_DIR/$name.json" -w '%{http_code}' \
+    "http://127.0.0.1:${PORT}${path}" 2>/dev/null)"
+  if [[ "$code" != "200" ]]; then
+    printf '  FAIL %-18s HTTP %s\n' "$path" "${code:-no response}"
+    return 1
+  fi
+  # Parse it before trusting it — a proxy error page is also a 200-shaped file.
+  if ! node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"))' \
+      "$OUT_DIR/$name.json" 2>/dev/null; then
+    printf '  FAIL %-18s response is not JSON\n' "$path"
+    return 1
+  fi
+  printf '  ok   %-18s -> %s.json (%s bytes)\n' "$path" "$name" \
+    "$(wc -c < "$OUT_DIR/$name.json" | tr -d ' ')"
+}
+
+capture reflect     /api/reflect     || FAILURES=$((FAILURES + 1))
+capture progress    /api/progress    || FAILURES=$((FAILURES + 1))
+capture history     /api/history     || FAILURES=$((FAILURES + 1))
+capture study_index /api/study/index || FAILURES=$((FAILURES + 1))
+
+# The behavioural check row counts are blind to: a rebuild can preserve every
+# count and still pair attempts with the wrong problems.
+DB="$DB" OUT="$OUT_DIR/clean-solves.json" node -e '
+const fs = require("node:fs");
+const Database = require("better-sqlite3");
+const db = new Database(process.env.DB, { readonly: true });
+const rows = db.prepare(`
+  SELECT a.pattern AS topic, a.difficulty, COUNT(DISTINCT a.problemId) AS cleanSolves
+  FROM attempts a WHERE a.solved = 1 AND a.hintsUsed = 0
+  GROUP BY a.pattern, a.difficulty ORDER BY a.pattern, a.difficulty
+`).all();
+db.close();
+fs.writeFileSync(process.env.OUT, JSON.stringify(rows, null, 2) + "\n");
+console.log(`  ok   ${"clean solves".padEnd(18)} -> clean-solves.json (${rows.length} buckets)`);
+' || FAILURES=$((FAILURES + 1))
+
+# The exact rows `getCleanSolvesByTopic()` folds. Captured RAW rather than
+# folded on purpose: countCleanSolves is a pure function, so identical input
+# rows are identical tier credit by construction — and re-implementing the fold
+# in this script would only prove that the copy agrees with itself. Capturing it
+# also cannot go through db.ts, which would run the migration on import.
+#
+# This is the check the tier ladder actually rides on, and it is a DIFFERENT
+# join from clean-solves.json: this one credits problems.topic/difficulty, that
+# one credits attempts.pattern/difficulty.
+DB="$DB" OUT="$OUT_DIR/credits-by-topic.json" node -e '
+const fs = require("node:fs");
+const Database = require("better-sqlite3");
+const db = new Database(process.env.DB, { readonly: true });
+const rows = db.prepare(`
+  SELECT p.topic AS key, a.problemId AS problemId, p.difficulty AS difficulty,
+         a.solved AS solved, a.hintsUsed AS hintsUsed
+  FROM attempts a
+  JOIN problems p ON p.id = a.problemId
+  ORDER BY p.topic, a.problemId, p.difficulty, a.solved, a.hintsUsed
+`).all();
+db.close();
+fs.writeFileSync(process.env.OUT, JSON.stringify(rows, null, 2) + "\n");
+console.log(`  ok   ${"tier credits".padEnd(18)} -> credits-by-topic.json (${rows.length} rows)`);
+' || FAILURES=$((FAILURES + 1))
+
+# Row counts, for the record — bin/verify-migration keeps its own copy of these
+# as its EXPECTED_ROWS table; this file is what you check them against.
+DB="$DB" OUT="$OUT_DIR/row-counts.json" node -e '
+const fs = require("node:fs");
+const Database = require("better-sqlite3");
+const db = new Database(process.env.DB, { readonly: true });
+const tables = db.prepare(`SELECT name, type FROM sqlite_master ORDER BY name`).all()
+  .filter((r) => r.type === "table" && !r.name.startsWith("sqlite_"))
+  .map((r) => r.name);
+const counts = {};
+for (const t of tables) counts[t] = db.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get().n;
+counts.__user_version = db.pragma("user_version", { simple: true });
+db.close();
+fs.writeFileSync(process.env.OUT, JSON.stringify(counts, null, 2) + "\n");
+for (const [t, n] of Object.entries(counts)) console.log(`  ok   ${t.padEnd(18)} ${n}`);
+' || FAILURES=$((FAILURES + 1))
+
+printf '\n'
+if [[ $FAILURES -gt 0 ]]; then
+  printf 'FAIL — %d capture(s) failed. Do NOT migrate against a partial baseline.\n' "$FAILURES"
+  exit 1
+fi
+printf 'PASS — baseline captured to %s\n' "$OUT_DIR"
+exit 0

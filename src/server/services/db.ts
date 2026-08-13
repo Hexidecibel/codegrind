@@ -554,15 +554,27 @@ function clampEase(e: number): number {
   return Math.max(1.3, Math.min(3.0, e));
 }
 
+// CODE AND DATA ARE COUPLED HERE. `skill_state` is keyed on (topic, language)
+// as of the multi-language migration, and an ON CONFLICT target must name a
+// real unique index: this statement throws `ON CONFLICT clause does not match
+// any PRIMARY KEY or UNIQUE constraint` against the OLD single-column key, and
+// the old statement would upsert into the wrong row against the new one. A
+// rollback therefore has to revert both together — reverting the code alone is
+// not a smaller, safer step.
+//
+// The language is a literal for now. Phase 1b threads a required `language`
+// parameter down through the accessors, at which point this becomes @language
+// and every missed call site is a compile error rather than a silent write to
+// the JavaScript ladder.
 const upsertSkillStmt = db.prepare(`
   INSERT INTO skill_state (
-    topic, currentDifficulty, box, ease, streak, attempts, solved, hintsSum,
+    topic, language, currentDifficulty, box, ease, streak, attempts, solved, hintsSum,
     lastResult, lastSeenAt, dueAt
   ) VALUES (
-    @topic, @currentDifficulty, @box, @ease, @streak, @attempts, @solved, @hintsSum,
+    @topic, 'javascript', @currentDifficulty, @box, @ease, @streak, @attempts, @solved, @hintsSum,
     @lastResult, @lastSeenAt, @dueAt
   )
-  ON CONFLICT(topic) DO UPDATE SET
+  ON CONFLICT(topic, language) DO UPDATE SET
     currentDifficulty = @currentDifficulty,
     box               = @box,
     ease              = @ease,
