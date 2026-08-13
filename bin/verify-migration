@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+# Assert the database still says what it said before a schema migration.
+#
+# READ-ONLY. Opens SQLite with readonly:true and only ever GETs the API, so it
+# is safe to run against the live service at any point — before a migration (to
+# prove the baseline is real), and after (to prove nothing moved).
+#
+# Three layers, weakest first:
+#   1. row counts      — catches a DROP, a failed copy, a duplicated rebuild
+#   2. clean solves    — catches a WRONG JOIN, which row counts cannot see
+#   3. API payloads    — catches everything above plus the derivations on top
+#
+# Layer 2 is the one that earns its keep: the tier ladder is computed from a
+# join of attempts to problems, and a migration that rebuilds either table with
+# the columns in the wrong order leaves both row counts perfect.
+#
+#   bin/verify-migration              # all three layers
+#   bin/verify-migration --db-only    # skip the API layer (service intentionally down)
+#
+# Exit: 0 = PASS, 1 = FAIL (something changed), 2 = INCOMPLETE (a check could
+# not run — e.g. the service was unreachable and --db-only was not passed).
+
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR" || exit 2
+
+# better-sqlite3 is compiled against the ABI of the Node the systemd unit runs.
+# Use it rather than a `sqlite3` CLI so this script reads the database through
+# exactly the library the app does. (The only sqlite3 binary on this host ships
+# with the Android SDK, which is not a dependency anybody declared.)
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+# PORT / DATA_DIR live in .env for a CLI run; systemd hands them to the service.
+if [[ -f "$REPO_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+DB="${DATA_DIR:-$REPO_DIR/data}/codegrind.db"
+PORT="${PORT:-9416}"
+BASELINE_DIR="${BASELINE_DIR:-/home/hexi/backups/codegrind/baseline}"
+
+# -----------------------------------------------------------------------------
+# Expected row counts — the known-good pre-migration state.
+# -----------------------------------------------------------------------------
+# Edit this table (and re-capture BASELINE_DIR) whenever the real numbers move
+# because the user practiced, not because a migration ran.
+EXPECTED_ROWS=(
+  "problems:35"
+  "attempts:61"
+  "skill_state:4"
+  "sessions:7"
+  "review_queue:11"
+  "pattern_primers:18"
+  "lesson_tracks:18"
+  "lessons:114"
+  "lesson_reads:19"
+  "revealed_solutions:0"
+)
+
+# -----------------------------------------------------------------------------
+# Fields excluded from the API diffs — genuinely time-varying, not schema.
+# -----------------------------------------------------------------------------
+# /activity      rolling 84-day window; every row shifts at UTC midnight
+# /tiles/streak  day streak measured against today
+# /*/reviewDue   counts `dueAt <= now`, so it ticks up on its own schedule
+#                (there is a live queue row due within hours of this baseline)
+REFLECT_IGNORE='["/activity","/tiles/streak","/tiles/reviewDue"]'
+PROGRESS_IGNORE='["/reviewDue"]'
+
+DB_ONLY=0
+[[ "${1:-}" == "--db-only" ]] && DB_ONLY=1
+
+FAILURES=0
+INCOMPLETE=0
+
+section() { printf '\n== %s\n' "$1"; }
+
+printf 'codegrind :: verify-migration\n'
+printf '  db       %s\n' "$DB"
+printf '  baseline %s\n' "$BASELINE_DIR"
+printf '  api      http://127.0.0.1:%s\n' "$PORT"
+
+if [[ ! -f "$DB" ]]; then
+  printf '\nFAIL: no database at %s\n' "$DB"
+  exit 2
+fi
+if [[ ! -d "$BASELINE_DIR" ]]; then
+  printf '\nFAIL: no baseline directory at %s\n' "$BASELINE_DIR"
+  exit 2
+fi
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+# -----------------------------------------------------------------------------
+section "1. row counts"
+# -----------------------------------------------------------------------------
+EXPECTED_ROWS_TXT="$(printf '%s\n' "${EXPECTED_ROWS[@]}")"
+export EXPECTED_ROWS_TXT DB
+node -e '
+const Database = require("better-sqlite3");
+const db = new Database(process.env.DB, { readonly: true });
+let bad = 0;
+for (const line of process.env.EXPECTED_ROWS_TXT.trim().split("\n")) {
+  const [table, want] = line.split(":");
+  let got;
+  try {
+    got = db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get().n;
+  } catch (e) {
+    console.log(`  FAIL ${table.padEnd(20)} unreadable — ${e.message}`);
+    bad++;
+    continue;
+  }
+  if (got === Number(want)) console.log(`  ok   ${table.padEnd(20)} ${got}`);
+  else { console.log(`  FAIL ${table.padEnd(20)} expected ${want}, got ${got}`); bad++; }
+}
+console.log(`  user_version = ${db.pragma("user_version", { simple: true })}`);
+db.close();
+process.exit(bad ? 1 : 0);
+'
+[[ $? -ne 0 ]] && FAILURES=$((FAILURES + 1))
+
+# -----------------------------------------------------------------------------
+section "2. clean-solves aggregation"
+# -----------------------------------------------------------------------------
+# The tier ladder's only input, re-derived straight from SQL. Row counts are
+# blind to a join that pairs the right number of rows with the wrong ones; this
+# is not.
+export CLEAN_BASELINE="$BASELINE_DIR/clean-solves.json"
+node -e '
+const fs = require("node:fs");
+const Database = require("better-sqlite3");
+const db = new Database(process.env.DB, { readonly: true });
+const rows = db.prepare(`
+  SELECT a.pattern AS topic, a.difficulty, COUNT(DISTINCT a.problemId) AS cleanSolves
+  FROM attempts a WHERE a.solved = 1 AND a.hintsUsed = 0
+  GROUP BY a.pattern, a.difficulty ORDER BY a.pattern, a.difficulty
+`).all();
+db.close();
+
+const want = JSON.parse(fs.readFileSync(process.env.CLEAN_BASELINE, "utf8"));
+const key = (r) => `${r.topic}/${r.difficulty}`;
+const wantMap = new Map(want.map((r) => [key(r), r.cleanSolves]));
+const gotMap = new Map(rows.map((r) => [key(r), r.cleanSolves]));
+
+let bad = 0;
+for (const k of new Set([...wantMap.keys(), ...gotMap.keys()])) {
+  const w = wantMap.get(k), g = gotMap.get(k);
+  if (w === g) continue;
+  console.log(`  FAIL ${k.padEnd(28)} expected ${w ?? "(absent)"}, got ${g ?? "(absent)"}`);
+  bad++;
+}
+if (!bad) console.log(`  ok   ${rows.length} (topic, difficulty) buckets match the baseline`);
+process.exit(bad ? 1 : 0);
+'
+[[ $? -ne 0 ]] && FAILURES=$((FAILURES + 1))
+
+# -----------------------------------------------------------------------------
+section "3. API payloads"
+# -----------------------------------------------------------------------------
+if [[ $DB_ONLY -eq 1 ]]; then
+  printf '  skipped (--db-only)\n'
+else
+  health="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+    "http://127.0.0.1:${PORT}/api/health" 2>/dev/null)"
+  if [[ "$health" != "200" ]]; then
+    printf '  INCOMPLETE: the codegrind service is not answering on 127.0.0.1:%s\n' "$PORT"
+    printf '              (health probe returned "%s"). This is NOT a migration failure —\n' "${health:-no response}"
+    printf '              start it with `sudo systemctl start codegrind`, or re-run with\n'
+    printf '              --db-only to check the database alone.\n'
+    INCOMPLETE=$((INCOMPLETE + 1))
+  else
+    compare_endpoint() { # name, url-path, baseline-file, ignore-json
+      local name="$1" path="$2" base="$3" ignore="$4"
+      local code
+      code="$(curl -sS --max-time 30 -o "$TMP/$name.json" -w '%{http_code}' \
+        "http://127.0.0.1:${PORT}${path}" 2>/dev/null)"
+      if [[ "$code" != "200" ]]; then
+        printf '  FAIL %s returned HTTP %s\n' "$path" "${code:-no response}"
+        return 1
+      fi
+      LIVE="$TMP/$name.json" BASE="$base" IGNORE="$ignore" LABEL="$path" node -e '
+        const fs = require("node:fs");
+        const live = JSON.parse(fs.readFileSync(process.env.LIVE, "utf8"));
+        const base = JSON.parse(fs.readFileSync(process.env.BASE, "utf8"));
+        const ignore = new Set(JSON.parse(process.env.IGNORE));
+
+        const diffs = [];
+        function walk(a, b, path) {
+          if (ignore.has(path)) return;
+          if (diffs.length > 12) return;
+          const prim = (v) => v === null || typeof v !== "object";
+          if (prim(a) || prim(b)) {
+            if (a !== b) diffs.push(`${path || "/"}: expected ${JSON.stringify(a)}, got ${JSON.stringify(b)}`);
+            return;
+          }
+          if (Array.isArray(a) !== Array.isArray(b)) {
+            diffs.push(`${path}: shape changed (array vs object)`);
+            return;
+          }
+          if (Array.isArray(a)) {
+            if (a.length !== b.length) diffs.push(`${path}: length ${a.length} -> ${b.length}`);
+            for (let i = 0; i < Math.min(a.length, b.length); i++) walk(a[i], b[i], `${path}/${i}`);
+            return;
+          }
+          for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) walk(a[k], b[k], `${path}/${k}`);
+        }
+        walk(base, live, "");
+
+        if (!diffs.length) {
+          console.log(`  ok   ${process.env.LABEL} matches the baseline`);
+          process.exit(0);
+        }
+        console.log(`  FAIL ${process.env.LABEL} differs from the baseline:`);
+        for (const d of diffs.slice(0, 12)) console.log(`         ${d}`);
+        if (diffs.length > 12) console.log(`         ... and more`);
+        process.exit(1);
+      '
+    }
+
+    compare_endpoint reflect /api/reflect "$BASELINE_DIR/reflect.json" "$REFLECT_IGNORE" \
+      || FAILURES=$((FAILURES + 1))
+    compare_endpoint progress /api/progress "$BASELINE_DIR/progress.json" "$PROGRESS_IGNORE" \
+      || FAILURES=$((FAILURES + 1))
+    printf '  note ignored as time-varying: activity window, day streak, reviewDue\n'
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+printf '\n'
+if [[ $FAILURES -gt 0 ]]; then
+  printf 'FAIL — %d check group(s) disagree with the pre-migration baseline.\n' "$FAILURES"
+  exit 1
+fi
+if [[ $INCOMPLETE -gt 0 ]]; then
+  printf 'INCOMPLETE — the database checks passed, but %d check group(s) could not run.\n' "$INCOMPLETE"
+  exit 2
+fi
+printf 'PASS — row counts, clean solves and API payloads all match the baseline.\n'
+exit 0

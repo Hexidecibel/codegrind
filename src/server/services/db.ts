@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { migrate } from './db.migrate.js';
 import type { LessonMeta } from './study.order.js';
 import {
   FOUNDATIONAL_START,
@@ -158,21 +159,12 @@ db.exec(`
 `);
 
 // -----------------------------------------------------------------------------
-// Idempotent column migrations — better-sqlite3 throws on a duplicate ADD COLUMN,
-// so guard each with a PRAGMA table_info check (safe to re-run on every startup).
+// Migrations — everything the CREATE TABLE IF NOT EXISTS block above cannot say.
+// Idempotent, transactional, re-run on every startup. Lives in its own module
+// (which takes the connection as an argument) so it is testable against an
+// in-memory database without importing this file. See db.migrate.ts.
 // -----------------------------------------------------------------------------
-function columnExists(table: string, column: string): boolean {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  return cols.some((c) => c.name === column);
-}
-function addColumnIfMissing(table: string, column: string, decl: string): void {
-  if (!columnExists(table, column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
-  }
-}
-// Retrieval loop / mistake ledger: nullable JSON columns on attempts.
-addColumnIfMissing('attempts', 'prediction', 'TEXT');   // JSON Prediction | null
-addColumnIfMissing('attempts', 'mistakeTags', 'TEXT');  // JSON string[] | null
+migrate(db);
 
 // -----------------------------------------------------------------------------
 // Row <-> record mapping
