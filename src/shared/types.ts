@@ -5,6 +5,8 @@
 // solution) live in ProblemRecord and are NEVER present on the player-safe
 // `Problem` type that crosses the API boundary.
 
+import type { Language } from './languages.js';
+
 // -----------------------------------------------------------------------------
 // Topics & difficulty
 // -----------------------------------------------------------------------------
@@ -80,6 +82,14 @@ export interface TestCase {
 // -----------------------------------------------------------------------------
 export interface Problem {
   id: string;
+  /**
+   * The language this problem's starter code, reference solution and — crucially
+   * — its `expected` values were produced in. It travels with the problem so
+   * `/api/run` and `/api/submit` never need to carry one: the server reads it
+   * off the record, which is what makes running one language's source through
+   * another's harness impossible rather than merely unlikely.
+   */
+  language: Language;
   title: string;
   /** Full problem statement in Markdown. */
   prompt: string;
@@ -616,4 +626,22 @@ export interface AskRequest {
 
 export interface AskResponse {
   answer: string;
+}
+
+// -----------------------------------------------------------------------------
+// Settings — the server-side, single-user preference store
+// -----------------------------------------------------------------------------
+// One shape for GET and PUT, both partial-friendly on the wire. Every future
+// setting (provider, model, apiKeyRef) is another optional field here backed by
+// another ROW — never another table and never a migration.
+
+/** Response for GET /api/settings and PUT /api/settings (the full live state). */
+export interface SettingsResponse {
+  /** The language the app generates and serves problems in right now. */
+  language: Language;
+}
+
+/** Body for PUT /api/settings. Every field optional — omitted means unchanged. */
+export interface SettingsUpdateRequest {
+  language?: Language;
 }

@@ -3,7 +3,7 @@
 // problem, so this deliberately seeds only a handful.
 import type { Topic, Difficulty } from '../src/shared/types.js';
 import { generateAndStore } from '../src/server/services/bank.service.js';
-import { bankSize } from '../src/server/services/db.js';
+import { bankSize, getActiveLanguage } from '../src/server/services/db.js';
 
 // Smoke-test set: 3 problems across common patterns. Expand SEED to grow the bank.
 const SEED: Array<{ topic: Topic; difficulty: Difficulty }> = [
@@ -13,17 +13,23 @@ const SEED: Array<{ topic: Topic; difficulty: Difficulty }> = [
 ];
 
 async function main() {
-  console.log(`Bank currently holds ${bankSize()} problem(s). Seeding ${SEED.length}...`);
+  // The bank partitions by language, so seeding does too: seeding the ACTIVE
+  // language is the only choice that can't leave you looking at a bank that
+  // exists but is invisible to the app. Phase 3 adds `--language <lang>`.
+  const language = getActiveLanguage();
+  console.log(
+    `Bank currently holds ${bankSize(language)} ${language} problem(s). Seeding ${SEED.length}...`
+  );
   for (const { topic, difficulty } of SEED) {
-    process.stdout.write(`  generating ${difficulty}/${topic} ... `);
+    process.stdout.write(`  generating ${language} ${difficulty}/${topic} ... `);
     try {
-      const p = await generateAndStore(topic, difficulty);
+      const p = await generateAndStore(language, topic, difficulty);
       console.log(`ok — "${p.title}" (${p.sampleTests.length} sample, ${p.hiddenTests.length} hidden)`);
     } catch (err) {
       console.log(`FAILED: ${err instanceof Error ? err.message : err}`);
     }
   }
-  console.log(`Done. Bank now holds ${bankSize()} problem(s).`);
+  console.log(`Done. Bank now holds ${bankSize(language)} ${language} problem(s).`);
 }
 
 main();

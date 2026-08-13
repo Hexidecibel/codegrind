@@ -7,6 +7,7 @@ import {
   type Difficulty,
 } from '../../shared/types.js';
 import { generateAndStore, getNextProblem, getProblem } from '../services/bank.service.js';
+import { getActiveLanguage } from '../services/db.js';
 
 export const problemsRoutes = new Hono();
 
@@ -27,7 +28,11 @@ problemsRoutes.post('/problems/generate', async (c) => {
     if (!isDifficulty(body.difficulty)) {
       return c.json({ error: `difficulty must be one of: ${DIFFICULTIES.join(', ')}` }, 400);
     }
-    const record = await generateAndStore(body.topic, body.difficulty);
+    // The language comes from the server-side setting, never from the request:
+    // language is chosen at GENERATION time (it binds the reference solution and
+    // every `expected` value), so a client cannot ask for one bank and be graded
+    // against another's harness.
+    const record = await generateAndStore(getActiveLanguage(), body.topic, body.difficulty);
     return c.json(toPlayerProblem(record));
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -47,7 +52,7 @@ problemsRoutes.get('/problems/next', async (c) => {
     if (!isDifficulty(difficulty)) {
       return c.json({ error: `difficulty must be one of: ${DIFFICULTIES.join(', ')}` }, 400);
     }
-    const record = await getNextProblem(topic, difficulty);
+    const record = await getNextProblem(getActiveLanguage(), topic, difficulty);
     return c.json(toPlayerProblem(record));
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

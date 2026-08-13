@@ -13,6 +13,7 @@ import {
   type SchedulerIntentKind,
   type SessionPlan,
 } from '../../shared/types.js';
+import type { Language } from '../../shared/languages.js';
 import {
   getSkillState,
   getCleanSolvesByTopic,
@@ -41,6 +42,12 @@ import {
 // -----------------------------------------------------------------------------
 export interface SchedulerIntent {
   kind: SchedulerIntentKind;
+  /**
+   * The language to serve in. Carried ON the intent rather than passed
+   * alongside it, so `getAdaptiveProblem(intent)` cannot be handed a language
+   * that disagrees with the state the intent was computed from.
+   */
+  language: Language;
   topic: Topic;
   difficulty: Difficulty;
   /** Short human "why this one" string, surfaced to the player. */
@@ -54,6 +61,13 @@ export interface SchedulerIntent {
 }
 
 export interface NextIntentOpts {
+  /**
+   * REQUIRED and non-defaulted: everything below reads language-partitioned
+   * state (skill rows, tier credits, the bank, the review queue), so a missing
+   * language here has to be a compile error rather than a quiet default that
+   * schedules a Python sitting off the JavaScript ladder.
+   */
+  language: Language;
   plan?: SessionPlan;
   /** Topic just served — the scheduler avoids repeating it back-to-back. */
   avoidTopic?: string;
@@ -99,12 +113,12 @@ interface TopicView {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function buildViews(): TopicView[] {
+function buildViews(language: Language): TopicView[] {
   const skill = new Map<Topic, SkillRow>();
-  for (const s of getSkillState()) skill.set(s.topic, s);
+  for (const s of getSkillState(language)) skill.set(s.topic, s);
 
   // The tier ladder's only input: distinct problems solved with zero hints.
-  const clean = getCleanSolvesByTopic();
+  const clean = getCleanSolvesByTopic(language);
 
   const now = Date.now();
 
@@ -328,19 +342,20 @@ function pickWeighted(cands: Candidate[], rng: () => number): Candidate {
   return pool[0];
 }
 
-function toIntent(c: Candidate): SchedulerIntent {
+function toIntent(language: Language, c: Candidate): SchedulerIntent {
   const intent: SchedulerIntent = {
     kind: c.kind,
+    language,
     topic: c.topic,
     difficulty: c.difficulty,
     rationale: c.rationale,
   };
   if (c.kind === 'variation' || c.kind === 'level-up' || c.kind === 'new-pattern') {
-    const titles = getBankTitles(c.topic);
+    const titles = getBankTitles(language, c.topic);
     if (titles.length) intent.avoidTitles = titles;
   }
   if (c.kind === 'variation') {
-    const seed = getRecentSolvedProblem(c.topic);
+    const seed = getRecentSolvedProblem(language, c.topic);
     if (seed) intent.variationOfProblemId = seed.id;
   }
   return intent;
@@ -350,14 +365,20 @@ function toIntent(c: Candidate): SchedulerIntent {
  * Decide the next problem's intent from live skill state. Deterministic given a
  * seed; the seed folds in live state + a coarse time bucket so it feels fresh.
  */
-export function nextIntent(opts: NextIntentOpts = {}): SchedulerIntent {
+export function nextIntent(opts: NextIntentOpts): SchedulerIntent {
+  const { language } = opts;
+
   // Retrieval loop: a due review item outranks EVERYTHING — re-serve it cold.
-  const due = getDueReview();
+  const due = getDueReview(language);
   if (due) {
     const p = getProblem(due.problemId);
     if (p) {
       return {
         kind: 'review',
+        // From the PROBLEM, not from `language`. They agree today (getDueReview
+        // filters on exactly this), and if they ever stop agreeing the problem
+        // is the one telling the truth about which harness can run it.
+        language: p.language,
         topic: p.topic,
         difficulty: p.difficulty,
         rationale: 'Review — you leaned on this before. Solve it cold, no hints.',
@@ -367,7 +388,7 @@ export function nextIntent(opts: NextIntentOpts = {}): SchedulerIntent {
     // Problem vanished (deleted) — fall through to normal scheduling.
   }
 
-  const views = buildViews();
+  const views = buildViews(language);
   let candidates = buildCandidates(views, opts.plan);
 
   // "Don't repeat the topic just served" guard — drop it unless it's all we have.
@@ -380,6 +401,7 @@ export function nextIntent(opts: NextIntentOpts = {}): SchedulerIntent {
     // Absolute fallback — should only happen with a corrupt/empty tree.
     return {
       kind: 'warm-up',
+      language,
       topic: FOUNDATIONAL_START,
       difficulty: 'easy',
       rationale: 'Warming up on the fundamentals.',
@@ -387,19 +409,19 @@ export function nextIntent(opts: NextIntentOpts = {}): SchedulerIntent {
   }
 
   const rng = mulberry32(seedFrom(views, opts.avoidTopic));
-  return toIntent(pickWeighted(candidates, rng));
+  return toIntent(language, pickWeighted(candidates, rng));
 }
 
 /**
  * Best-effort short label for the LIKELY next problem, for a UI "up next" peek.
  * Does not commit — reuses candidate logic against current state.
  */
-export function peekUpNext(opts: NextIntentOpts = {}): string {
+export function peekUpNext(opts: NextIntentOpts): string {
   // A due review takes priority in the real pick, so surface it in the peek too.
-  if (getReviewDueCount() > 0) {
+  if (getReviewDueCount(opts.language) > 0) {
     return 'a review problem to solve cold';
   }
-  const views = buildViews();
+  const views = buildViews(opts.language);
   let candidates = buildCandidates(views, opts.plan);
   if (opts.avoidTopic) {
     const filtered = candidates.filter((c) => c.topic !== opts.avoidTopic);

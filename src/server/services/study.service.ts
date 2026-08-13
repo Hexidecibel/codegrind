@@ -10,6 +10,7 @@
 // treating study.service as the single entry point.
 
 import { TOPICS, type Topic } from '../../shared/types.js';
+import type { Language } from '../../shared/languages.js';
 import { FOUNDATIONAL_START, masteryScore } from './curriculum.js';
 import {
   getAllTrackOutlines,
@@ -82,14 +83,23 @@ function materializeDerivedLessons(): void {
   }
 }
 
-/** Read live state out of SQLite into the shape `studyQueue()` consumes. */
-export function buildStudyState(): StudyQueueState {
+/**
+ * Read live state out of SQLite into the shape `studyQueue()` consumes.
+ *
+ * `language` scopes the PERSONALIZATION only — which topics look weak, which
+ * mistakes recur, which problems are worth a walkthrough. The lesson corpus
+ * itself (outlines, bodies, read receipts) is deliberately SHARED: the prose is
+ * language-free by construction (LESSON_SYSTEM forbids fenced code in bodies),
+ * so only the snippet forks, via code_translations in Phase 4. That is what
+ * keeps all 19 read receipts valid across a language switch.
+ */
+export function buildStudyState(language: Language): StudyQueueState {
   materializeDerivedLessons();
 
   // One shared definition — see curriculum.masteryScore (the tier ladder's
   // display ordinal). The Study weakness bias compares it against WEAK_SCORE.
-  const clean = getCleanSolvesByTopic();
-  const skills: StudySkill[] = getSkillState().map((s) => ({
+  const clean = getCleanSolvesByTopic(language);
+  const skills: StudySkill[] = getSkillState(language).map((s) => ({
     topic: s.topic,
     attempts: s.attempts,
     mastery: masteryScore(clean.get(s.topic)),
@@ -100,14 +110,14 @@ export function buildStudyState(): StudyQueueState {
     cached: getCachedLessonMeta(),
     reads: getLessonReads(),
     skills,
-    mistakes: getMistakeContexts().map((m) => ({
+    mistakes: getMistakeContexts(language).map((m) => ({
       tag: m.tag,
       count: m.count,
       topic: (TOPICS as readonly string[]).includes(m.topic) ? m.topic : FOUNDATIONAL_START,
       problemId: m.problemId,
       problemTitle: m.problemTitle,
     })),
-    walkthroughs: getWalkthroughCandidates().map((w) => ({
+    walkthroughs: getWalkthroughCandidates(language).map((w) => ({
       problemId: w.problemId,
       title: w.title,
       topic: w.topic,
