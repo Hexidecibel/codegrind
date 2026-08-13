@@ -22,6 +22,7 @@ import {
   ChevronRight,
   IndentIncrease,
   IndentDecrease,
+  BookOpen,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -34,8 +35,15 @@ import type {
   Hint,
   ChatTurn,
   Prediction,
+  TestResult,
 } from '@/shared/types';
-import { runCode, submitCode, getHint, askCoach } from '@/client/lib/api';
+import {
+  runCode,
+  submitCode,
+  getHint,
+  askCoach,
+  revealSolution,
+} from '@/client/lib/api';
 import { useLocalStorage } from '@/client/hooks/useLocalStorage';
 import {
   useControlSize,
@@ -141,6 +149,18 @@ export function SolveSurface({
   const [hints, setHints] = useState<Hint[]>([]);
   const [hintLoading, setHintLoading] = useState(false);
 
+  // The reference solution, once it is legitimately visible: either earned by
+  // an accepted submit (`earned`) or asked for (`revealed`, which the server
+  // has already recorded as assistance).
+  const [answer, setAnswer] = useState<{
+    code: string;
+    how: 'earned' | 'revealed';
+  } | null>(null);
+  const [answerLoading, setAnswerLoading] = useState(false);
+  // Reveal is a two-tap control: the first tap states the price, the second pays
+  // it. Nobody should give up a clean solve to a mis-tap next to Hint.
+  const [confirmReveal, setConfirmReveal] = useState(false);
+
   const [error, setError] = useState<string | null>(null);
   // Phone only: the results pane collapses to its summary strip.
   const [resultsOpen, setResultsOpen] = useState(true);
@@ -183,6 +203,8 @@ export function SolveSurface({
     setSubmitResult(null);
     setCoaching(null);
     setHints([]);
+    setAnswer(null);
+    setConfirmReveal(false);
     setError(null);
     setPredictOpen(true);
     setPrediction(emptyPrediction());
@@ -255,6 +277,12 @@ export function SolveSurface({
       );
       setSubmitResult(res.result);
       setCoaching(res.coaching);
+      // Solved it — the server hands back the reference solution with the
+      // verdict. No need to ask, and no assistance recorded: it was earned.
+      if (res.referenceSolution) {
+        setAnswer((prev) => prev ?? { code: res.referenceSolution!, how: 'earned' });
+        setConfirmReveal(false);
+      }
       onSubmitted?.(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Submit failed');
@@ -289,6 +317,28 @@ export function SolveSurface({
     }
   }, [problem.id, code, hints.length, hintLoading, isDesktop]);
 
+  const reveal = useCallback(async () => {
+    if (answerLoading || answer) return;
+    // First tap only states the price; the second one pays it.
+    if (!confirmReveal) {
+      setConfirmReveal(true);
+      return;
+    }
+    if (!isDesktop) (document.activeElement as HTMLElement | null)?.blur();
+    setError(null);
+    setResultsOpen(true);
+    setAnswerLoading(true);
+    try {
+      const res = await revealSolution(problem.id);
+      setAnswer({ code: res.referenceSolution, how: 'revealed' });
+      setConfirmReveal(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Reveal failed');
+    } finally {
+      setAnswerLoading(false);
+    }
+  }, [problem.id, answer, answerLoading, confirmReveal, isDesktop]);
+
   // Keyboard shortcuts baked into the editor's keymap — stable identities so a
   // re-render never re-registers them (refs avoid stale closures).
   const handlers = useRef({ run, submit });
@@ -297,8 +347,12 @@ export function SolveSurface({
   const editorSubmit = useCallback(() => handlers.current.submit(), []);
 
   const hasResults =
-    !!runResult || !!submitResult || hints.length > 0 || !!coaching;
+    !!runResult || !!submitResult || hints.length > 0 || !!coaching || !!answer;
   const canAsk = hasResults; // surface the coach chat once there's something to discuss
+  // Whichever suite ran most recently (submit clears run and vice versa) — the
+  // tutor needs the actual failures to answer "why did mine fail?".
+  const lastResults: TestResult[] =
+    submitResult?.results ?? runResult?.results ?? [];
 
   /**
    * The phone results strip: verdict at a glance — coloured icon, verdict
@@ -390,6 +444,37 @@ export function SolveSurface({
       </Button>
     );
 
+  // Always available — including in cold review, where the hint button is gone.
+  // Two taps, and the second one costs the clean solve; the server records the
+  // reveal, so the price is charged whatever the client does afterwards.
+  const answerButton = (compact = false) =>
+    !answer && (
+      <Button
+        variant={confirmReveal ? 'destructive' : 'outline'}
+        size={controlSize}
+        onClick={reveal}
+        disabled={answerLoading}
+        aria-label={
+          confirmReveal
+            ? 'Confirm: show the answer and mark this attempt assisted'
+            : 'Show the answer (marks this attempt assisted)'
+        }
+        title={
+          confirmReveal
+            ? 'Tap again — this marks the attempt assisted, like a hint.'
+            : "Show the reference solution. Counts as assistance, so it won't earn tier credit."
+        }
+        className={cn('min-w-0 gap-1.5 px-2 lg:px-3', compact && 'shrink-0')}
+      >
+        {answerLoading ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <BookOpen className="h-4 w-4" />
+        )}
+        {compact ? confirmReveal && 'Sure?' : confirmReveal ? 'Sure? Counts as assisted' : 'Answer'}
+      </Button>
+    );
+
   const runSubmit = (grow = false) => (
     <>
       <Button
@@ -432,6 +517,7 @@ export function SolveSurface({
         size={controlSize}
       />
       {hintButton()}
+      {answerButton()}
       {runSubmit()}
     </>
   );
@@ -493,6 +579,8 @@ export function SolveSurface({
 
   const resultsBody = (
     <>
+      {answer && <AnswerPanel code={answer.code} how={answer.how} />}
+
       {hints.length > 0 && (
         <div className="space-y-2">
           {hints.map((h) => (
@@ -524,7 +612,14 @@ export function SolveSurface({
 
       {coaching && <CoachPanel brief={coaching} />}
 
-      {canAsk && <CoachChat problem={problem} code={code} controlSize={controlSize} />}
+      {canAsk && (
+        <CoachChat
+          problem={problem}
+          code={code}
+          results={lastResults}
+          controlSize={controlSize}
+        />
+      )}
     </>
   );
 
@@ -770,6 +865,7 @@ export function SolveSurface({
           iconOnly
         />
         {hintButton(true)}
+        {answerButton(true)}
         {runSubmit(true)}
       </div>
     </div>
@@ -827,6 +923,56 @@ export function SolveSurface({
           submission is accepted. */}
       {(onProblemTab || accepted) && footerBar}
       {actionBar}
+    </div>
+  );
+}
+
+/**
+ * The reference solution, once it is legitimately visible. `earned` follows an
+ * accepted submit and costs nothing; `revealed` was asked for, and says plainly
+ * that the attempt is now recorded as assisted.
+ */
+function AnswerPanel({
+  code,
+  how,
+}: {
+  code: string;
+  how: 'earned' | 'revealed';
+}) {
+  const earned = how === 'earned';
+  return (
+    <div
+      className={cn(
+        'rounded-xl border p-4',
+        earned
+          ? 'border-emerald-500/25 bg-emerald-500/5'
+          : 'border-amber-500/25 bg-amber-500/5',
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <BookOpen
+          className={cn(
+            'h-4 w-4 shrink-0',
+            earned ? 'text-emerald-400' : 'text-amber-400',
+          )}
+        />
+        <span
+          className={cn(
+            'text-xs font-semibold uppercase tracking-wide',
+            earned ? 'text-emerald-400' : 'text-amber-400',
+          )}
+        >
+          Reference solution
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {earned
+            ? 'you solved it — here it is'
+            : 'revealed — this attempt counts as assisted'}
+        </span>
+      </div>
+      <pre className="mt-2.5 overflow-x-auto rounded-lg border border-border bg-background/60 p-3 text-xs leading-relaxed">
+        <code>{code}</code>
+      </pre>
     </div>
   );
 }
@@ -1036,10 +1182,13 @@ function PlanPanel({
 function CoachChat({
   problem,
   code,
+  results,
   controlSize,
 }: {
   problem: Problem;
   code: string;
+  /** Last suite that ran — lets the tutor answer "why did mine fail?" from facts. */
+  results: TestResult[];
   controlSize: 'sm' | 'touch';
 }) {
   const touch = controlSize === 'touch';
@@ -1079,6 +1228,7 @@ function CoachChat({
         code,
         question,
         history.slice(-10),
+        results,
       );
       setMessages((prev) => [...prev, { role: 'assistant', content: answer }]);
     } catch (err) {
@@ -1086,7 +1236,7 @@ function CoachChat({
     } finally {
       setAsking(false);
     }
-  }, [input, asking, messages, problem.id, code]);
+  }, [input, asking, messages, problem.id, code, results]);
 
   return (
     <div className="rounded-xl border border-border bg-muted/10">

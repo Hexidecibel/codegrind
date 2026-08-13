@@ -9,6 +9,8 @@ import { hintsRoutes } from './routes/hints.js';
 import { progressRoutes } from './routes/progress.js';
 import { sessionRoutes } from './routes/session.js';
 import { primersRoutes } from './routes/primers.js';
+import { studyRoutes } from './routes/study.js';
+import { reflectRoutes } from './routes/reflect.js';
 
 const app = new Hono();
 
@@ -19,6 +21,8 @@ app.route('/api', hintsRoutes);
 app.route('/api', progressRoutes);
 app.route('/api', sessionRoutes);
 app.route('/api', primersRoutes);
+app.route('/api', studyRoutes);
+app.route('/api', reflectRoutes);
 
 app.get('/api/health', (c) => c.json({ status: 'ok' }));
 

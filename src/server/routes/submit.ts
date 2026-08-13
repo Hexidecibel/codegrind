@@ -1,6 +1,13 @@
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
-import type { SubmitResponse, AskResponse, ChatTurn, Prediction } from '../../shared/types.js';
+import type {
+  SubmitResponse,
+  AskResponse,
+  RevealResponse,
+  ChatTurn,
+  Prediction,
+  TestResult,
+} from '../../shared/types.js';
 import {
   getProblem,
   insertAttempt,
@@ -9,6 +16,8 @@ import {
   bumpReviewOnFail,
   clearReview,
   isReviewQueued,
+  isSolutionRevealed,
+  markSolutionRevealed,
 } from '../services/db.js';
 import { runTests } from '../services/sandbox.service.js';
 import { coach, askFollowup } from '../services/llm.service.js';
@@ -25,6 +34,31 @@ function coercePrediction(raw: unknown): Prediction | undefined {
   let confidence = typeof p.confidence === 'number' ? Math.round(p.confidence) : 3;
   confidence = Math.max(1, Math.min(5, confidence));
   return { approach, predTime, predSpace, confidence };
+}
+
+/** Cap a stringified value so a pathological test payload can't blow up the prompt. */
+function clip(s: string, max = 500): string {
+  return s.length > max ? `${s.slice(0, max)}… (truncated)` : s;
+}
+
+/** Validate client-supplied per-test results (the tutor's view of what failed). */
+function coerceTestResults(raw: unknown): TestResult[] {
+  if (!Array.isArray(raw)) return [];
+  const out: TestResult[] = [];
+  for (const entry of raw.slice(0, 60)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const r = entry as Record<string, unknown>;
+    if (typeof r.name !== 'string' || typeof r.passed !== 'boolean') continue;
+    out.push({
+      name: clip(r.name, 120),
+      passed: r.passed,
+      expected: typeof r.expected === 'string' ? clip(r.expected) : undefined,
+      actual: typeof r.actual === 'string' ? clip(r.actual) : undefined,
+      stderr: typeof r.stderr === 'string' ? clip(r.stderr) : undefined,
+      timeMs: typeof r.timeMs === 'number' && Number.isFinite(r.timeMs) ? r.timeMs : 0,
+    });
+  }
+  return out;
 }
 
 export const submitRoutes = new Hono();
@@ -58,8 +92,13 @@ submitRoutes.post('/submit', async (c) => {
     const problem = body.problemId ? getProblem(body.problemId) : null;
     if (!problem) return c.json({ error: 'problem not found' }, 404);
     const code = typeof body.code === 'string' ? body.code : '';
-    const hintsUsed = typeof body.hintsUsed === 'number' ? body.hintsUsed : 0;
+    const clientHints = typeof body.hintsUsed === 'number' ? body.hintsUsed : 0;
     const prediction = coercePrediction(body.prediction);
+
+    // Reading the answer is assistance, and the ledger for it is server-side.
+    // Counting a reveal as one hint is enough to disqualify the attempt from
+    // every clean-solve path below (tier credit, review clearing, streaks).
+    const assistedHints = Math.max(clientHints, isSolutionRevealed(problem.id) ? 1 : 0);
 
     const result = await runTests(problem.functionName, code, problem.hiddenTests);
     const solved = result.verdict === 'accepted';
@@ -87,7 +126,7 @@ submitRoutes.post('/submit', async (c) => {
       pattern: problem.pattern,
       difficulty: problem.difficulty,
       solved,
-      hintsUsed,
+      hintsUsed: assistedHints,
       testsPassed: result.passed,
       testsTotal: result.total,
       code,
@@ -97,19 +136,25 @@ submitRoutes.post('/submit', async (c) => {
     });
 
     // Update per-topic spaced-repetition / progression state (keyed on topic).
-    updateSkillOnAttempt(problem.topic, problem.difficulty, solved, hintsUsed);
+    // AFTER insertAttempt on purpose — the tier derivation counts this attempt.
+    updateSkillOnAttempt(problem.topic, solved, assistedHints);
 
-    // Retrieval loop: a clean unaided solve clears the review; a miss or a
-    // hint-assisted solve (re-)queues it on the spaced ladder.
-    if (solved && hintsUsed === 0) {
+    // Retrieval loop: a clean unaided solve clears the review; a miss or an
+    // assisted solve (hint or revealed answer) (re-)queues it on the ladder.
+    if (solved && assistedHints === 0) {
       clearReview(problem.id);
     } else if (isReviewQueued(problem.id)) {
       bumpReviewOnFail(problem.id);
     } else {
-      enqueueReview(problem.id, hintsUsed > 0 && solved ? 'hinted' : 'failed');
+      enqueueReview(problem.id, assistedHints > 0 && solved ? 'hinted' : 'failed');
     }
 
-    const payload: SubmitResponse = { result, coaching };
+    // Solved it — so stop hiding the answer. The coach already discusses the
+    // reference solution; withholding the text of it here was the infuriating
+    // part. Still absent on every unsolved submit.
+    const payload: SubmitResponse = solved
+      ? { result, coaching, referenceSolution: problem.referenceSolution }
+      : { result, coaching };
     return c.json(payload);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -118,7 +163,10 @@ submitRoutes.post('/submit', async (c) => {
   }
 });
 
-// POST /api/ask { problemId, code, question, history? } — free-form tutor Q&A.
+// POST /api/ask { problemId, code, question, history?, results? } — tutor Q&A.
+// `results` are the per-test outcomes of the last submit: without them the
+// tutor cannot see which test failed and answers "why did mine fail?" by
+// guessing from the code.
 submitRoutes.post('/ask', async (c) => {
   try {
     const body = await c.req.json<{
@@ -126,6 +174,7 @@ submitRoutes.post('/ask', async (c) => {
       code?: string;
       question?: string;
       history?: ChatTurn[];
+      results?: unknown;
     }>();
     const problem = body.problemId ? getProblem(body.problemId) : null;
     if (!problem) return c.json({ error: 'problem not found' }, 404);
@@ -141,12 +190,39 @@ submitRoutes.post('/ask', async (c) => {
         )
       : [];
 
-    const answer = await askFollowup(problem, code, question, history);
+    const results = coerceTestResults(body.results);
+
+    const answer = await askFollowup(problem, code, question, history, results);
     const payload: AskResponse = { answer };
     return c.json(payload);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     console.error('[ask]', message);
+    return c.json({ error: message }, 500);
+  }
+});
+
+// POST /api/reveal { problemId } — "show me the answer".
+//
+// Always available, unconditionally. The price is recorded, not charged at the
+// door: the reveal is written to the ledger BEFORE the solution is returned, so
+// the subsequent submit counts as assisted no matter what the client does next.
+submitRoutes.post('/reveal', async (c) => {
+  try {
+    const body = await c.req.json<{ problemId?: string }>();
+    const problem = body.problemId ? getProblem(body.problemId) : null;
+    if (!problem) return c.json({ error: 'problem not found' }, 404);
+
+    markSolutionRevealed(problem.id);
+
+    const payload: RevealResponse = {
+      referenceSolution: problem.referenceSolution,
+      assisted: true,
+    };
+    return c.json(payload);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[reveal]', message);
     return c.json({ error: message }, 500);
   }
 });

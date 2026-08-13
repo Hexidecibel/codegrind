@@ -62,8 +62,10 @@ export function Layout({ children }: { children: ReactNode }) {
         <nav className="ml-auto flex items-center gap-1">
           <Tab to="/" icon={<Zap className="h-4 w-4" />} label="Grind" end />
           <Tab to="/manual" icon={<Code2 className="h-4 w-4" />} label="Manual" />
-          <Tab to="/progress" icon={<BarChart3 className="h-4 w-4" />} label="Progress" />
-          <Tab to="/library" icon={<BookOpen className="h-4 w-4" />} label="Library" />
+          {/* Route stays /progress so old bookmarks keep working; the label is
+              what the page actually does now. */}
+          <Tab to="/progress" icon={<BarChart3 className="h-4 w-4" />} label="Reflect" />
+          <Tab to="/study" icon={<BookOpen className="h-4 w-4" />} label="Study" />
         </nav>
       </header>
       <main className="min-h-0 flex-1">{children}</main>

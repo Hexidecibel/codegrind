@@ -103,6 +103,33 @@
   }
 }
 
+/* ---- Reflect: horizontal scrollers ----------------------------------
+   The skill tree and the activity heatmap are intrinsically wider than a
+   390px phone, so each lives in its own `overflow-x: auto` box and the page
+   body never scrolls sideways. Two things make that survivable on a phone:
+
+   `overscroll-behavior-x: contain` stops a swipe that runs off the end of the
+   tree from turning into the browser's back gesture — losing your place
+   because you flicked a chart is a rotten outcome.
+
+   The scrollbar is thin rather than hidden: on desktop it is the only cue
+   that there is more tree to the right. */
+.reflect-hscroll {
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.reflect-hscroll::-webkit-scrollbar {
+  height: 6px;
+}
+.reflect-hscroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.reflect-hscroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* ---- Markdown prose for the problem prompt ------------------------- */
 .prose-cg {
   @apply text-sm leading-relaxed text-foreground/90;
@@ -154,4 +181,104 @@
 .prose-cg th,
 .prose-cg td {
   @apply border border-border px-2 py-1 text-left;
+}
+
+/* ---- Markdown prose for the Study feed ------------------------------
+   Same structure as .prose-cg, retuned for sustained reading in bed:
+   `.prose-cg` is text-sm (right for a problem panel beside an editor, too
+   small for a chapter of text), so the base grows to ~17px, the leading
+   opens to 1.7, and the measure is capped at 68ch. Everything else keeps
+   the house rhythm so the two renderers still look like one app. */
+.prose-study {
+  @apply text-[1.0625rem] leading-[1.7] text-foreground/90;
+  max-width: 68ch;
+}
+.prose-study p {
+  @apply my-3.5;
+}
+.prose-study h1,
+.prose-study h2,
+.prose-study h3 {
+  @apply mb-2 mt-6 font-semibold leading-snug text-foreground;
+}
+.prose-study h1 {
+  @apply text-xl;
+}
+.prose-study h2 {
+  @apply text-lg;
+}
+.prose-study h3 {
+  @apply text-base;
+}
+.prose-study ul {
+  @apply my-3.5 list-disc space-y-2 pl-6;
+}
+.prose-study ol {
+  @apply my-3.5 list-decimal space-y-2 pl-6;
+}
+.prose-study li::marker {
+  @apply text-muted-foreground;
+}
+.prose-study code {
+  @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em];
+}
+.prose-study pre {
+  @apply my-4 overflow-x-auto rounded-lg border border-border bg-black/30 p-3 text-[0.85em] leading-relaxed;
+}
+.prose-study pre code {
+  @apply bg-transparent p-0 text-[1em];
+}
+.prose-study a {
+  @apply text-primary underline underline-offset-2;
+}
+.prose-study strong {
+  @apply font-semibold text-foreground;
+}
+.prose-study blockquote {
+  @apply my-3.5 border-l-2 border-border pl-4 text-muted-foreground;
+}
+.prose-study hr {
+  @apply my-6 border-border;
+}
+.prose-study table {
+  @apply my-4 w-full border-collapse text-sm;
+}
+.prose-study th,
+.prose-study td {
+  @apply border border-border px-2.5 py-1.5 text-left;
+}
+
+/* ---- Study dim/warm mode --------------------------------------------
+   A class on the feed container, not a global theme. The palette tokens
+   are plain CSS vars consumed through `@theme inline`, so re-declaring
+   them on a subtree re-tints every Tailwind colour utility underneath
+   without touching the rest of the app. Warmer hue (~70 vs 265) + a
+   narrower lightness spread = less blue light and lower contrast, which
+   is the whole point at 1am. No `filter` on the scroller: repainting a
+   filtered scroll container on a phone is exactly the jank we're
+   avoiding. */
+.study-dim {
+  --background: oklch(0.14 0.011 70);
+  --foreground: oklch(0.83 0.022 75);
+  --card: oklch(0.175 0.013 70);
+  --card-foreground: oklch(0.83 0.022 75);
+  --popover: oklch(0.17 0.013 70);
+  --popover-foreground: oklch(0.83 0.022 75);
+  --primary: oklch(0.62 0.1 70);
+  --primary-foreground: oklch(0.14 0.011 70);
+  --secondary: oklch(0.24 0.016 70);
+  --secondary-foreground: oklch(0.83 0.022 75);
+  --muted: oklch(0.24 0.016 70);
+  --muted-foreground: oklch(0.6 0.02 75);
+  --accent: oklch(0.26 0.018 70);
+  --accent-foreground: oklch(0.83 0.022 75);
+  --border: oklch(0.25 0.014 70);
+  --input: oklch(0.25 0.014 70);
+  --ring: oklch(0.62 0.1 70);
+}
+/* Saturated per-kind accents (violet/rose/emerald…) live outside the token
+   set, so knock them back individually. Scoped to the small chips and rules
+   that carry them — a handful of tiny elements, negligible to repaint. */
+.study-dim .study-accent {
+  filter: saturate(0.55) brightness(0.9);
 }

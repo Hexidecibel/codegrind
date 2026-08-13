@@ -58,4 +58,9 @@ NODE
 
 echo "==> dist"
 du -sh dist
-ls -la dist/assets | head -20
+# Informational only — never let it fail the build. Once dist/assets outgrew the
+# pipe buffer, `head` closing the pipe started killing `ls` with SIGPIPE (141),
+# and `set -o pipefail` turned that into a build failure that aborted bin/deploy
+# before it reached the restart step.
+ls -la dist/assets | head -20 || true
+echo "    ($(find dist/assets -type f ! -name '*.br' ! -name '*.gz' | wc -l) source assets, $(find dist/assets -type f | wc -l) total incl. .br/.gz)"
