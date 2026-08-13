@@ -562,6 +562,10 @@ export function SolveSurface({
         value={code}
         onChange={setCode}
         settings={assistance}
+        // Off the PROBLEM, never off the active setting — flipping the language
+        // while this tab is open must not re-colour or re-indent the problem
+        // currently on screen, which is still graded by its own harness.
+        language={problem.language}
         onRun={editorRun}
         onSubmit={editorSubmit}
       />

@@ -8,6 +8,11 @@
 // tested without a browser.
 
 import type { editor } from 'monaco-editor';
+import {
+  DEFAULT_LANGUAGE,
+  LANGUAGE_META,
+  type Language,
+} from '@/shared/languages';
 
 export type AssistanceLevel = 1 | 2 | 3 | 4;
 
@@ -21,7 +26,17 @@ export interface AssistanceOverrides {
   autocomplete: boolean;
 }
 
-export type MonacoLanguage = 'javascript' | 'plaintext';
+/**
+ * A Monaco grammar id, or `plaintext` when highlighting is switched off.
+ *
+ * `Language` doubles as the id set because `LANGUAGE_META[l].monacoId` is the
+ * same token for all three — Monaco's ids for JavaScript, Python and Java
+ * happen to be exactly our language names. `monacoIdFor` below reads the meta
+ * rather than the language, so the day one of them diverges (say a language
+ * whose Monaco id is `csharp` but whose token is `c-sharp`) only that one
+ * mapping changes.
+ */
+export type MonacoLanguage = Language | 'plaintext';
 
 export interface AssistanceSettings {
   /** The active preset, or 'custom' when a single toggle diverges. */
@@ -125,21 +140,56 @@ export function matchLevel(o: AssistanceOverrides): AssistanceLevel | 'custom' {
 export function assistanceToMonacoOptions(
   level: AssistanceLevel,
   overrides?: Partial<AssistanceOverrides>,
+  language: Language = DEFAULT_LANGUAGE,
 ): { language: MonacoLanguage; options: editor.IStandaloneEditorConstructionOptions } {
   const o: AssistanceOverrides = { ...presetToOverrides(level), ...overrides };
-  return { language: languageFor(o), options: overridesToOptions(o) };
+  return { language: languageFor(o, language), options: overridesToOptions(o, language) };
 }
 
-/** Model language derived purely from the syntax-highlighting toggle. */
-export function languageFor(o: AssistanceOverrides): MonacoLanguage {
-  return o.syntaxHighlighting ? 'javascript' : 'plaintext';
+/**
+ * Model language: the problem's grammar when highlighting is on, `plaintext`
+ * when it is off (the "Raw" rung is meant to be a notepad).
+ *
+ * `language` is defaulted rather than required, which is the opposite of the
+ * rule the db accessors follow — and deliberately so. A missed call site there
+ * is a silent cross-language READ; here it is a mis-coloured editor, which the
+ * user can see. Requiring it would only add ceremony to the two pure-preset
+ * call sites that have no problem in scope.
+ */
+export function languageFor(
+  o: AssistanceOverrides,
+  language: Language = DEFAULT_LANGUAGE,
+): MonacoLanguage {
+  return o.syntaxHighlighting ? monacoIdFor(language) : 'plaintext';
 }
 
-/** Map resolved override booleans to a Monaco options object. */
+/** The Monaco grammar id for a language, read from the shared meta. */
+export function monacoIdFor(language: Language): MonacoLanguage {
+  return LANGUAGE_META[language].monacoId as MonacoLanguage;
+}
+
+/** Map resolved override booleans (+ the problem's language) to Monaco options. */
 export function overridesToOptions(
   o: AssistanceOverrides,
+  language: Language = DEFAULT_LANGUAGE,
 ): editor.IStandaloneEditorConstructionOptions {
   return {
+    // Indent width is a property of the LANGUAGE, not of the assistance rung:
+    // Python's 4 is its block structure rather than a preference.
+    tabSize: LANGUAGE_META[language].indentSize,
+    // Pinned true, for every language, always. In Python a literal tab is a
+    // real failure and an invisible one — the file looks correctly indented and
+    // raises TabError or, worse, silently binds a block to the wrong suite. It
+    // is pinned rather than made language-conditional because there is no
+    // language here where a hard tab is the better default, and a conditional
+    // would be one edit away from being wrong for Python.
+    insertSpaces: true,
+    // Without this the two lines above are DECORATIVE. Monaco's
+    // detectIndentation defaults to true, which re-derives tabSize and
+    // insertSpaces from the model's own text and silently discards whatever was
+    // configured — so a starter snippet that happened to contain one tab would
+    // switch the editor to tabs for a Python problem.
+    detectIndentation: false,
     lineNumbers: o.lineNumbers ? 'on' : 'off',
     autoIndent: o.autoIndent ? 'full' : 'none',
     autoClosingBrackets: o.autoCloseBrackets ? 'languageDefined' : 'never',

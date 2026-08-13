@@ -34,9 +34,12 @@ const BASE_OPTIONS: editor.IStandaloneEditorConstructionOptions = {
   scrollBeyondLastLine: false,
   smoothScrolling: true,
   padding: { top: 12, bottom: 12 },
-  tabSize: 2,
   automaticLayout: true,
   fixedOverflowWidgets: true,
+  // tabSize / insertSpaces / detectIndentation deliberately absent: they are a
+  // property of the problem's LANGUAGE, so overridesToOptions owns them. Having
+  // a default here too would mean two sources of truth for Python's indentation,
+  // and the wrong one wins whenever the spread order changes.
 };
 
 /** Desktop editor (≥ lg). Mobile gets CodeMirror 6 — see CodeEditor.tsx. */
@@ -44,14 +47,15 @@ export function MonacoEditor({
   value,
   onChange,
   settings,
+  language: problemLanguage,
   onRun,
   onSubmit,
   onReady,
 }: CodeEditorImplProps) {
-  const language = languageFor(settings.overrides);
+  const language = languageFor(settings.overrides, problemLanguage);
   const options = useMemo<editor.IStandaloneEditorConstructionOptions>(
-    () => ({ ...BASE_OPTIONS, ...overridesToOptions(settings.overrides) }),
-    [settings.overrides],
+    () => ({ ...BASE_OPTIONS, ...overridesToOptions(settings.overrides, problemLanguage) }),
+    [settings.overrides, problemLanguage],
   );
 
   // Refs keep the commands off the re-registration path (and out of stale closures).

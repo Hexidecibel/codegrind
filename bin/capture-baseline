@@ -112,12 +112,18 @@ DB="$DB" OUT="$OUT_DIR/credits-by-topic.json" node -e '
 const fs = require("node:fs");
 const Database = require("better-sqlite3");
 const db = new Database(process.env.DB, { readonly: true });
+// `language` is part of the capture, not just of the ORDER BY. Before Phase 3
+// every row was javascript, so "the whole table" and "the javascript rows" were
+// the same list and bin/verify-migration could compare the filtered read
+// against the unfiltered baseline. With a second language banked they are
+// different lists, and without the column here the filtered check has nothing
+// to compare against.
 const rows = db.prepare(`
-  SELECT p.topic AS key, a.problemId AS problemId, p.difficulty AS difficulty,
-         a.solved AS solved, a.hintsUsed AS hintsUsed
+  SELECT p.topic AS key, p.language AS language, a.problemId AS problemId,
+         p.difficulty AS difficulty, a.solved AS solved, a.hintsUsed AS hintsUsed
   FROM attempts a
   JOIN problems p ON p.id = a.problemId
-  ORDER BY p.topic, a.problemId, p.difficulty, a.solved, a.hintsUsed
+  ORDER BY p.topic, p.language, a.problemId, p.difficulty, a.solved, a.hintsUsed
 `).all();
 db.close();
 fs.writeFileSync(process.env.OUT, JSON.stringify(rows, null, 2) + "\n");

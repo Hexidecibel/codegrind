@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Problem, Difficulty } from '@/shared/types';
+import { LANGUAGE_META } from '@/shared/languages';
 import { Badge } from '@/client/components/ui/badge';
 import { humanize } from '@/client/lib/format';
 import { cn } from '@/lib/utils';
@@ -46,6 +47,22 @@ export function ProblemPanel({
               className="border-primary/40 bg-primary/10 text-primary"
             >
               {humanize(problem.pattern)}
+            </Badge>
+            {/*
+              READ-ONLY on the solve surface, and that is the design rather than
+              an omission. A problem's language is baked into its reference
+              solution and every `expected` value the sandbox derived from it, so
+              there is nothing here to switch — a control would imply the problem
+              could be re-served in another language, which it cannot. The
+              picker lives next to topic/difficulty, where the choice actually
+              takes effect: on what gets generated NEXT.
+            */}
+            <Badge
+              variant="outline"
+              className="border-sky-500/30 bg-sky-500/15 text-sky-400"
+              title="Problems are generated per language — switch languages from the toolbar"
+            >
+              {LANGUAGE_META[problem.language].displayName}
             </Badge>
           </div>
         </div>
