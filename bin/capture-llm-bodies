@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Re-capture the golden LLM request-body fixture.
+#
+#   bin/capture-llm-bodies
+#
+# COSTS NOTHING AND TOUCHES NOTHING. The transport is faked, so no key is used,
+# no request leaves the machine, and the database is never opened.
+#
+# What it writes:
+#   src/server/services/__fixtures__/llm-request-bodies.json
+#
+# That file is the frozen "before" of the provider abstraction: the exact body —
+# key order included — that each of the eleven call sites sent when they each
+# hand-wrote their own `messages.create`. llm.golden.test.ts asserts the current
+# code still produces it.
+#
+# RUN THIS DELIBERATELY, NEVER TO MAKE A RED TEST GO GREEN. A diff here means one
+# of two things, and only you can say which:
+#   - the request genuinely changed and you meant it (a new prompt, a new budget)
+#     -> re-capture, and put the reason in the commit message
+#   - the request changed and you did not mean it (a reordered key, a dropped
+#     cache_control, a thinking mode that flipped) -> that is the bug the fixture
+#     exists to catch. Fix the code, not the fixture.
+#
+# Review `git diff` on the fixture before committing. Always.
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR" || exit 1
+
+# better-sqlite3 is ABI-pinned; lib/node.sh finds a Node that will not crash it.
+# (Nothing here opens SQLite, but vitest loads the whole module graph.)
+# shellcheck source=lib/node.sh
+source "$REPO_DIR/bin/lib/node.sh"
+cg_require_node
+
+printf 'codegrind :: capture-llm-bodies\n'
+printf '  node %s\n' "${CG_NODE_VERSION}"
+printf '  out  src/server/services/__fixtures__/llm-request-bodies.json\n\n'
+
+CG_UPDATE_GOLDEN=1 npx vitest run src/server/services/llm.golden.test.ts --reporter=dot
+status=$?
+
+printf '\n'
+if [ "$status" -ne 0 ]; then
+  printf 'FAIL: capture did not complete (exit %s)\n' "$status"
+  exit 1
+fi
+
+printf 'captured. Review the diff before committing:\n'
+printf '    git diff -- src/server/services/__fixtures__/llm-request-bodies.json\n'

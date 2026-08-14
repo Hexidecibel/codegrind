@@ -54,8 +54,19 @@ async function canonicalizeTests(
   return out;
 }
 
-/** Rebuild a generated problem with reference-canonicalized tests, or null if too few survive. */
-async function canonicalize(
+/**
+ * Rebuild a generated problem with reference-canonicalized tests, or null if too
+ * few survive.
+ *
+ * EXPORTED BECAUSE IT IS THE ONLY OBJECTIVE JUDGE OF A MODEL IN THIS CODEBASE.
+ * Everything else about a generated problem is a matter of taste; this either
+ * comes back with a problem or it does not, and it does so by actually running
+ * the model's own reference solution against the model's own test inputs. A
+ * capability probe that asks "is this endpoint good enough for codegrind?" has
+ * no better question available to it, and asking this one costs a function call
+ * rather than a reimplementation that would drift.
+ */
+export async function canonicalize(
   language: Language,
   gen: GeneratedProblem
 ): Promise<GeneratedProblem | null> {
@@ -173,7 +184,20 @@ export async function generateAndStore(
     );
   }
 
-  const record: ProblemRecord = {
+  const record = toRecord(language, topic, difficulty, gen, canonicalized);
+  insertProblem(record);
+  return record;
+}
+
+/** A generated problem, stamped into a storable record. */
+function toRecord(
+  language: Language,
+  topic: Topic,
+  difficulty: Difficulty,
+  gen: GeneratedProblem,
+  canonicalized: boolean
+): ProblemRecord {
+  return {
     id: nanoid(),
     // The language that produced these `expected` values, stamped at the moment
     // they were produced — and the language the sandbox was actually invoked
@@ -195,8 +219,134 @@ export async function generateAndStore(
     used: false,
     createdAt: new Date().toISOString(),
   };
-  insertProblem(record);
-  return record;
+}
+
+// ---------------------------------------------------------------------------
+// dryRunGenerate — one attempt, honestly scored
+// ---------------------------------------------------------------------------
+/** Which stage failed. The distinction is the entire point of this function. */
+export type DryRunFailure =
+  /** The model never produced a usable tool call (or the call threw). */
+  | 'generation'
+  /** It produced one, but its own reference errored on most of its own inputs. */
+  | 'too-few-tests'
+  /** The SANDBOX could not run. Nothing was learned about the model. */
+  | 'sandbox';
+
+export type DryRunResult =
+  | {
+      ok: true;
+      language: Language;
+      topic: Topic;
+      difficulty: Difficulty;
+      problem: GeneratedProblem;
+      /** Test counts AFTER canonicalization — i.e. tests that actually ran. */
+      sampleTests: number;
+      hiddenTests: number;
+      /** The id it was stored under, or null when this was a true dry run. */
+      storedId: string | null;
+      ms: number;
+    }
+  | {
+      ok: false;
+      language: Language;
+      topic: Topic;
+      difficulty: Difficulty;
+      failure: DryRunFailure;
+      error: string;
+      /** Present once generation itself succeeded. */
+      title?: string;
+      ms: number;
+    };
+
+/**
+ * Generate one problem, canonicalize it, and report what happened — WITHOUT
+ * storing it unless asked to.
+ *
+ * This is deliberately NOT `generateAndStore` with a flag. Two differences, both
+ * load-bearing:
+ *
+ *   1. ONE ATTEMPT, never three. `generateAndStore` retries because a player is
+ *      waiting and a problem has to appear; the single-shot rate is what
+ *      predicts what using this model will actually feel like, and a 3-attempt
+ *      loop hides exactly that. (Go's measured rate on the incumbent: 8 accepted
+ *      in 10 calls.)
+ *   2. IT NAMES THE STAGE THAT FAILED. `generateAndStore` collapses a broken
+ *      Docker into the same "could not generate" as a bad completion, which is
+ *      correct for a player and useless for judging a model. A missing runner
+ *      image must never be scored against the model — so `sandbox` is its own
+ *      outcome, and a caller that treats it as a model failure is wrong.
+ *
+ * It reuses `canonicalize`, `MIN_SAMPLE_TESTS`/`MIN_HIDDEN_TESTS` and `runTests`
+ * unchanged: a probe that measured a DIFFERENT bar than the app enforces would
+ * be measuring nothing.
+ *
+ * Cost: exactly one generation call, plus two sandbox runs when it succeeds.
+ */
+export async function dryRunGenerate(
+  language: Language,
+  topic: Topic,
+  difficulty: Difficulty,
+  opts: { keep?: boolean } = {}
+): Promise<DryRunResult> {
+  const startedAt = Date.now();
+  const where = { language, topic, difficulty };
+  const elapsed = () => Date.now() - startedAt;
+  const reason = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+  let raw: GeneratedProblem;
+  try {
+    raw = await generateProblem(language, topic, difficulty);
+  } catch (err) {
+    return { ok: false, ...where, failure: 'generation', error: reason(err), ms: elapsed() };
+  }
+
+  let canon: GeneratedProblem | null;
+  try {
+    canon = await canonicalize(language, raw);
+  } catch (err) {
+    // The sandbox itself could not run (Docker down, image missing, script
+    // gone). Infrastructure, not the model — and never scored against it.
+    return {
+      ok: false,
+      ...where,
+      failure: 'sandbox',
+      error: reason(err),
+      title: raw.title,
+      ms: elapsed(),
+    };
+  }
+
+  if (!canon) {
+    return {
+      ok: false,
+      ...where,
+      failure: 'too-few-tests',
+      error:
+        `The reference solution errored on too many of its own test inputs: fewer than ` +
+        `${MIN_SAMPLE_TESTS} sample / ${MIN_HIDDEN_TESTS} hidden tests survived canonicalization.`,
+      title: raw.title,
+      ms: elapsed(),
+    };
+  }
+
+  let storedId: string | null = null;
+  if (opts.keep) {
+    // Only ever reached on success, so this is always a canonicalized record.
+    const record = toRecord(language, topic, difficulty, canon, true);
+    insertProblem(record);
+    storedId = record.id;
+  }
+
+  return {
+    ok: true,
+    ...where,
+    problem: canon,
+    sampleTests: canon.sampleTests.length,
+    hiddenTests: canon.hiddenTests.length,
+    storedId,
+    ms: elapsed(),
+  };
 }
 
 /**

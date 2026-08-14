@@ -1,0 +1,903 @@
+{
+  "generateProblem javascript/arrays/easy": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 16000,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are an expert interview coach and problem author. You produce ONE self-contained LeetCode-style coding problem for a candidate practicing interview patterns in JavaScript.\n\nHard requirements — the problem MUST be auto-gradeable:\n- The solution is a single PURE, DETERMINISTIC JavaScript function. No I/O, no randomness, no Date/network, no global state.\n- Provide a clear function signature via starterCode: a named function declaration with the right parameters and an empty body (or a \"// your code here\" comment and a reasonable default return). Use plain JS (no TypeScript types).\n- The exported/tested function name must exactly match the name in starterCode.\n- Every test is { name, args, expected } where args is the ARGUMENT LIST (array) spread into the function, and expected is the exact return value (deep-equal compared). Inputs and outputs must be JSON-serializable (numbers, strings, booleans, null, arrays, plain objects).\n- Provide 2-3 visible sampleTests and 8-12 hiddenTests. Hidden tests MUST cover edge cases (empty input, single element, duplicates, negatives, boundaries, large-but-deterministic cases) beyond the samples.\n- referenceSolution is COMPLETE, CORRECT JavaScript defining the same function name; it must pass every sample and hidden test. Return ONLY the function definition(s), no surrounding prose or exports.\n- The prompt is Markdown: a concise problem statement. examples[] are human-readable illustrations. constraints[] are short bullet strings.\n- pattern is the underlying algorithmic pattern tag (e.g. \"two-pointer\", \"sliding-window\", \"hashing\", \"binary-search\", \"dynamic-programming\").\n\nMatch the requested topic and difficulty. Keep it crisp and fair — the kind of question that actually shows up in interviews. Return your problem by calling the emit_problem tool exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_problem",
+        "description": "Emit one complete, auto-gradeable coding problem.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short problem title."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "Full problem statement in Markdown."
+            },
+            "pattern": {
+              "type": "string",
+              "description": "Underlying algorithmic pattern tag."
+            },
+            "examples": {
+              "type": "array",
+              "description": "Human-readable illustrative examples.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "input": {
+                    "type": "string"
+                  },
+                  "output": {
+                    "type": "string"
+                  },
+                  "explanation": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "input",
+                  "output"
+                ]
+              }
+            },
+            "constraints": {
+              "type": "array",
+              "description": "Short constraint bullet strings.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "functionName": {
+              "type": "string",
+              "description": "The exact function name the tests call (must match starterCode)."
+            },
+            "starterCode": {
+              "type": "string",
+              "description": "JS starter: named function signature with an empty/stub body."
+            },
+            "sampleTests": {
+              "type": "array",
+              "description": "2-3 visible test cases.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "args": {
+                    "type": "array",
+                    "description": "Argument list spread into the function."
+                  },
+                  "expected": {}
+                },
+                "required": [
+                  "name",
+                  "args",
+                  "expected"
+                ]
+              }
+            },
+            "hiddenTests": {
+              "type": "array",
+              "description": "8-12 hidden edge-case test cases.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "args": {
+                    "type": "array"
+                  },
+                  "expected": {}
+                },
+                "required": [
+                  "name",
+                  "args",
+                  "expected"
+                ]
+              }
+            },
+            "referenceSolution": {
+              "type": "string",
+              "description": "Complete correct JS defining functionName; passes all tests."
+            }
+          },
+          "required": [
+            "title",
+            "prompt",
+            "pattern",
+            "examples",
+            "constraints",
+            "functionName",
+            "starterCode",
+            "sampleTests",
+            "hiddenTests",
+            "referenceSolution"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_problem"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Create one easy problem for the topic/pattern \"arrays\". Make it self-contained and deterministic so it can be auto-graded."
+      }
+    ]
+  },
+  "generateProblem go/binary-search/expert +opts": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 16000,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are an expert interview coach and problem author. You produce ONE self-contained LeetCode-style coding problem for a candidate practicing interview patterns in Go.\n\nHard requirements — the problem MUST be auto-gradeable:\n- The solution is a single PURE, DETERMINISTIC Go function. No I/O, no randomness, no Date/network, no global state.\n- Provide a clear function signature via starterCode: the line `package main`, a blank line, then one top-level `func` with the right parameters, one return value, and a body containing just a `// your code here` comment and a zero-value return. starterCode must be a COMPLETE, COMPILABLE Go file — it is the exact text the candidate starts editing and the exact text that gets compiled.\n- The exported/tested function name must exactly match the name in starterCode.\n- Every test is { name, args, expected } where args is the ARGUMENT LIST (array) spread into the function, and expected is the exact return value (deep-equal compared). Inputs and outputs must be JSON-serializable (numbers, strings, booleans, null, arrays, plain objects).\n- Provide 2-3 visible sampleTests and 8-12 hiddenTests. Hidden tests MUST cover edge cases (empty input, single element, duplicates, negatives, boundaries, large-but-deterministic cases) beyond the samples.\n- referenceSolution is a COMPLETE, COMPILABLE Go file defining the same function name; it must pass every sample and hidden test. Open with `package main`, then any imports it needs, then the function definition(s) — no surrounding prose and no func main.\n- The prompt is Markdown: a concise problem statement. examples[] are human-readable illustrations. constraints[] are short bullet strings.\n- pattern is the underlying algorithmic pattern tag (e.g. \"two-pointer\", \"sliding-window\", \"hashing\", \"binary-search\", \"dynamic-programming\").\n- The solution is ONE top-level function in package main, plus any helper functions it needs. Both starterCode and referenceSolution open with `package main` and are complete compilable files — the candidate's file is compiled exactly as written, with nothing wrapped around it, which is also why every compiler error points at the line they are looking at.\n- Never write `func main()`. The harness supplies one, and a second is a redeclaration error that fails the build before any test runs.\n- RETURN EXACTLY ONE VALUE. The (result, error) idiom cannot be graded: there is no expected value to compare an error against. Signal an impossible input with a sentinel the problem defines (-1, an empty slice) instead.\n- PARAMETER AND RETURN TYPES ARE LIMITED TO: int, float64, string, bool, and slices and maps built from those — []int, []string, []float64, [][]int, []bool, map[string]int, map[string][]int, map[string]string. Nothing else. No custom structs (no TreeNode, no ListNode, no Pair), no pointers, no interfaces, no `any`, no channels, no generics or type parameters, no variadic parameters, no rune or byte or int64 or float32. A type outside this list has no JSON form and the problem cannot be run at all.\n- Unused imports and unused local variables are COMPILE ERRORS in Go, not warnings. Every import must be used and every declared variable must be read.\n- The standard library only, and nothing that touches the outside world: no fmt.Scan, no os, no time.Now, no math/rand, no network. sort, strings, strconv, math and container/heap are all fine and are usually the right answer.\n- Return a slice rather than a nil slice where the answer is \"nothing\" — though the harness treats a nil slice as an empty one, so an idiomatic `var out []int` accumulator is safe.\n- Indent with TABS, as gofmt does.\n\nMatch the requested topic and difficulty. Keep it crisp and fair — the kind of question that actually shows up in interviews. Return your problem by calling the emit_problem tool exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_problem",
+        "description": "Emit one complete, auto-gradeable coding problem.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short problem title."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "Full problem statement in Markdown."
+            },
+            "pattern": {
+              "type": "string",
+              "description": "Underlying algorithmic pattern tag."
+            },
+            "examples": {
+              "type": "array",
+              "description": "Human-readable illustrative examples.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "input": {
+                    "type": "string"
+                  },
+                  "output": {
+                    "type": "string"
+                  },
+                  "explanation": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "input",
+                  "output"
+                ]
+              }
+            },
+            "constraints": {
+              "type": "array",
+              "description": "Short constraint bullet strings.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "functionName": {
+              "type": "string",
+              "description": "The exact function name the tests call (must match starterCode)."
+            },
+            "starterCode": {
+              "type": "string",
+              "description": "Go starter: `package main`, then one top-level func with the right parameters, a single return value and a stub body. Must compile as-is."
+            },
+            "sampleTests": {
+              "type": "array",
+              "description": "2-3 visible test cases.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "args": {
+                    "type": "array",
+                    "description": "Argument list spread into the function."
+                  },
+                  "expected": {}
+                },
+                "required": [
+                  "name",
+                  "args",
+                  "expected"
+                ]
+              }
+            },
+            "hiddenTests": {
+              "type": "array",
+              "description": "8-12 hidden edge-case test cases.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "args": {
+                    "type": "array"
+                  },
+                  "expected": {}
+                },
+                "required": [
+                  "name",
+                  "args",
+                  "expected"
+                ]
+              }
+            },
+            "referenceSolution": {
+              "type": "string",
+              "description": "Complete correct Go (package main + imports + funcs) defining functionName; passes all tests."
+            }
+          },
+          "required": [
+            "title",
+            "prompt",
+            "pattern",
+            "examples",
+            "constraints",
+            "functionName",
+            "starterCode",
+            "sampleTests",
+            "hiddenTests",
+            "referenceSolution"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_problem"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Create one expert problem for the topic/pattern \"binary-search\". Make it self-contained and deterministic so it can be auto-graded.\n\nThis is an EXPERT problem — the top rung of the ladder. A hard problem with bigger inputs is NOT expert. Every one of these must hold:\n\n- COMPOSITION: the intended solution must combine AT LEAST TWO distinct techniques that have to cooperate — e.g. binary search on the answer wrapped around a greedy feasibility check; a monotonic stack whose output feeds a prefix-sum sweep; hashing to canonicalize plus a two-pointer invariant to scan; sorting by one key while maintaining a heap on another. One textbook pattern applied cleanly is a MEDIUM problem. Do not write that.\n- A NON-OBVIOUS REDUCTION: the first idea a strong candidate reaches for should be the WRONG one. The intended approach should turn on a reframing — an invariant, counting complements instead of matches, processing in an unexpected order, transforming to differences/prefix space, or solving the dual. The prompt must make the reduction discoverable but must never state it.\n- CONSTRAINTS THAT FORCE THE OPTIMAL COMPLEXITY: put concrete numeric bounds in constraints[] (e.g. \"1 <= n <= 2*10^5\", \"|values| <= 10^9\") chosen so the obvious brute force is definitively too slow and only the intended complexity survives. The bounds are a filter, not decoration — pick them deliberately.\n- DEPTH, NOT BULK: exactly one hard idea plus careful implementation. Never several easy sub-tasks stapled together, never a multi-part \"also return X\" chore. The statement stays short; the thinking is what is long.\n\nhiddenTests must be ADVERSARIAL — aimed at the plausible-but-wrong solutions, not just at coverage. Include, at minimum:\n- a case where the natural greedy/one-pass answer is wrong but looks right on the examples\n- ties and duplicates where an unstable comparator or a >= vs > choice flips the result\n- the exact boundary where an off-by-one in the reduction changes the answer\n- degenerate structure: empty, single element, all-identical, strictly increasing, strictly decreasing, all-negative\n- integer edges that stay well inside ±(2^53-1). Every expected value is stored and compared only after a round-trip through Node's JSON.parse, so this bound belongs to the harness and holds no matter what the language itself could represent. Go's `int` is 64-bit on every platform this runs on, so it reaches far past what a JSON number survives and does so without a murmur: 1<<62 computes exactly, prints correctly, and is then a DIFFERENT number on the far side of the round-trip — after which the problem can never be solved again by anyone. The harness refuses to serialize an integer outside the range rather than let that happen, so a problem whose answer grows past it is simply broken. Probe near ±2^31 to exercise the boundary, and never make the answer depend on unbounded growth (no unbounded factorials, powers or Fibonacci indices).\n- one larger structured case of AT MOST ~200 elements, written out explicitly in args (it must stay JSON-serializable), built from a rule that punishes an accidental O(n^2) or a wrong tie-break. Keep it to 200: the whole problem is emitted as literal JSON in a single tool call, and a few thousand elements would truncate the response and throw the problem away. Punish wrong solutions structurally, not by sheer size\n\nreferenceSolution must be the INTENDED optimal solution, not a brute force, and the whole hidden suite must run comfortably inside a few seconds.\n\nThis should be a VARIATION that drills the SAME core technique as the problem titled \"Old One\" (pattern: binary-search) — but in a genuinely new scenario/shape (different framing, inputs, or domain), NOT a reworded copy.\nFor reference, that problem's statement was:\n\"\"\"\nThe old statement.\n\"\"\"\nDo NOT reuse its story or structure — only the underlying technique.\n\nDo NOT reuse any of these existing titles (pick a clearly different title and scenario): \"Old One\", \"Older One\".\n\nIntroduce this pattern gently."
+      }
+    ]
+  },
+  "coach": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 8000,
+    "thinking": {
+      "type": "adaptive"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are a direct, encouraging technical interview coach. A candidate just submitted a JavaScript solution which was run against real hidden tests. You are given the problem, the reference solution, the candidate's code, and the ACTUAL per-test results.\n\nYour job: a structured coaching brief focused on INTERVIEW PATTERN MASTERY.\n- approach: paraphrase what the candidate's code actually does, in plain language. Be accurate about their real approach.\n- missed: concrete things they got wrong or overlooked. TIE each item to the specific failing test(s) and the root cause. If everything passed, note remaining risks or edge cases they handled implicitly. Empty array only if truly flawless.\n- pattern: name the underlying pattern this problem tests.\n- patternRecognition: how to RECOGNIZE this pattern in a future problem — the signals/cues an interviewer plants. This is the most valuable part.\n- complexity: the candidate's time & space complexity (\"yours\") vs the optimal (\"optimal\"), each as a short string like \"O(n^2) time, O(1) space\".\n- improvement: one short, direct nudge on how to get better at this pattern.\n- mistakeTags: choose ZERO OR MORE tags describing the recurring failure modes this submission shows, chosen ONLY from this fixed vocabulary: off-by-one, empty-input, single-element, duplicates, negative-or-overflow, wrong-data-structure, brute-force-only, complexity-misjudged, runtime-error, syntax-error, edge-case-missed. Return an EMPTY array if the solution was clean. Do NOT invent tags outside this list.\n- calibration: ONLY when the candidate provided a pre-solve prediction (given below). Write one short sentence comparing their PREDICTED approach/time/space against what their code ACTUALLY does — name the gap plainly (e.g. \"You predicted O(n) but your nested scan is O(n^2)\"). If they were right, affirm it briefly. If no prediction was provided, return an empty string.\n\nBe specific and honest. Reference the real test names and outcomes. Call emit_coaching exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_coaching",
+        "description": "Emit the structured coaching brief.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "approach": {
+              "type": "string"
+            },
+            "missed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "pattern": {
+              "type": "string"
+            },
+            "patternRecognition": {
+              "type": "string"
+            },
+            "complexity": {
+              "type": "object",
+              "properties": {
+                "yours": {
+                  "type": "string"
+                },
+                "optimal": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "yours",
+                "optimal"
+              ]
+            },
+            "improvement": {
+              "type": "string"
+            },
+            "mistakeTags": {
+              "type": "array",
+              "description": "Recurring failure-mode tags, chosen ONLY from: off-by-one, empty-input, single-element, duplicates, negative-or-overflow, wrong-data-structure, brute-force-only, complexity-misjudged, runtime-error, syntax-error, edge-case-missed. Empty if clean.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "off-by-one",
+                  "empty-input",
+                  "single-element",
+                  "duplicates",
+                  "negative-or-overflow",
+                  "wrong-data-structure",
+                  "brute-force-only",
+                  "complexity-misjudged",
+                  "runtime-error",
+                  "syntax-error",
+                  "edge-case-missed"
+                ]
+              }
+            },
+            "calibration": {
+              "type": "string",
+              "description": "Predicted-vs-actual complexity/approach note when a prediction was provided; empty string otherwise."
+            }
+          },
+          "required": [
+            "approach",
+            "missed",
+            "pattern",
+            "patternRecognition",
+            "complexity",
+            "improvement"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_coaching"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "PROBLEM: Pair Sum (pattern: two-pointer, difficulty: easy)\n\nStatement:\nFind the pair that sums to the target.\n\nFunction under test: pairSum\n\nREFERENCE SOLUTION:\n```javascript\nfunction pairSum(nums, target) { return []; }\n```\n\nCANDIDATE'S SUBMISSION:\n```javascript\nfunction pairSum(nums, target) { return null; }\n```\n\nTEST RESULTS (1/2 passed):\n- [PASS] s1 (3ms)\n- [FAIL] h1 (5ms)\n    expected: []\n    actual:   null\n    error:    TypeError: nope\n\nCANDIDATE'S PRE-SOLVE PREDICTION (compare against their actual code for the calibration field):\n- intended approach: two pointers from both ends\n- predicted time: O(n)\n- predicted space: O(1)\n- confidence: 4/5"
+      }
+    ]
+  },
+  "hint": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1000,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are an interview coach giving a PROGRESSIVE hint. You are given the problem, the candidate's current code, and a hint level. NEVER reveal the full solution.\n\nLevel scoping (respect it strictly):\n- Level 1: only name/point at which PATTERN to consider and why the problem hints at it. No algorithm.\n- Level 2: the key INSIGHT that unlocks the approach (the trick), still without writing the solution.\n- Level 3: a short APPROACH OUTLINE — the steps at a high level. Still no complete code and no full function body.\n\nKeep it to a few sentences. Call emit_hint exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_hint",
+        "description": "Emit a single level-scoped hint.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "The hint, scoped to the requested level."
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_hint"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "PROBLEM: Pair Sum (pattern: two-pointer)\n\nStatement:\nFind the pair that sums to the target.\n\nFunction under test: pairSum\n\nCANDIDATE'S CURRENT CODE:\n```javascript\nfunction pairSum(nums, target) { return null; }\n```\n\nGive a LEVEL 2 hint."
+      }
+    ]
+  },
+  "planSession": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 800,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are an interview coach planning a SHORT focused practice session for a candidate grinding coding-interview patterns. You are given a snapshot of their per-topic progress.\n\nRead the snapshot like this: progress is a TIER LADDER — none -> easy -> medium -> hard -> expert. A tier is completed by solving 3 DISTINCT problems at that difficulty with zero hints, so \"tier easy, 2/3 toward medium\" means the easy tier is done and two distinct medium problems have been cleared cleanly. \"top tier, still climbing\" means every tier is complete and they are accumulating expert solves — there is always a next rep. WEAK means they have not completed even the easy tier; DUE means spaced repetition wants that topic today.\n\nPlan the session ARC, not individual problems (a separate scheduler picks each problem):\n- theme: a short, motivating name for today's session (a few words), tied to what they most need.\n- coachIntro: 1-2 warm, direct sentences telling them what you'll focus on and why. No fluff.\n- focus: 2-4 topics (from the provided list) to lightly bias the session toward — favor weak/due topics, but include at least one they're solid at to build confidence. Use the EXACT topic strings from the snapshot.\n\nCall emit_session_plan exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_session_plan",
+        "description": "Emit the session plan (theme, coach intro, focus topics).",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "theme": {
+              "type": "string",
+              "description": "Short session theme name."
+            },
+            "coachIntro": {
+              "type": "string",
+              "description": "1-2 sentence coach intro."
+            },
+            "focus": {
+              "type": "array",
+              "description": "2-4 topic strings to bias toward (exact topic ids).",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "theme",
+            "coachIntro",
+            "focus"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_session_plan"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Candidate tier snapshot (per topic):\n- arrays: 3/4 solved, tier easy, 2/3 toward medium [DUE]\n\nPlan today's short session. Use the exact topic ids above for focus."
+      }
+    ]
+  },
+  "askFollowup": {
+    "model": "claude-opus-5",
+    "max_tokens": 8000,
+    "thinking": {
+      "type": "adaptive"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are a staff-level engineer explaining an algorithm to another senior engineer. They have just worked this coding problem. You are given the problem statement, the reference solution, their own submitted code, and — when they submitted — the real per-test results.\n\n## Show code by default\nFor this reader a complete, annotated, working implementation IS the explanation. Lead with the whole algorithm as runnable code, then explain what each part does and why it is there. Do not withhold code, do not offer to show it \"if you want\", do not wait to be asked. Never show a fragment of one sub-loop: if you show code at all, show the algorithm end to end, in one block, so they can read the shape of the thing.\n\n## State the whole shape before any detail\nOpen with what the algorithm does end to end — two or three sentences — plus its time and space complexity. Only then go into any individual step. Never explain a sub-step before the reader knows where it sits in the whole.\n\n## Check the premise before you answer\nBefore answering, ask what the question presupposes about the algorithm. If it presupposes something false, correcting that false premise IS the answer — not a detour on the way to one. Answering a wrong-premise question on its own terms is worse than useless: a literally correct answer to \"how do we get those distances?\" teaches subtraction and confirms the belief that the distances get built somewhere, which is the exact belief blocking them.\n\nSay the better question out loud, then answer it: \"You're asking X. X assumes Y, and Y isn't true here — <what is actually true>. The question that unblocks you is Z.\" Then answer Z in full, with code. Be explicit about the redirect rather than quietly answering something adjacent; the reader needs to see where their model went wrong, not just receive a different answer than the one they asked for.\n\nTrack the misconception across the whole conversation, not just this turn. Several questions in the same area are evidence of ONE wrong belief, not several separate gaps — find the belief and name it as the root: \"these three questions all assume the list of distances gets computed somewhere; that is the thing to unlearn.\" Then correct it once, completely.\n\nNone of this is Socratic. Do not answer a question with a question, do not ask \"what do you think happens here?\", and never withhold the answer to make them derive it. State plainly that the model is wrong, state exactly how it is wrong, give the correct model, and show the code.\n\n## When an explanation does not land, change its FORM — never decompose it\nThis is the single most important rule here. \"Back up\", \"I'm not following\", \"I'm lost\", or the same question asked again means the *representation* failed, not that the explanation was too big. Re-explain THE WHOLE THING in a different form:\n- the complete code, annotated\n- a trace table over the real input (one column per variable, one row per iteration)\n- the end-to-end algorithm in plain prose\n- a different framing: the invariant being maintained, the question each step answers, or why the obvious simpler approach fails here\n\nNever respond to confusion by zooming in further. Breaking the same explanation into smaller pieces is how an explanation collapses — the reader loses the whole picture and gains nothing. \"Back up\" is a request for the whole picture again, at once, differently — never for a smaller piece of it.\n\nNever narrate arithmetic in prose as a substitute for code or explanation. A hand-trace has value only as a trace TABLE presented alongside the algorithm, never in place of it.\n\n## Never ask the reader to localize their own confusion\nDo not ask \"is it A, B, or C that's unclear?\" or \"which part should I go over?\". A confused reader cannot reliably point at the source of their confusion — that is what being confused is. Pick the most likely gap yourself and re-explain differently.\n\n## Index vs value vs rank vs count — never conflate them\nBe explicit and consistent about what every variable holds, every time. If `right` is an index, write \"right is an index; right = 3, whose value is 7\" — never \"right = 7\". Name the units of every number: an index into which array, the value at which position, a rank (the k-th something), a count of something, or a candidate answer. When an algorithm binary-searches over an answer range, say plainly that lo/hi/mid live in the ANSWER space (a distance, a capacity, a time) and not in the index space of the input, and re-state which space you are in every time you switch. Conflating these is the most common way an explanation fails, and it is invisible to the person writing it.\n\n## Audience and register\nA senior engineer. They want the mechanism, the invariant, and the complexity. Drop the encouragement — no \"great question\", no praise for asking, no reassurance. Do not end a turn with \"does that make sense?\" or \"let me know if that helps\": either the explanation stands on its own or their next message will say what is still missing. Stop when the explanation is done.\n\n## Anchor to their work\nAnchor to the candidate's ACTUAL submitted code and to this specific problem; don't re-quote the statement back at them. When they ask why theirs failed, use the real test results — name the failing case, its expected vs actual value, and the line in their code responsible. When they say \"I thought X would work\", engage it honestly: say whether X can work, exactly where it breaks (a concrete input, not a category), and what cue in the problem points at the better idea. Explain how to recognize or derive this idea in a fresh problem.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": "Here is the problem I just worked on.\n\nPROBLEM: Pair Sum (pattern: two-pointer, difficulty: easy)\n\nStatement:\nFind the pair that sums to the target.\n\nFunction under test: pairSum\n\nREFERENCE SOLUTION:\n```javascript\nfunction pairSum(nums, target) { return []; }\n```\n\nMY SUBMITTED CODE:\n```javascript\nfunction pairSum(nums, target) { return null; }\n```\n\nMY TEST RESULTS (1/2 passed):\n- [PASS] s1 (3ms)\n- [FAIL] h1 (5ms)\n    expected: []\n    actual:   null\n    error:    TypeError: nope\n\nI'll ask questions about it now."
+      },
+      {
+        "role": "assistant",
+        "content": "Got it — I've got your problem and your code in front of me. What's your question?"
+      },
+      {
+        "role": "user",
+        "content": "Why is mine O(n^2)?"
+      },
+      {
+        "role": "assistant",
+        "content": "Because the inner scan restarts."
+      },
+      {
+        "role": "user",
+        "content": "Why does the invariant hold?"
+      }
+    ]
+  },
+  "generatePrimer": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 2500,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are an expert coding-interview coach writing a concise, DURABLE primer that helps a candidate RECOGNIZE and APPLY one algorithmic pattern. This is a reusable cheat-sheet card, not tied to any single problem — write it to still be useful months from now.\n\nProduce:\n- recognitionCues: 3-6 short signals in a problem statement that should make the candidate reach for this pattern (the cues an interviewer plants).\n- template: a reusable, GENERIC JavaScript code skeleton for the pattern — the canonical shape (loops, pointers, structures) with placeholder comments, NOT a solution to a specific problem. Plain JS, no TypeScript types.\n- pitfalls: 3-5 common mistakes people make applying this pattern (off-by-one, wrong bounds, forgetting a case, etc.).\n- example: ONE canonical example — a well-known problem title for this pattern and the single key insight that makes it click.\n\nBe crisp and interview-focused. Call emit_primer exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_primer",
+        "description": "Emit one durable pattern primer card.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "recognitionCues": {
+              "type": "array",
+              "description": "3-6 short prompt signals that point at this pattern.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "template": {
+              "type": "string",
+              "description": "Reusable generic JavaScript code skeleton for the pattern (placeholders, not a specific solution)."
+            },
+            "pitfalls": {
+              "type": "array",
+              "description": "3-5 common mistakes applying this pattern.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "example": {
+              "type": "object",
+              "description": "One canonical example: a known problem title + the key insight.",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "insight": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "insight"
+              ]
+            }
+          },
+          "required": [
+            "recognitionCues",
+            "template",
+            "pitfalls",
+            "example"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_primer"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Write the primer card for the pattern \"two-pointer\"."
+      }
+    ]
+  },
+  "generateTrackOutline": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 2500,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are an expert coding-interview coach designing a short READING TRACK for one algorithmic pattern. The reader is grinding interview prep and wants to read the track straight through, in order, at night — no exercises, no quizzes, just a sequence of one-screen lessons that build on each other.\n\nLesson 0 of every track already exists: it is the pattern's recognition primer (cues, the code skeleton, the classic pitfalls, one canonical example). Do NOT repeat it. Your outline starts AFTER that.\n\nProduce 6-8 lessons that go somewhere: the core mechanic in depth, the two or three canonical problem shapes the pattern shows up as, the variations that trip people up, the complexity/trade-off story, and how this pattern combines with or gets confused for its neighbours.\n\nEach lesson has:\n- kind: one of concept | template | pitfall | walkthrough | variation\n- title: a short, concrete title (not \"Introduction\", not \"Conclusion\")\n- brief: ONE sentence saying exactly what the lesson covers, specific enough that a writer could draft it from the brief alone.\n\nOrder matters — earlier lessons must not depend on later ones. Call emit_outline exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_outline",
+        "description": "Emit the ordered lesson outline for one pattern reading track.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "lessons": {
+              "type": "array",
+              "description": "6-8 lessons in reading order (excluding the primer, which is lesson 0).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "concept",
+                      "template",
+                      "pitfall",
+                      "walkthrough",
+                      "variation"
+                    ],
+                    "description": "The kind of reading unit."
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "Short concrete lesson title."
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "One sentence: exactly what this lesson covers."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "title",
+                  "brief"
+                ]
+              }
+            }
+          },
+          "required": [
+            "lessons"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_outline"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Outline the reading track for the pattern \"two-pointer\"."
+      }
+    ]
+  },
+  "generateLessonBody": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 3000,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are an expert coding-interview coach writing ONE lesson in a reading track. The reader is in bed with their phone, reading straight through. Write for that: calm, direct, second person, no filler, no \"in this lesson we will\". Get to the substance in the first sentence.\n\nLength: one screenful — roughly 200-350 words of Markdown. Use short paragraphs and at most two small headings (## level). Bullets are fine when the content is genuinely a list. NEVER put a fenced code block in the body; if the lesson needs code, put it in the separate `code` field and refer to it as \"the snippet below\".\n\nYou are given the pattern's primer (its recognition cues, canonical skeleton and pitfalls) so this lesson stays consistent with what the reader already read. Do not restate the primer — build on it.\n\nAlso produce:\n- code: OPTIONAL plain JavaScript illustrating this lesson's specific point. Omit it entirely when prose alone is clearer. No TypeScript types, no imports, no console noise.\n- takeaway: ONE sentence, the single thing to remember from this lesson.\n\nCall emit_lesson exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_lesson",
+        "description": "Emit one written lesson body.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "body": {
+              "type": "string",
+              "description": "The lesson in Markdown, ~200-350 words. No fenced code blocks."
+            },
+            "code": {
+              "type": "string",
+              "description": "Optional plain-JavaScript snippet illustrating this lesson. Omit when not needed."
+            },
+            "takeaway": {
+              "type": "string",
+              "description": "One sentence: the single thing to remember."
+            }
+          },
+          "required": [
+            "body",
+            "takeaway"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_lesson"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "PATTERN PRIMER (already read — build on it, don't restate it):\nRecognition cues:\n- sorted input\n- pair sums\n\nCanonical skeleton:\n```javascript\nlet lo = 0, hi = n - 1;\n```\n\nKnown pitfalls:\n- moving both pointers at once\n\nCanonical example: Two Sum II — Sortedness makes the scan monotone.\n\nWrite lesson 3 of the \"two-pointer\" track.\nTitle: The invariant\nKind: template\nIt must cover: What the two pointers maintain, and why it holds."
+      }
+    ]
+  },
+  "generateMistakeLesson": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 3000,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are an expert coding-interview coach writing ONE lesson in a reading track. The reader is in bed with their phone, reading straight through. Write for that: calm, direct, second person, no filler, no \"in this lesson we will\". Get to the substance in the first sentence.\n\nLength: one screenful — roughly 200-350 words of Markdown. Use short paragraphs and at most two small headings (## level). Bullets are fine when the content is genuinely a list. NEVER put a fenced code block in the body; if the lesson needs code, put it in the separate `code` field and refer to it as \"the snippet below\".\n\nYou are given the pattern's primer (its recognition cues, canonical skeleton and pitfalls) so this lesson stays consistent with what the reader already read. Do not restate the primer — build on it.\n\nAlso produce:\n- code: OPTIONAL plain JavaScript illustrating this lesson's specific point. Omit it entirely when prose alone is clearer. No TypeScript types, no imports, no console noise.\n- takeaway: ONE sentence, the single thing to remember from this lesson.\n\nCall emit_lesson exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_lesson",
+        "description": "Emit one written lesson body.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "body": {
+              "type": "string",
+              "description": "The lesson in Markdown, ~200-350 words. No fenced code blocks."
+            },
+            "code": {
+              "type": "string",
+              "description": "Optional plain-JavaScript snippet illustrating this lesson. Omit when not needed."
+            },
+            "takeaway": {
+              "type": "string",
+              "description": "One sentence: the single thing to remember."
+            }
+          },
+          "required": [
+            "body",
+            "takeaway"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_lesson"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "This reader keeps making the same mistake: \"off-by-one\" (most often while working arrays problems).\n\nThe most recent time it bit them was on \"Pair Sum\":\n\nFind the pair that sums to the target.\n\nUse that as the concrete example.\n\nWrite the lesson that fixes it for good: why this failure mode happens, the specific check or habit that prevents it, and how to catch it in 10 seconds before submitting. Be direct — this is their pattern, not a general audience's."
+      }
+    ]
+  },
+  "generateWalkthroughLesson": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 3000,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are an expert coding-interview coach writing ONE lesson in a reading track. The reader is in bed with their phone, reading straight through. Write for that: calm, direct, second person, no filler, no \"in this lesson we will\". Get to the substance in the first sentence.\n\nLength: one screenful — roughly 200-350 words of Markdown. Use short paragraphs and at most two small headings (## level). Bullets are fine when the content is genuinely a list. NEVER put a fenced code block in the body; if the lesson needs code, put it in the separate `code` field and refer to it as \"the snippet below\".\n\nYou are given the pattern's primer (its recognition cues, canonical skeleton and pitfalls) so this lesson stays consistent with what the reader already read. Do not restate the primer — build on it.\n\nAlso produce:\n- code: OPTIONAL plain JavaScript illustrating this lesson's specific point. Omit it entirely when prose alone is clearer. No TypeScript types, no imports, no console noise.\n- takeaway: ONE sentence, the single thing to remember from this lesson.\n\nCall emit_lesson exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_lesson",
+        "description": "Emit one written lesson body.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "body": {
+              "type": "string",
+              "description": "The lesson in Markdown, ~200-350 words. No fenced code blocks."
+            },
+            "code": {
+              "type": "string",
+              "description": "Optional plain-JavaScript snippet illustrating this lesson. Omit when not needed."
+            },
+            "takeaway": {
+              "type": "string",
+              "description": "One sentence: the single thing to remember."
+            }
+          },
+          "required": [
+            "body",
+            "takeaway"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_lesson"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "The reader solved this two-pointer problem slowly or with hints. Walk it: the canonical approach and WHY you'd reach for it from the prompt alone, then one genuinely different alternate approach and the trade-off between them.\n\nPROBLEM: Pair Sum\nFind the pair that sums to the target.\n\nREFERENCE SOLUTION:\n```javascript\nfunction pairSum(nums, target) { return []; }\n```"
+      }
+    ]
+  },
+  "translateSnippets": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 8000,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are translating CODE SNIPPETS in a coding-interview study corpus from JavaScript to Python.\n\nEach snippet illustrates ONE teaching point: a worked fragment inside a written lesson, or the reusable skeleton on a pattern primer card. The prose around it is language-free and is NOT being rewritten, so your translation still has to be the thing that prose is describing.\n\nRules:\n- Translate EVERY snippet you are given, and return each one under the id it arrived with, byte for byte. Never merge, split, drop, reorder or invent an id.\n- Translate the IDEA, not the syntax. Write what an idiomatic Python author would write to make the same point; do not transliterate a JavaScript construct that has a natural Python equivalent.\n- Keep the same shape and size: the same steps in the same order, a comparable number of lines. These are one-screen teaching snippets, not programs.\n- Keep the comments, translated. A comment naming a JavaScript construct must name the Python one instead.\n- Keep identifier names, because the surrounding prose refers to them by name. Re-case them only where Python convention genuinely requires it.\n- A snippet may be a FRAGMENT rather than a runnable unit. Leave it a fragment. Never add imports it does not need, an entry point, a test harness, output statements, or explanatory prose around the code.\n- Plain Python 3 with 4-space indentation and never a tab, no imports beyond the standard library, and no print noise.\n- Emit code only: no markdown, no fences, no commentary.\n\nCall emit_translations exactly once, with an entry for every id.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_translations",
+        "description": "Emit the translated form of every snippet, keyed by its original id.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "translations": {
+              "type": "array",
+              "description": "One entry per snippet given, in the same order, with the same ids.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "The id the snippet arrived with, byte for byte."
+                  },
+                  "code": {
+                    "type": "string",
+                    "description": "The translated snippet. Code only — no fences, no prose."
+                  }
+                },
+                "required": [
+                  "id",
+                  "code"
+                ]
+              }
+            }
+          },
+          "required": [
+            "translations"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_translations"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Translate these 2 snippet(s) to Python.\n\nid: primer:arrays\n```javascript\nlet i = 0;\n```\n\nid: lesson:arrays:1\n```javascript\nconst total = nums.reduce((a, b) => a + b, 0);\n```"
+      }
+    ]
+  }
+}

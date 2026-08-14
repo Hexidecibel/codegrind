@@ -257,7 +257,7 @@ describe('the emit_problem tool', () => {
     }
     const starters = LANGUAGES.map(
       (l) =>
-        (EMIT_PROBLEM_TOOL_BY_LANGUAGE[l].input_schema.properties as Record<string, { description: string }>)
+        (EMIT_PROBLEM_TOOL_BY_LANGUAGE[l].schema.properties as Record<string, { description: string }>)
           .starterCode.description
     );
     expect(new Set(starters).size).toBe(LANGUAGES.length);
