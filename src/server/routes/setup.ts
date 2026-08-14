@@ -44,6 +44,7 @@ import {
   setSetting,
 } from '../services/db.js';
 import * as apikey from '../services/apikey.service.js';
+import { needsAnthropicKey } from '../services/llm.client.js';
 import {
   runSeed,
   DEFAULT_SEED_TOPICS,
@@ -105,14 +106,21 @@ export function readSetupState(): SetupState {
 
   // Order matters: a missing key is the only blocker that cannot be skipped,
   // so it is checked first and is never suppressed by the dismissal row.
+  //
+  // But it is only a blocker when the configured routing actually needs a key.
+  // A fully local install (CODEGRIND_PROVIDER=openai-compatible for both roles)
+  // has no key, wants no key, and every API path works without one — gating the
+  // SPA on a key there would lock a working app behind a signup it never needs,
+  // which is the exact thing the provider work exists to avoid.
+  const keyRequired = needsAnthropicKey();
   let reason: SetupState['reason'] = null;
-  if (!key.configured) reason = 'no-api-key';
+  if (!key.configured && keyRequired) reason = 'no-api-key';
   else if (servable === 0 && !dismissed) reason = 'empty-bank';
 
   return {
     needed: reason !== null,
     reason,
-    dismissible: key.configured,
+    dismissible: key.configured || !keyRequired,
     apiKey: key,
     language,
     languages: languageStates(),
