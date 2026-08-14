@@ -67,7 +67,16 @@ printf 'codegrind :: smoke-isolation\n\n'
 # -----------------------------------------------------------------------------
 # Pick a slot both banks can serve.
 # -----------------------------------------------------------------------------
-read -r SLOT_TOPIC SLOT_DIFF SLOT_LANGS <<<"$(
+# THE RESULT IS CAPTURED BEFORE IT IS PARSED, AND THAT IS NOT A STYLE CHOICE.
+# This was `read -r … <<<"$( … )" || { INCOMPLETE; exit 2; }`, where the `||`
+# reads as though it guards the node script — and does not. It guards `read`,
+# and a here-string always supplies one line, so `read` succeeded on the empty
+# output and left all three variables empty. The INCOMPLETE branch below was
+# therefore unreachable: with no contested slot the loop ran zero times, zero
+# failures were counted, and the script printed a PASS it had not earned before
+# dying on `LANGS[-1]` against an empty array. A check that cannot run must say
+# so — that is this script's own stated contract.
+SLOT_LINE="$(
   DB="$DB" WANT_TOPIC="$TOPIC" WANT_DIFF="$DIFFICULTY" node -e '
     const Database = require("better-sqlite3");
     const db = new Database(process.env.DB, { readonly: true });
@@ -91,12 +100,18 @@ read -r SLOT_TOPIC SLOT_DIFF SLOT_LANGS <<<"$(
     if (!best) process.exit(1);
     process.stdout.write(`${best[0]} ${best[1].sort().join(",")}`);
   '
-)" || {
+)"
+if [[ -z "${SLOT_LINE//[[:space:]]/}" ]]; then
   printf 'INCOMPLETE: no topic+difficulty slot is stocked in more than one language.\n'
   printf '            Seed a second language first (bin/seed-bank --language python),\n'
   printf '            or this check can only ever prove that the only bank was used.\n'
   exit 2
-}
+fi
+read -r SLOT_TOPIC SLOT_DIFF SLOT_LANGS <<<"$SLOT_LINE"
+if [[ -z "${SLOT_LANGS}" ]]; then
+  printf 'INCOMPLETE: could not read a contested slot (got "%s").\n' "$SLOT_LINE"
+  exit 2
+fi
 
 printf 'Contested slot: %s/%s, stocked in: %s\n' "$SLOT_DIFF" "$SLOT_TOPIC" "$SLOT_LANGS"
 printf 'Every request below could be answered from any of those banks.\n\n'

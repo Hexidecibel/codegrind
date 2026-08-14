@@ -277,9 +277,23 @@ export type DryRunResult =
  *      image must never be scored against the model — so `sandbox` is its own
  *      outcome, and a caller that treats it as a model failure is wrong.
  *
- * It reuses `canonicalize`, `MIN_SAMPLE_TESTS`/`MIN_HIDDEN_TESTS` and `runTests`
- * unchanged: a probe that measured a DIFFERENT bar than the app enforces would
- * be measuring nothing.
+ * It reuses `canonicalize`, `MIN_SAMPLE_TESTS`/`MIN_HIDDEN_TESTS`, `runTests` and
+ * `noveltyOpts` unchanged: a probe that measured a DIFFERENT bar — or asked a
+ * DIFFERENT question — than the app does would be measuring nothing.
+ *
+ * THAT LAST ONE WAS A REAL BUG IN THIS FUNCTION. It used to call
+ * `generateProblem` with no opts at all, and so measured a model being asked to
+ * write a problem in a vacuum, which is a request the app never makes. Eight
+ * consecutive local-model runs of easy/arrays came back as "find the maximum"
+ * under six different titles — and the same model, same slot, same endpoint,
+ * asked the way `getAdaptiveProblem` asks, produced eight genuinely different
+ * problems. A measurement that narrow was a fault in the instrument, and it
+ * would have been read as a fault in the model.
+ *
+ * `recent` closes the other half of that gap. A dry run does not store what it
+ * generates, so the digest the app would read back out of the database is empty
+ * every time; a caller measuring a SEQUENCE passes what it has already seen and
+ * gets the sequence the app would actually produce.
  *
  * Cost: exactly one generation call, plus two sandbox runs when it succeeds.
  */
@@ -287,7 +301,11 @@ export async function dryRunGenerate(
   language: Language,
   topic: Topic,
   difficulty: Difficulty,
-  opts: { keep?: boolean } = {}
+  opts: {
+    keep?: boolean;
+    /** Problems already produced in THIS run — see above. Newest first. */
+    recent?: readonly RecentDigest[];
+  } = {}
 ): Promise<DryRunResult> {
   const startedAt = Date.now();
   const where = { language, topic, difficulty };
@@ -296,7 +314,12 @@ export async function dryRunGenerate(
 
   let raw: GeneratedProblem;
   try {
-    raw = await generateProblem(language, topic, difficulty);
+    raw = await generateProblem(
+      language,
+      topic,
+      difficulty,
+      noveltyOpts(language, topic, { extraRecent: opts.recent })
+    );
   } catch (err) {
     return { ok: false, ...where, failure: 'generation', error: reason(err), ms: elapsed() };
   }
@@ -365,6 +388,99 @@ export async function getNextProblem(
   return { ...record, used: true };
 }
 
+// ---------------------------------------------------------------------------
+// Novelty — what stops the bank filling up with one problem in six costumes
+// ---------------------------------------------------------------------------
+/** How many recent statements to show the generator. */
+const RECENT_DIGEST_LIMIT = 4;
+
+/** A problem the generator should be shown so it does not write it again. */
+export interface RecentDigest {
+  title: string;
+  prompt: string;
+}
+
+/** First occurrence wins, so a caller's own newer history outranks the table. */
+function unique<T>(items: readonly T[], key: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const k = key(item);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+/**
+ * Build the anti-repetition part of a generation request: the titles already in
+ * this slot, plus the statements of the last few problems served for the topic.
+ *
+ * IT IS A FUNCTION BECAUSE TWO CALLERS MUST NOT DRIFT APART. `getAdaptiveProblem`
+ * is the path a player actually travels, and `dryRunGenerate` is the instrument
+ * that judges a model — and an instrument that measured a DIFFERENT prompt than
+ * the app sends measures nothing about the app. That is not hypothetical: with
+ * these opts missing, eight consecutive local-model dry runs of easy/arrays came
+ * back as "find the maximum" under six different titles, and the same model on
+ * the real path produced eight genuinely different problems. The narrowness was
+ * the measurement, not the model.
+ *
+ * `extraRecent` is for the caller that generates a sequence WITHOUT storing it:
+ * a dry run has no database trail, so it carries its own. It goes first because
+ * it is newer than anything in the table.
+ */
+export function noveltyOpts(
+  language: Language,
+  topic: Topic,
+  opts: {
+    /** Overrides the bank read — the scheduler sometimes computes its own list. */
+    avoidTitles?: string[];
+    /** Problems produced in this run but not written to the database. */
+    extraRecent?: readonly RecentDigest[];
+    /** A per-intent steer, prepended to the digest block. */
+    baseHint?: string;
+  } = {}
+): GenerateProblemOpts {
+  const out: GenerateProblemOpts = {};
+  if (opts.baseHint) out.noveltyHint = opts.baseHint;
+
+  const extra = opts.extraRecent ?? [];
+  const avoidTitles =
+    opts.avoidTitles ??
+    unique([...extra.map((r) => r.title), ...getBankTitles(language, topic)], (t) => t);
+  if (avoidTitles.length) out.avoidTitles = avoidTitles;
+
+  // Avoiding titles only stops repeated NAMES. Left alone the generator will
+  // happily re-serve the same algorithm in a fresh costume — six distinct
+  // "find a target in a sorted array" problems with six different stories.
+  // Show it what it has already produced and demand a different structural
+  // variant of the technique.
+  //
+  // Deduped by title, because `extraRecent` and the table overlap the moment a
+  // caller both carries its own history and stores what it generates
+  // (`dryRunGenerate --keep`): the same problem twice in a four-line digest
+  // spends a quarter of it saying nothing new.
+  const recent = unique(
+    [...extra, ...getRecentProblemDigests(language, topic, RECENT_DIGEST_LIMIT)],
+    (r) => r.title
+  ).slice(0, RECENT_DIGEST_LIMIT);
+  if (recent.length) {
+    const digest = recent
+      .map((r) => `- "${r.title}": ${r.prompt.replace(/\s+/g, ' ').slice(0, 160)}`)
+      .join('\n');
+    out.noveltyHint = [
+      out.noveltyHint,
+      `Already served for "${topic}":\n${digest}\n\n` +
+        `Pick a genuinely DIFFERENT structural variant of the ${topic} technique — a different ` +
+        `invariant, boundary condition, or search/traversal target. Re-stating the same algorithm ` +
+        `in a new domain or story is a failure; the solution shape itself must differ.`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  return out;
+}
+
 // A short per-kind steer for the generator on freshly-generated adaptive problems.
 const NOVELTY_HINT: Partial<Record<SchedulerIntent['kind'], string>> = {
   variation: 'This is a spaced-repetition VARIATION — keep the technique, change everything else.',
@@ -402,33 +518,10 @@ export async function getAdaptiveProblem(intent: SchedulerIntent): Promise<Probl
   }
 
   if (!record) {
-    const opts: GenerateProblemOpts = {};
-    const noveltyHint = NOVELTY_HINT[kind];
-    if (noveltyHint) opts.noveltyHint = noveltyHint;
-
-    const avoidTitles = intent.avoidTitles ?? getBankTitles(language, topic);
-    if (avoidTitles.length) opts.avoidTitles = avoidTitles;
-
-    // Avoiding titles only stops repeated NAMES. Left alone the generator will
-    // happily re-serve the same algorithm in a fresh costume — six distinct
-    // "find a target in a sorted array" problems with six different stories.
-    // Show it what it has already produced and demand a different structural
-    // variant of the technique.
-    const recent = getRecentProblemDigests(language, topic, 4);
-    if (recent.length) {
-      const digest = recent
-        .map((r) => `- "${r.title}": ${r.prompt.replace(/\s+/g, ' ').slice(0, 160)}`)
-        .join('\n');
-      opts.noveltyHint = [
-        opts.noveltyHint,
-        `Already served for "${topic}":\n${digest}\n\n` +
-          `Pick a genuinely DIFFERENT structural variant of the ${topic} technique — a different ` +
-          `invariant, boundary condition, or search/traversal target. Re-stating the same algorithm ` +
-          `in a new domain or story is a failure; the solution shape itself must differ.`,
-      ]
-        .filter(Boolean)
-        .join('\n\n');
-    }
+    const opts: GenerateProblemOpts = noveltyOpts(language, topic, {
+      avoidTitles: intent.avoidTitles,
+      baseHint: NOVELTY_HINT[kind],
+    });
 
     if (kind === 'variation') {
       const seed = getRecentSolvedProblem(language, topic);

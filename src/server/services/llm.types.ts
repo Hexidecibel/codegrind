@@ -122,10 +122,15 @@ interface BaseRequest {
   /**
    * The output budget for THIS call, in tokens.
    *
-   * Never defaulted and never adjusted by an adapter. Each of the call sites
+   * Never defaulted, and never *raised* by an adapter. Each of the call sites
    * carries a comment explaining its number, usually recording a truncation that
    * actually happened; a helpful abstraction that "tidied" them would be
    * re-earning those bugs one at a time.
+   *
+   * It may be LOWERED, by exactly one documented mechanism: MAX_OUTPUT_TOKENS
+   * below, which is per-implementation and exists because a budget is a promise
+   * about the worst case and the worst case is not the same on every endpoint.
+   * See that constant for the measurement behind it.
    */
   maxTokens: number;
   /** Advisory. Defaults to 'off' — the ten structured calls all want it off. */
@@ -205,6 +210,45 @@ export interface LlmClient {
 export const DEFAULT_TIMEOUT_MS: Record<ProviderId, Record<CallRole, number>> = {
   anthropic: { workhorse: 180_000, small: 60_000, tutor: 180_000 },
   'openai-compatible': { workhorse: 300_000, small: 120_000, tutor: 300_000 },
+};
+
+/**
+ * The most output tokens one call may ask for, per implementation. `null` means
+ * uncapped — the call site's number is sent exactly as written.
+ *
+ * WHY THIS IS NOT SYMMETRIC, AND WHY IT IS NOT A TIDY-UP. A token budget bounds
+ * the worst case, and the worst case differs by endpoint. On the Anthropic path
+ * the generation call asks for 16000 because a big adversarial expert suite is
+ * real output that genuinely needs the room, and running out of it loses a
+ * problem worth having. That number stays, uncapped, exactly as it is written at
+ * the call site.
+ *
+ * On the local path 16000 buys nothing and costs five minutes. Measured, on
+ * `Qwen3-local-q8` at ~55 output tokens/sec:
+ *
+ *   - a legitimate `easy` problem is 976–1320 output tokens (17–23s)
+ *   - a legitimate `expert` problem is 1345–5337 output tokens (24–95s)
+ *   - a FAILED generation is exactly max_tokens, every time
+ *
+ * That third line is the whole argument. The failure is not a large problem that
+ * ran out of room; it is degenerate repetition. Dumping the raw tool-call
+ * arguments of three of them found `"expected": 0, "expected": 0, …` repeated
+ * 347×, `1, 2, 1, 2, …` 1106×, and `1, 1, 1, …` 2206×. Once the model enters
+ * that loop it emits tokens until something stops it, the output is unusable
+ * whenever it stops, and every token in between is pure latency. So the budget
+ * on this path is a stop, and its only job is to arrive sooner: 16000 tokens of
+ * loop took 293s, 8000 takes 144s, and the problem thrown away is the same one.
+ *
+ * 8000 rather than something tighter because it must stay clear of real output:
+ * the largest legitimate generation observed was 5337 tokens, and a cap that
+ * truncates a good expert problem would be trading a rare five-minute wait for a
+ * routine lost problem. Override with `CODEGRIND_MAX_OUTPUT_TOKENS` — a stronger
+ * local model that genuinely writes bigger suites should raise it, and the
+ * truncation error says so.
+ */
+export const MAX_OUTPUT_TOKENS: Record<ProviderId, number | null> = {
+  anthropic: null,
+  'openai-compatible': 8000,
 };
 
 /**

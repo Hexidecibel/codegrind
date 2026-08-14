@@ -25,6 +25,7 @@
 //   | endpoint               | CODEGRIND_ENDPOINT, then QWEN_URL                 | —               |
 //   | endpoint credential    | CODEGRIND_API_KEY                                | — (fleets have none) |
 //   | models never to touch  | CODEGRIND_MODEL_DENY (comma list)                | empty           |
+//   | output-token ceiling   | CODEGRIND_MAX_OUTPUT_TOKENS (0 = uncapped)       | llm.types.MAX_OUTPUT_TOKENS |
 //
 // `ANTHROPIC_MODEL` AND `ANTHROPIC_CHAT_MODEL` KEEP WORKING EXACTLY AS TODAY.
 // That is the compatibility guarantee for the existing systemd deploy, and it is
@@ -151,6 +152,31 @@ const MODEL_DENY = env('CODEGRIND_MODEL_DENY')
   .map((s) => s.trim())
   .filter(Boolean);
 
+/**
+ * The output-token ceiling for an OpenAI-compatible endpoint, overriding the
+ * measured default in llm.types.MAX_OUTPUT_TOKENS.
+ *
+ * It is here rather than in the adapter for the same reason CODEGRIND_MODEL_DENY
+ * is: it is a fact about somebody's deployment, not about the wire format. The
+ * default is calibrated against one 35B local model; a friend running something
+ * that genuinely writes bigger problems raises it, and `0` turns the ceiling off
+ * altogether and sends every call site's number verbatim.
+ */
+function readMaxOutputTokens(): number | null | undefined {
+  const raw = env('CODEGRIND_MAX_OUTPUT_TOKENS');
+  if (!raw) return undefined; // not set — the adapter keeps its measured default
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(
+      `CODEGRIND_MAX_OUTPUT_TOKENS="${raw}" is not a whole number of tokens. Use a ` +
+        `positive integer, or 0 to send every call site's own budget uncapped.`
+    );
+  }
+  return n === 0 ? null : n;
+}
+
+const MAX_OUTPUT_TOKENS_OVERRIDE = readMaxOutputTokens();
+
 const clients = new Map<CallRole, LlmClient>();
 
 function build(routing: Routing, role: CallRole): LlmClient {
@@ -177,6 +203,11 @@ function build(routing: Routing, role: CallRole): LlmClient {
     endpoint: ENDPOINT,
     apiKey: ENDPOINT_KEY || undefined,
     deny: MODEL_DENY,
+    // `undefined` when unset, which is what keeps the adapter's own default —
+    // `null` is a real value here and means "no ceiling".
+    ...(MAX_OUTPUT_TOKENS_OVERRIDE === undefined
+      ? {}
+      : { maxOutputTokens: MAX_OUTPUT_TOKENS_OVERRIDE }),
   });
 }
 
