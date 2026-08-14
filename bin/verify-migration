@@ -65,9 +65,16 @@ BASELINE_DIR="${BASELINE_DIR:-/home/hexi/backups/codegrind/baseline}"
 # javascript solve (65 -> 67), and the cold ('arrays','go') ladder (5 -> 6). The
 # byte-identical baseline diff was taken BEFORE any of this, against a capture
 # made from the pre-change service; these numbers are the state it left behind.
+#
+# Moved once more by the first-run phase's regression smokes, again all real
+# activity and no migration at all (this phase added NO schema; user_version is
+# still 3): bin/smoke-e2e javascript banked one generated problem and filed one
+# solve (57 -> 58, 67 -> 68). The byte-identical four-endpoint diff for that
+# phase was taken BEFORE these ran, against baseline-firstrun; these numbers are
+# the state they left behind.
 EXPECTED_ROWS=(
-  "problems:57"
-  "attempts:67"
+  "problems:58"
+  "attempts:68"
   "skill_state:6"
   "sessions:8"
   "review_queue:11"

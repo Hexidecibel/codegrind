@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Start codegrind as a plain background process, and wait until it answers.
+#
+#   bin/start            # start, wait for health, report
+#   bin/start --quiet    # same, but only speak on failure (bin/setup uses this)
+#
+# WHY THIS EXISTS ALONGSIDE systemd. The author's box runs codegrind as a system
+# service (deploy/codegrind.service, driven by bin/deploy and bin/restart). A
+# machine that has just cloned the repo has no unit, no root, and possibly no
+# systemd at all — so `bin/setup` needs a way to run the app that assumes none of
+# that. This is it: nohup, a pidfile, a logfile.
+#
+# IT REFUSES TO RUN ALONGSIDE THE SERVICE. If a systemd-managed codegrind is
+# active, starting a second copy would give two processes the same SQLite file
+# and the same port; the second loses the port and the first keeps the database.
+# So this stops and points at bin/restart instead.
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_DIR}" || exit 1
+
+# shellcheck source=lib/node.sh
+source "${REPO_DIR}/bin/lib/node.sh"
+
+QUIET=0
+[ "${1:-}" = "--quiet" ] && QUIET=1
+say() { [ "${QUIET}" -eq 1 ] || printf '%s\n' "$1"; }
+
+if [[ -f "${REPO_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_DIR}/.env"
+  set +a
+fi
+
+PORT="${PORT:-9416}"
+HOST="${HOST:-127.0.0.1}"
+DATA_DIR="${DATA_DIR:-${REPO_DIR}/data}"
+case "${DATA_DIR}" in /*) ;; *) DATA_DIR="${REPO_DIR}/${DATA_DIR#./}" ;; esac
+export PORT HOST DATA_DIR
+
+PIDFILE="${DATA_DIR}/server.pid"
+LOGFILE="${DATA_DIR}/server.log"
+
+# --- already running? --------------------------------------------------------
+# The guard is about THIS checkout, not about the name `codegrind`. A scratch
+# clone on a box that also runs the service is a completely legitimate thing to
+# start — it has its own port, its own DATA_DIR and its own database — and a
+# guard that only matched the unit name would refuse it. So compare the unit's
+# WorkingDirectory with ours: same directory means the same database and the
+# same port, and that is the collision worth stopping.
+if systemctl is-active --quiet codegrind 2>/dev/null; then
+  unit_dir="$(systemctl show codegrind -p WorkingDirectory --value 2>/dev/null)"
+  if [ -n "${unit_dir}" ] && [ "$(cd "${unit_dir}" 2>/dev/null && pwd)" = "${REPO_DIR}" ]; then
+    printf 'codegrind is already running from this directory under systemd —\n' >&2
+    printf 'use bin/restart, not bin/start.\n' >&2
+    exit 1
+  fi
+fi
+
+if [ -f "${PIDFILE}" ] && kill -0 "$(cat "${PIDFILE}")" 2>/dev/null; then
+  say "already running (pid $(cat "${PIDFILE}")) on http://127.0.0.1:${PORT}"
+  exit 0
+fi
+
+if ! cg_use_node; then
+  printf 'no usable Node found.\n' >&2
+  cg_node_advice >&2
+  exit 1
+fi
+
+if [ ! -f "${REPO_DIR}/dist/index.html" ]; then
+  printf 'dist/ is missing — run bin/setup (or bin/build) first.\n' >&2
+  exit 1
+fi
+
+mkdir -p "${DATA_DIR}"
+
+# setsid + nohup so the server outlives this shell and the terminal that started
+# it. setsid also makes the child a PROCESS GROUP LEADER, which is the half that
+# matters for bin/stop: tsx spawns a child node process that does the actual
+# serving, and killing only the pid in the pidfile leaves that grandchild
+# holding the port and the database — a stopped server that is still running.
+# With its own group, `kill -- -PID` reaches the whole tree.
+#
+# `node_modules/.bin/tsx` rather than `npx tsx`: same binary npx would resolve
+# to (and the same one the systemd unit ends up running), minus one process in
+# the chain and minus a network lookup when the package is somehow missing.
+TSX="${REPO_DIR}/node_modules/.bin/tsx"
+if [ -x "${TSX}" ]; then
+  setsid nohup "${TSX}" src/server/index.ts >>"${LOGFILE}" 2>&1 &
+else
+  setsid nohup npx tsx src/server/index.ts >>"${LOGFILE}" 2>&1 &
+fi
+PID=$!
+printf '%s' "${PID}" > "${PIDFILE}"
+
+# The process starting is not the app listening — tsx has to compile first.
+for i in $(seq 1 45); do
+  if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:${PORT}/api/health" 2>/dev/null; then
+    say "codegrind is up on http://127.0.0.1:${PORT} (pid ${PID}, log ${LOGFILE})"
+    exit 0
+  fi
+  if ! kill -0 "${PID}" 2>/dev/null; then
+    printf 'the server exited immediately. Last lines of %s:\n\n' "${LOGFILE}" >&2
+    tail -20 "${LOGFILE}" >&2
+    rm -f "${PIDFILE}"
+    exit 1
+  fi
+  sleep 1
+done
+
+printf 'the server is running (pid %s) but did not answer on port %s within 45s.\n' \
+  "${PID}" "${PORT}" >&2
+printf 'See %s\n' "${LOGFILE}" >&2
+exit 1

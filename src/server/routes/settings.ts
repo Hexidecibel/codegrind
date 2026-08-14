@@ -6,20 +6,35 @@
 // for it (bin/seed-bank, warmAhead). A preference the server cannot read is not
 // a preference, it is a display filter.
 //
-// Shaped for what lands next. The AI-provider wizard adds `provider`, `model`
-// and `apiKeyRef` as ROWS in the same table: one more entry in WRITERS below,
-// one more optional field on SettingsResponse, no migration and no new route.
+// THE API KEY IS A SETTING AND IT IS NOT LIKE THE OTHERS. Two rules govern it,
+// and both are enforced here rather than by convention:
+//
+//   1. **It never comes back out.** `readSettings()` returns
+//      `apikey.describe()` — a boolean, a source, and the last four characters.
+//      There is no route, no query parameter and no debug flag that returns the
+//      key, because the only consumer that needs the value is the SDK, running
+//      in this process.
+//   2. **It is validated against the provider before it is stored.** A bad key
+//      that was accepted here would fail later, on the first generate, as an
+//      opaque 401 inside a 30-second operation the user has no reason to
+//      connect to something they typed two screens ago.
+//
+// Rule 2 is why `validate` may now return a Promise: proving a key is real
+// means a network round trip. The commit half stays synchronous, and the
+// all-or-nothing property is unchanged — every field is validated before any
+// field is committed.
 
 import { Hono } from 'hono';
 import type { SettingsResponse } from '../../shared/types.js';
 import { LANGUAGES, isLanguage } from '../../shared/languages.js';
 import { getActiveLanguage, setActiveLanguage } from '../services/db.js';
+import * as apikey from '../services/apikey.service.js';
 
 export const settingsRoutes = new Hono();
 
 /** The whole live settings state, assembled from its individual accessors. */
 function readSettings(): SettingsResponse {
-  return { language: getActiveLanguage() };
+  return { language: getActiveLanguage(), apiKey: apikey.describe() };
 }
 
 /**
@@ -29,10 +44,11 @@ function readSettings(): SettingsResponse {
  * than a property of control flow.
  *
  * `validate` returns an error MESSAGE (400 body) or null for "accepted" — the
- * only place a language string from outside this repo is ever narrowed.
+ * only place a language string from outside this repo is ever narrowed. It may
+ * return a Promise, because validating an API key means asking the provider.
  */
 interface SettingWriter {
-  validate: (value: unknown) => string | null;
+  validate: (value: unknown) => string | null | Promise<string | null>;
   commit: (value: unknown) => void;
 }
 
@@ -45,10 +61,23 @@ const WRITERS: Record<string, SettingWriter> = {
       if (isLanguage(value)) setActiveLanguage(value);
     },
   },
+  apiKey: {
+    validate: (value) => {
+      if (typeof value !== 'string') return 'apiKey must be a string';
+      // The live provider check. Costs no tokens (`models.list`) and is the
+      // only thing that can tell a typo from a revoked key.
+      return apikey.validate(value);
+    },
+    commit: (value) => {
+      if (typeof value === 'string') apikey.store(value);
+    },
+  },
 };
 
 // GET /api/settings — the current settings, with defaults filled in for any
 // row that has never been written (a fresh install has none of them).
+//
+// `apiKey` here is a STATUS, never a value. See apikey.service.ts.
 settingsRoutes.get('/settings', (c) => c.json(readSettings()));
 
 // PUT /api/settings — partial update. Unknown keys and invalid values are 400s,
@@ -78,7 +107,7 @@ settingsRoutes.put('/settings', async (c) => {
         400
       );
     }
-    const problem = writer.validate(value);
+    const problem = await writer.validate(value);
     if (problem) return c.json({ error: problem }, 400);
   }
 

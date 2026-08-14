@@ -17,23 +17,21 @@
 // those are the only slots that can be hit before the player has done anything,
 // and they are the only ones worth pre-paying for.
 //
-// WHY IT IS IDEMPOTENT NOW. It was not before: every run generated the whole
-// SEED list again, at full cost, whether or not the bank already held those
-// problems. bin/warm-lessons has had the skip-if-exists guard since it was
-// written; this is the same guard, against `servableBankSize` — which counts
-// exactly the rows `findUnusedProblem` would hand out, so the two cannot
-// disagree about whether a slot is stocked.
+// WHERE THE LOOP LIVES NOW. The seeding itself is `runSeed` in
+// src/server/services/seed.service.ts, and this file is a printer for the events
+// it yields. The first-run wizard drives the SAME generator over HTTP, so the
+// browser and the CLI cannot disagree about whether a slot is stocked — which
+// they would, expensively, the first time either copy was changed.
 
 import { DIFFICULTIES, TOPICS, type Topic, type Difficulty } from '../src/shared/types.js';
 import { LANGUAGES, isLanguage, type Language } from '../src/shared/languages.js';
-import { ROOT_TOPICS } from '../src/server/services/curriculum.js';
-import { generateAndStore } from '../src/server/services/bank.service.js';
 import {
-  bankSize,
-  servableBankSize,
-  getBankTitles,
-  getActiveLanguage,
-} from '../src/server/services/db.js';
+  runSeed,
+  DEFAULT_SEED_TOPICS,
+  DEFAULT_SEED_DIFFICULTIES,
+} from '../src/server/services/seed.service.js';
+import { getActiveLanguage } from '../src/server/services/db.js';
+import { hydrate, isConfigured } from '../src/server/services/apikey.service.js';
 
 interface Args {
   language: Language;
@@ -109,19 +107,12 @@ function parseArgs(argv: string[]): Args {
 
   return {
     language: language ?? getActiveLanguage(),
-    topics: topics.length ? topics : [...ROOT_TOPICS],
-    difficulties: difficulties.length ? difficulties : ['easy'],
+    topics: topics.length ? topics : [...DEFAULT_SEED_TOPICS],
+    difficulties: difficulties.length ? difficulties : [...DEFAULT_SEED_DIFFICULTIES],
     perSlot,
     dryRun,
   };
 }
-
-const tally = {
-  generated: 0,
-  skipped: 0,
-  apiCalls: 0,
-  failures: [] as string[],
-};
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
@@ -133,88 +124,72 @@ async function main(): Promise<void> {
       `difficulty(ies) = ${slots} slot(s), up to ${args.perSlot} problem(s) each` +
       (args.dryRun ? ' — DRY RUN, no API calls, no writes' : '')
   );
-  console.log(`Bank currently holds ${bankSize(language)} ${language} problem(s).\n`);
 
-  if (!args.dryRun && !process.env.ANTHROPIC_API_KEY) {
-    console.error('ANTHROPIC_API_KEY not set — provision it via bin/inject.');
+  // A key stored by the first-run wizard lives in the settings table, not in
+  // .env — `bin/inject` truncates .env on every deploy, so a pasted key there
+  // would be destroyed. hydrate() publishes it into the environment for the
+  // SDK, and does nothing at all when the environment already has one.
+  hydrate();
+  if (!args.dryRun && !isConfigured()) {
+    console.error(
+      'No Anthropic API key is configured. Set ANTHROPIC_API_KEY, or start the app\n' +
+        '(bin/setup) and paste one into the setup screen.'
+    );
     process.exit(1);
   }
 
-  for (const topic of args.topics) {
-    for (const difficulty of args.difficulties) {
-      const have = servableBankSize(language, topic, difficulty);
-      const need = Math.max(0, args.perSlot - have);
-      const label = `${difficulty}/${topic}`;
+  let failed = false;
 
-      if (need === 0) {
-        console.log(`  ${label}: ${have} ready, skipping`);
-        tally.skipped += have;
-        continue;
-      }
-      if (args.dryRun) {
-        console.log(`  ${label}: ${have} ready — WOULD GENERATE ${need}`);
-        continue;
-      }
-
-      for (let i = 0; i < need; i++) {
-        process.stdout.write(`  ${label}: generating ${i + 1}/${need} ... `);
-        try {
-          // Show the generator what this topic already holds. Without it,
-          // seeding two problems into one slot reliably produces the SAME
-          // problem twice — the first python seed run emitted "Happy Number"
-          // and "First Unique Character" as both of their slots' pairs, because
-          // each call was made in total ignorance of the other. getAdaptiveProblem
-          // has always passed these; only the direct seed path did not.
-          const avoidTitles = getBankTitles(language, topic);
-          // One Claude call per problem, plus two sandbox runs (sample +
-          // hidden) to canonicalize its tests against the reference. For a
-          // non-JavaScript language this THROWS rather than storing an
-          // unverified problem, which is exactly what we want while seeding:
-          // a broken sandbox must stop the spend, not fill the bank with
-          // problems nobody can ever solve.
-          tally.apiCalls++;
-          const p = await generateAndStore(
-            language,
-            topic,
-            difficulty,
-            avoidTitles.length ? { avoidTitles } : undefined
-          );
-          tally.generated++;
-          console.log(
-            `ok — "${p.title}" (${p.sampleTests.length} sample, ${p.hiddenTests.length} hidden)`
-          );
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.log(`FAILED: ${message}`);
-          tally.failures.push(`${label}: ${message}`);
+  for await (const ev of runSeed(args)) {
+    switch (ev.type) {
+      case 'plan':
+        console.log(`Bank currently holds ${ev.bankSize} ${ev.language} problem(s).\n`);
+        for (const s of ev.slots) {
+          const label = `${s.difficulty}/${s.topic}`;
+          if (s.need === 0) console.log(`  ${label}: ${s.have} ready, skipping`);
+          else if (ev.dryRun) console.log(`  ${label}: ${s.have} ready — WOULD GENERATE ${s.need}`);
         }
+        break;
+      case 'generating':
+        process.stdout.write(
+          `  ${ev.difficulty}/${ev.topic}: generating ${ev.done + 1}/${ev.total} ... `
+        );
+        break;
+      case 'generated':
+        console.log(`ok — "${ev.title}" (${ev.sampleTests} sample, ${ev.hiddenTests} hidden)`);
+        break;
+      case 'failed':
+        console.log(`FAILED: ${ev.message}`);
+        break;
+      case 'done': {
+        console.log('\n' + '-'.repeat(60));
+        if (ev.dryRun) {
+          console.log('DRY RUN — nothing was generated or written.');
+        } else {
+          console.log(
+            [
+              `generated: ${ev.generated}`,
+              `skipped:   ${ev.skipped} (already banked)`,
+              // The number that costs money. `attempts` counts generateAndStore
+              // ENTRIES, and one entry can retry generation up to
+              // MAX_GEN_ATTEMPTS times when a reference errors on its own tests
+              // — so this is a floor, not an exact bill.
+              `generation attempts (min): ${ev.attempts}`,
+              `bank now holds ${ev.bankSize} ${ev.language} problem(s).`,
+            ].join('\n')
+          );
+        }
+        if (ev.failures.length) {
+          console.log(`\n${ev.failures.length} failure(s) — re-run to retry just these:`);
+          for (const f of ev.failures) console.log(`  - ${f}`);
+          failed = true;
+        }
+        break;
       }
     }
   }
 
-  console.log('\n' + '-'.repeat(60));
-  if (args.dryRun) {
-    console.log('DRY RUN — nothing was generated or written.');
-  } else {
-    console.log(
-      [
-        `generated: ${tally.generated}`,
-        `skipped:   ${tally.skipped} (already banked)`,
-        // The number that costs money. `apiCalls` counts generateAndStore
-        // ENTRIES, and one entry can retry generation up to MAX_GEN_ATTEMPTS
-        // times when a reference errors on its own tests — so this is a floor,
-        // not an exact bill.
-        `generation attempts (min): ${tally.apiCalls}`,
-        `bank now holds ${bankSize(language)} ${language} problem(s).`,
-      ].join('\n')
-    );
-  }
-
-  if (tally.failures.length) {
-    console.log(`\n${tally.failures.length} failure(s) — re-run to retry just these:`);
-    for (const f of tally.failures) console.log(`  - ${f}`);
-    process.exit(1);
-  }
+  if (failed) process.exit(1);
   console.log('\nDone.');
 }
 

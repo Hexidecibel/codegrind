@@ -379,6 +379,26 @@ export function bankSize(language: Language): number {
   return (countBankStmt.get(language) as { n: number }).n;
 }
 
+const countServableTotalStmt = db.prepare(`
+  SELECT COUNT(*) AS n FROM problems
+  WHERE language = ? AND used = 0 AND canonicalized = 1
+`);
+
+/**
+ * How many problems this language could serve RIGHT NOW, across every slot.
+ *
+ * The same predicate as `servableBankSize` with the slot dropped, and the
+ * distinction matters for exactly one caller: first-run detection. `bankSize`
+ * counts rows, including ones already solved and ones that were stored before
+ * a sandbox could verify them — so a brand-new install that generated one
+ * problem and burned it has a non-zero bank and nothing to hand out. "Can this
+ * install give me a problem without a cold 30-second generate" is what the
+ * setup screen is really asking, and this is that question.
+ */
+export function servableBankTotal(language: Language): number {
+  return (countServableTotalStmt.get(language) as { n: number }).n;
+}
+
 // -----------------------------------------------------------------------------
 // Attempts
 // -----------------------------------------------------------------------------

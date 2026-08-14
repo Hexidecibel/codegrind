@@ -26,6 +26,8 @@ import type {
   StudyReadResponse,
   ReflectResponse,
   SettingsResponse,
+  SetupState,
+  SeedEvent,
 } from '@/shared/types';
 import type { Language } from '@/shared/languages';
 
@@ -170,12 +172,91 @@ export function getSettings(): Promise<SettingsResponse> {
   return request<SettingsResponse>('/api/settings');
 }
 
-/** PUT /api/settings — partial update; returns the whole resulting state. */
-export function updateSettings(patch: { language?: Language }): Promise<SettingsResponse> {
+/**
+ * PUT /api/settings — partial update; returns the whole resulting state.
+ *
+ * `apiKey` is write-only. The server validates it against Anthropic before
+ * storing (so a 400 here means "that key does not work", not "malformed") and
+ * the response carries only a status: configured, source, last four characters.
+ */
+export function updateSettings(patch: {
+  language?: Language;
+  apiKey?: string;
+}): Promise<SettingsResponse> {
   return request<SettingsResponse>('/api/settings', {
     method: 'PUT',
     body: JSON.stringify(patch),
   });
+}
+
+// ---------------------------------------------------------------------------
+// First run
+// ---------------------------------------------------------------------------
+/** GET /api/setup/state — what is missing, derived fresh (never a stored flag). */
+export function getSetupState(): Promise<SetupState> {
+  return request<SetupState>('/api/setup/state');
+}
+
+/** POST /api/setup/dismiss — proceed with an empty bank. */
+export function dismissSetup(): Promise<SetupState> {
+  return request<SetupState>('/api/setup/dismiss', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+/**
+ * POST /api/setup/seed — stock a bank, reporting real progress.
+ *
+ * The response is NDJSON: one `SeedEvent` per line, written as each step
+ * actually completes. This reads the socket rather than the whole body, which
+ * is the entire point — a bank of 8 problems takes two to four minutes, and a
+ * bar that only moves at the end is worse than no bar.
+ *
+ * `signal` aborts the read. It does NOT stop the server mid-generation (the
+ * current problem finishes and is banked, which is the right outcome — it was
+ * already paid for), it stops the client watching.
+ */
+export async function seedBank(
+  body: { language?: Language; perSlot?: number },
+  onEvent: (event: SeedEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch('/api/setup/seed', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    const err = await res.json().catch(() => null);
+    throw new Error((err && err.error) || res.statusText || 'Seeding failed to start');
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  // Chunk boundaries fall wherever TCP wants them, so a line can arrive in two
+  // pieces. Everything before the last newline is complete; the remainder is
+  // carried forward.
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) buffer += decoder.decode(value, { stream: true });
+    let nl = buffer.indexOf('\n');
+    while (nl >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (line) {
+        try {
+          onEvent(JSON.parse(line) as SeedEvent);
+        } catch {
+          /* a truncated line is not worth failing the whole run over */
+        }
+      }
+      nl = buffer.indexOf('\n');
+    }
+    if (done) break;
+  }
 }
 
 /** GET /api/progress — per-pattern mastery. */

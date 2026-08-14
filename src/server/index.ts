@@ -12,6 +12,15 @@ import { primersRoutes } from './routes/primers.js';
 import { studyRoutes } from './routes/study.js';
 import { reflectRoutes } from './routes/reflect.js';
 import { settingsRoutes } from './routes/settings.js';
+import { setupRoutes } from './routes/setup.js';
+import { hydrate as hydrateApiKey } from './services/apikey.service.js';
+
+// Publish a wizard-stored API key into the environment before any route can
+// need one. Does NOTHING when ANTHROPIC_API_KEY is already set — the deploy's
+// key always wins — so an existing systemd + Infisical install is untouched.
+// See services/apikey.service.ts for why the key is not, and must not be, in
+// .env: bin/inject truncates that file on every deploy and every `cd`.
+const bootKey = hydrateApiKey();
 
 const app = new Hono();
 
@@ -25,6 +34,7 @@ app.route('/api', primersRoutes);
 app.route('/api', studyRoutes);
 app.route('/api', reflectRoutes);
 app.route('/api', settingsRoutes);
+app.route('/api', setupRoutes);
 
 app.get('/api/health', (c) => c.json({ status: 'ok' }));
 
@@ -42,4 +52,10 @@ app.get('*', (c, next) => {
 const port = parseInt(process.env.PORT || '9416');
 const host = process.env.HOST || '127.0.0.1';
 console.log(`codegrind server running on ${host}:${port}`);
+// The key's SOURCE, never its value — this line goes to the journal.
+console.log(
+  bootKey.configured
+    ? `  Anthropic API key: configured (from ${bootKey.source})`
+    : '  Anthropic API key: NOT configured — the setup screen will ask for one'
+);
 serve({ fetch: app.fetch, port, hostname: host });

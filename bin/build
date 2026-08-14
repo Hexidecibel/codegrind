@@ -4,12 +4,23 @@
 # ./dist on request, so the worst case is a few seconds of mixed assets.
 set -euo pipefail
 
-REPO="/home/hexi/local/src/codegrind"
+# Derived, not hardcoded. This used to be the literal author's path, which meant
+# a clone anywhere else typechecked and bundled somebody ELSE's tree — or, more
+# often, failed with a cd error one line in. bin/setup runs this from a fresh
+# clone, so it has to work wherever the clone is.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
-# Same Node pin as bin/deploy — better-sqlite3 is compiled against the ABI of
-# whatever Node runs npm, and the systemd unit runs v22.22.0.
-export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+# Same Node selection as every other entry point: the pinned v22.22.0 when it
+# exists (the systemd unit runs exactly that), otherwise any supported major.
+# better-sqlite3 is compiled against the ABI of whatever Node runs npm.
+# shellcheck source=lib/node.sh
+source "${REPO}/bin/lib/node.sh"
+if ! cg_use_node; then
+  echo "no usable Node found." >&2
+  cg_node_advice >&2
+  exit 1
+fi
 
 if [[ "${SKIP_INSTALL:-0}" != "1" ]]; then
   # This box has a global npm `omit=dev`, so devDependencies (vite, tsx,

@@ -1,0 +1,381 @@
+#!/usr/bin/env bash
+# =============================================================================
+# codegrind — one command from `git clone` to a running app
+# =============================================================================
+#
+#   git clone … && cd codegrind && bin/setup
+#
+#   bin/setup                 # everything, then start the server
+#   bin/setup --port 9500     # bind somewhere else (writes it to .env)
+#   bin/setup --no-start      # prepare everything, start nothing
+#   bin/setup --force         # redo the install and the build even if unchanged
+#   bin/setup --check         # preflight only: report, change nothing
+#
+# WHAT IT DOES, IN ORDER
+#   preflight   node, docker, disk, port — each failure says what to DO
+#   .env        written from defaults if absent; an existing one is never touched
+#   deps        npm install --include=dev
+#   build       tsc -b && vite build && precompress
+#   database    created and migrated (it is created on first import; this makes
+#               that happen HERE, where a failure has a name, instead of inside
+#               a server that then exits)
+#   images      one hardened Docker sandbox per language, conformance-gated
+#   start       the server, then a health check
+#
+# IT IS IDEMPOTENT AND IT IS MEANT TO BE RE-RUN. Each expensive step is stamped
+# with a hash of its inputs under $DATA_DIR/.setup/, so a second run skips the
+# install and the build and finishes in seconds — and says which steps it
+# skipped, because a script that silently does nothing is indistinguishable from
+# a script that is broken.
+#
+# NOTHING HERE NEEDS A FILE EDITED FIRST. There is no API key in .env and there
+# must never be one: `bin/inject` (the author's secret tooling) rewrites that
+# file with O_TRUNC on every deploy and every `cd`, so a key written there dies
+# silently. The key is asked for in the browser and stored in the database. See
+# src/server/services/apikey.service.ts.
+#
+# NO cush-tools, NO Infisical, NO 1Password REQUIRED. If bin/inject happens to
+# be present it is used to refresh .env; if it is not, that is not a failure and
+# not even a warning.
+
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_DIR}" || exit 1
+
+# shellcheck source=lib/node.sh
+source "${REPO_DIR}/bin/lib/node.sh"
+
+# -----------------------------------------------------------------------------
+# Presentation
+# -----------------------------------------------------------------------------
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  C_OK=$'\033[32m'; C_BAD=$'\033[31m'; C_DIM=$'\033[2m'; C_B=$'\033[1m'; C_0=$'\033[0m'
+else
+  C_OK=''; C_BAD=''; C_DIM=''; C_B=''; C_0=''
+fi
+
+ok()    { printf '  %s✓%s %s\n' "${C_OK}" "${C_0}" "$1"; }
+skip()  { printf '  %s✓%s %s %s(already done)%s\n' "${C_OK}" "${C_0}" "$1" "${C_DIM}" "${C_0}"; }
+work()  { printf '  %s·%s %s\n' "${C_DIM}" "${C_0}" "$1"; }
+warn()  { printf '  %s!%s %s\n' "${C_BAD}" "${C_0}" "$1"; }
+
+# Every failure exits through here, and every one of them has to answer "so what
+# do I do now?". A preflight that only says what is wrong has moved the problem,
+# not solved it.
+die() {
+  printf '\n  %s✗ %s%s\n' "${C_BAD}" "$1" "${C_0}"
+  shift
+  for line in "$@"; do printf '      %s\n' "${line}"; done
+  printf '\n'
+  exit 1
+}
+
+# -----------------------------------------------------------------------------
+# Arguments
+# -----------------------------------------------------------------------------
+DO_START=1
+FORCE=0
+CHECK_ONLY=0
+PORT_OVERRIDE=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-start) DO_START=0; shift ;;
+    --force)    FORCE=1; shift ;;
+    --check)    CHECK_ONLY=1; shift ;;
+    --port)     PORT_OVERRIDE="${2:?--port needs a number}"; shift 2 ;;
+    -h|--help)  sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)          die "unknown flag: $1" "Run bin/setup --help." ;;
+  esac
+done
+
+printf '\n%scodegrind setup%s  %s%s%s\n\n' "${C_B}" "${C_0}" "${C_DIM}" "${REPO_DIR}" "${C_0}"
+
+# =============================================================================
+# 1. Node
+# =============================================================================
+# First, because everything after it runs node, and because a wrong Node is the
+# single most likely thing to go wrong on a machine that is not the author's.
+if ! cg_use_node; then
+  die "Node" "$(cg_node_advice)"
+fi
+if ! cg_node_supported "${CG_NODE_VERSION}"; then
+  die "Node ${CG_NODE_VERSION} will crash this app" "$(cg_node_advice)"
+fi
+ok "node ${CG_NODE_VERSION}"
+
+if ! command -v npm >/dev/null 2>&1; then
+  die "npm is missing" \
+    "Node is installed but npm is not on PATH — an unusual install." \
+    "Reinstall Node from https://nodejs.org (npm ships with it)."
+fi
+
+# =============================================================================
+# 2. Docker
+# =============================================================================
+# Every submission runs in a hardened, network-less container. There is no
+# fallback that runs your code in this process, deliberately.
+if ! command -v docker >/dev/null 2>&1; then
+  die "Docker is not installed" \
+    "codegrind runs every submission — yours and the ones it writes to verify" \
+    "its own problems — inside a locked-down container. There is no way to skip it." \
+    "" \
+    "  Linux:  https://docs.docker.com/engine/install/" \
+    "  macOS:  https://docs.docker.com/desktop/install/mac-install/"
+fi
+
+if ! docker info >/dev/null 2>&1; then
+  hint_group=""
+  if ! id -nG "$(id -un)" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+    hint_group="You are not in the 'docker' group: sudo usermod -aG docker \$USER, then log out and back in."
+  fi
+  die "Docker is installed but its daemon is not reachable" \
+    "Try:  docker info" \
+    "" \
+    "  - Not started?   sudo systemctl start docker   (or open Docker Desktop)" \
+    "  - Permissions?   ${hint_group:-run 'docker info' and read the error}"
+fi
+ok "docker $(docker version -f '{{.Server.Version}}' 2>/dev/null || echo '(version unknown)')"
+
+# =============================================================================
+# 3. Disk
+# =============================================================================
+# The three sandbox images are ~1.2 GB together (Go's toolchain is most of it),
+# plus layer scratch during the build. Running out mid-build leaves a half-built
+# image and an error about a tar stream, which explains nothing.
+DOCKER_ROOT="$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)"
+DISK_TARGET="${DOCKER_ROOT}"
+[ -d "${DISK_TARGET}" ] || DISK_TARGET="/"
+FREE_MB="$(df -Pm "${DISK_TARGET}" 2>/dev/null | awk 'NR==2 {print $4}')"
+if [ -n "${FREE_MB}" ] && [ "${FREE_MB}" -lt 3072 ]; then
+  die "only ${FREE_MB} MB free on ${DISK_TARGET}" \
+    "The three sandbox images need about 3 GB, plus scratch space while they build." \
+    "Free some space (docker system prune -a reclaims unused images) and re-run."
+fi
+if [ -n "${FREE_MB}" ] && [ "${FREE_MB}" -lt 6144 ]; then
+  warn "disk: ${FREE_MB} MB free on ${DISK_TARGET} — enough, but not much"
+else
+  ok "disk $(( ${FREE_MB:-0} / 1024 )) GB free on ${DISK_TARGET}"
+fi
+
+# =============================================================================
+# 4. .env and the port
+# =============================================================================
+# An existing .env is NEVER rewritten. On the author's machine it is materialized
+# from Infisical by cush-tools and rewriting it would destroy real configuration;
+# on anybody else's it is theirs.
+ENV_FILE="${REPO_DIR}/.env"
+ENV_CREATED=0
+if [ ! -f "${ENV_FILE}" ]; then
+  # Non-secret defaults only. The API key is deliberately absent — see the header.
+  cat > "${ENV_FILE}" <<EOF
+# codegrind — local configuration. Written by bin/setup; safe to edit.
+#
+# There is NO API KEY here, on purpose. Paste it into the app's setup screen
+# instead: it is stored in the database, where nothing can truncate it. (If you
+# would rather supply it from the environment, set ANTHROPIC_API_KEY and it
+# takes precedence over anything the app has stored.)
+PORT='9416'
+HOST='127.0.0.1'
+DATA_DIR='./data'
+EOF
+  chmod 600 "${ENV_FILE}"
+  ENV_CREATED=1
+fi
+
+# shellcheck disable=SC1090,SC1091
+set -a; source "${ENV_FILE}"; set +a
+
+if [ -n "${PORT_OVERRIDE}" ]; then
+  case "${PORT_OVERRIDE}" in
+    ''|*[!0-9]*) die "--port must be a number" "You passed: ${PORT_OVERRIDE}" ;;
+  esac
+  PORT="${PORT_OVERRIDE}"
+  export PORT
+  # Persist it, so bin/start, bin/status and the next bin/setup agree.
+  if grep -q '^PORT=' "${ENV_FILE}" 2>/dev/null; then
+    sed -i.bak "s|^PORT=.*|PORT='${PORT}'|" "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
+  else
+    printf "PORT='%s'\n" "${PORT}" >> "${ENV_FILE}"
+  fi
+fi
+
+PORT="${PORT:-9416}"
+HOST="${HOST:-127.0.0.1}"
+DATA_DIR="${DATA_DIR:-${REPO_DIR}/data}"
+case "${DATA_DIR}" in /*) ;; *) DATA_DIR="${REPO_DIR}/${DATA_DIR#./}" ;; esac
+export PORT HOST DATA_DIR
+
+if [ "${ENV_CREATED}" -eq 1 ]; then
+  ok ".env written (port ${PORT}, data ${DATA_DIR})"
+else
+  ok ".env present (port ${PORT})"
+fi
+
+# Is the port free — and if not, is the thing on it ours?
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; }
+PORT_IS_OURS=0
+if port_busy; then
+  if curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/api/health" 2>/dev/null | grep -q '"ok"'; then
+    PORT_IS_OURS=1
+    ok "port ${PORT} already serving codegrind"
+  else
+    die "port ${PORT} is already in use by something else" \
+      "Find it with:  ss -ltnp 'sport = :${PORT}'   (or: lsof -i :${PORT})" \
+      "Then either stop it, or run codegrind somewhere else:" \
+      "    bin/setup --port 9500"
+  fi
+fi
+
+if [ "${CHECK_ONLY}" -eq 1 ]; then
+  printf '\n  %sPreflight passed.%s Run bin/setup to install and start.\n\n' "${C_B}" "${C_0}"
+  exit 0
+fi
+
+# =============================================================================
+# 5. Stamps — what makes a re-run fast
+# =============================================================================
+STAMP_DIR="${DATA_DIR}/.setup"
+mkdir -p "${STAMP_DIR}" || die "cannot write to ${DATA_DIR}" "Check the directory's permissions."
+
+# Hash a set of files by content. `cksum` is in POSIX and on every box; the
+# alternative (mtimes) reports work every time git touches a file.
+hash_of() {
+  { for f in "$@"; do [ -e "$f" ] && cat "$f"; done; } | cksum | awk '{print $1"-"$2}'
+}
+hash_tree() {
+  find "$@" -type f 2>/dev/null | LC_ALL=C sort | xargs cat 2>/dev/null | cksum | awk '{print $1"-"$2}'
+}
+stamp_matches() { # name, value
+  [ "${FORCE}" -eq 0 ] && [ -f "${STAMP_DIR}/$1" ] && [ "$(cat "${STAMP_DIR}/$1")" = "$2" ]
+}
+stamp_write() { printf '%s' "$2" > "${STAMP_DIR}/$1"; }
+
+# =============================================================================
+# 6. Dependencies
+# =============================================================================
+# --include=dev is not optional: this box (and plenty of CI images) set npm's
+# `omit=dev` globally, and without dev deps there is no tsc, no vite and no tsx —
+# which is to say, no app.
+DEPS_HASH="$(hash_of package-lock.json package.json)-${CG_NODE_VERSION}"
+if stamp_matches deps "${DEPS_HASH}" && [ -d node_modules ]; then
+  skip "dependencies"
+else
+  work "installing dependencies (npm, a minute or two the first time)…"
+  if ! npm install --include=dev --no-audit --no-fund >"${STAMP_DIR}/npm.log" 2>&1; then
+    tail -20 "${STAMP_DIR}/npm.log" >&2
+    die "npm install failed" \
+      "Full log: ${STAMP_DIR}/npm.log" \
+      "The usual cause is no network, or a proxy npm cannot see through."
+  fi
+  # Prove the native module actually loads under THIS Node before anything else
+  # depends on it. If it does not, the failure below is a clean sentence instead
+  # of a segfault three steps later.
+  if ! node -e 'require("better-sqlite3")' >/dev/null 2>&1; then
+    die "better-sqlite3 will not load under ${CG_NODE_VERSION}" \
+      "This is the ABI mismatch this app cares most about." \
+      "Switch to Node 22 and re-run with --force:" \
+      "    nvm use 22 && bin/setup --force"
+  fi
+  stamp_write deps "${DEPS_HASH}"
+  ok "dependencies installed"
+fi
+
+# =============================================================================
+# 7. Build
+# =============================================================================
+BUILD_HASH="$(hash_tree src index.html vite.config.ts tsconfig.json)"
+if stamp_matches build "${BUILD_HASH}" && [ -f dist/index.html ]; then
+  skip "client build"
+else
+  work "building the client (typecheck + bundle; Monaco makes this the slow part)…"
+  if ! SKIP_INSTALL=1 "${REPO_DIR}/bin/build" >"${STAMP_DIR}/build.log" 2>&1; then
+    tail -30 "${STAMP_DIR}/build.log" >&2
+    die "the build failed" "Full log: ${STAMP_DIR}/build.log"
+  fi
+  stamp_write build "${BUILD_HASH}"
+  ok "client built"
+fi
+
+# =============================================================================
+# 8. Database
+# =============================================================================
+# The schema is created and migrated on first import of db.ts. Doing it here
+# rather than letting the server do it means a migration failure is reported by
+# the thing whose job that is, instead of appearing as a server that exited.
+work "preparing the database…"
+DB_REPORT="$("${REPO_DIR}/bin/migrate" --quiet 2>"${STAMP_DIR}/db.log")"
+if [ -z "${DB_REPORT}" ]; then
+  tail -20 "${STAMP_DIR}/db.log" >&2
+  die "could not open or migrate the database" \
+    "Full log: ${STAMP_DIR}/db.log" \
+    "The database lives at ${DATA_DIR}/codegrind.db." \
+    "NOTE: never put it on a network or FUSE filesystem — SQLite locking breaks there."
+fi
+ok "database ready — ${DB_REPORT}"
+
+# =============================================================================
+# 9. Sandbox images
+# =============================================================================
+# shellcheck source=lib/languages.sh
+source "${REPO_DIR}/bin/lib/languages.sh"
+have=(); missing=()
+while read -r lang; do
+  if docker image inspect "${CG_IMAGE[$lang]}" >/dev/null 2>&1; then have+=("${lang}")
+  else missing+=("${lang}"); fi
+done < <(cg_buildable_languages "${REPO_DIR}")
+
+if [ "${#missing[@]}" -gt 0 ]; then
+  work "building sandbox images: ${missing[*]} (first time only; several minutes)…"
+  if ! "${REPO_DIR}/bin/build-runner-image" "${missing[@]}" >"${STAMP_DIR}/images.log" 2>&1; then
+    tail -30 "${STAMP_DIR}/images.log" >&2
+    die "a sandbox image failed to build or failed its conformance gate" \
+      "Full log: ${STAMP_DIR}/images.log" \
+      "An image that disagrees with test-harness/conformance/equality-cases.json is" \
+      "deleted rather than published, so it can never grade a submission." \
+      "Retry one at a time:  bin/build-runner-image ${missing[0]}"
+  fi
+  have+=("${missing[@]}")
+  ok "runner images built: ${missing[*]}"
+else
+  skip "runner images: ${have[*]}"
+fi
+
+# =============================================================================
+# 10. Start
+# =============================================================================
+if [ "${DO_START}" -eq 0 ]; then
+  printf '\n  %sReady.%s Start it with:  bin/start\n\n' "${C_B}" "${C_0}"
+  exit 0
+fi
+
+if [ "${PORT_IS_OURS}" -eq 1 ]; then
+  ok "listening on http://localhost:${PORT}"
+else
+  work "starting the server…"
+  if ! "${REPO_DIR}/bin/start" --quiet; then
+    die "the server did not come up" \
+      "Log: ${DATA_DIR}/server.log" \
+      "Last few lines:" \
+      "$(tail -5 "${DATA_DIR}/server.log" 2>/dev/null || echo '(no log written)')"
+  fi
+  ok "listening on http://localhost:${PORT}"
+fi
+
+# =============================================================================
+# 11. What now
+# =============================================================================
+# The state endpoint is the same one the browser asks, so this line and the app
+# can never disagree about whether setup is finished.
+STATE="$(curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/api/setup/state" 2>/dev/null)"
+printf '\n'
+if printf '%s' "${STATE}" | grep -q '"needed":true'; then
+  printf '  %s→ open http://localhost:%s to finish setup%s\n' "${C_B}" "${PORT}" "${C_0}"
+  printf '    %sIt will ask for an Anthropic API key, then stock your problem bank.%s\n' \
+    "${C_DIM}" "${C_0}"
+else
+  printf '  %s→ open http://localhost:%s and start grinding%s\n' "${C_B}" "${PORT}" "${C_0}"
+fi
+printf '\n    %sbin/status  how it is doing      bin/stop   stop the server%s\n' "${C_DIM}" "${C_0}"
+printf '    %sbin/logs    tail the log         bin/setup  safe to run again%s\n\n' "${C_DIM}" "${C_0}"
