@@ -14,6 +14,7 @@ import { reflectRoutes } from './routes/reflect.js';
 import { settingsRoutes } from './routes/settings.js';
 import { setupRoutes } from './routes/setup.js';
 import { hydrate as hydrateApiKey } from './services/apikey.service.js';
+import { describeRouting, needsAnthropicKey } from './services/llm.client.js';
 
 // Publish a wizard-stored API key into the environment before any route can
 // need one. Does NOTHING when ANTHROPIC_API_KEY is already set — the deploy's
@@ -52,10 +53,16 @@ app.get('*', (c, next) => {
 const port = parseInt(process.env.PORT || '9416');
 const host = process.env.HOST || '127.0.0.1';
 console.log(`codegrind server running on ${host}:${port}`);
-// The key's SOURCE, never its value — this line goes to the journal.
+// Which models answer which calls, and where. Never a credential.
+console.log(`  models: ${describeRouting()}`);
+// The key's SOURCE, never its value — this line goes to the journal. It is only
+// a problem when something actually routes to Anthropic: a fully local install
+// has no key by design, and reporting that as a fault would be a lie.
 console.log(
-  bootKey.configured
-    ? `  Anthropic API key: configured (from ${bootKey.source})`
-    : '  Anthropic API key: NOT configured — the setup screen will ask for one'
+  !needsAnthropicKey()
+    ? '  Anthropic API key: not needed (no call routes to Anthropic)'
+    : bootKey.configured
+      ? `  Anthropic API key: configured (from ${bootKey.source})`
+      : '  Anthropic API key: NOT configured — the setup screen will ask for one'
 );
 serve({ fetch: app.fetch, port, hostname: host });

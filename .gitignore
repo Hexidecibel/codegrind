@@ -21,6 +21,10 @@ npm-debug.log*
 
 # Environment
 .env
+# The scratch instance's config (bin/scratch). Same rules as .env: never committed.
+.env.scratch
 
 # Data (SQLite DB + sandbox scratch)
 data/
+# The scratch instance's own database — a second, disposable install (bin/scratch)
+data-scratch/

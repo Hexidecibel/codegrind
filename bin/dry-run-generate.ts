@@ -25,6 +25,7 @@ import { LANGUAGES, isLanguage, type Language } from '../src/shared/languages.js
 import { dryRunGenerate, type DryRunResult } from '../src/server/services/bank.service.js';
 import { getActiveLanguage } from '../src/server/services/db.js';
 import { hydrate, isConfigured } from '../src/server/services/apikey.service.js';
+import { describeRouting, needsAnthropicKey } from '../src/server/services/llm.client.js';
 
 interface Args {
   language: Language;
@@ -138,7 +139,10 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
   hydrate();
-  if (!isConfigured()) {
+  // The key is only demanded when a role actually routes to Anthropic. A fully
+  // local install has no key and wants none — telling it to go and get one
+  // would be the first thing the friend this stage exists for ever saw.
+  if (needsAnthropicKey() && !isConfigured()) {
     console.error(
       'No Anthropic API key is configured. Set ANTHROPIC_API_KEY, or start the app\n' +
         'and paste one into the setup screen.'
@@ -147,6 +151,7 @@ async function main(): Promise<void> {
   }
 
   console.log('codegrind :: dry-run-generate');
+  console.log(`  ${describeRouting()}`);
   console.log(`  ${args.language} · ${args.difficulty}/${args.topic}`);
   console.log(`  ${args.repeat} attempt(s), keep=${args.keep}\n`);
 

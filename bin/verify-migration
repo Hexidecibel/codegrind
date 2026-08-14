@@ -84,9 +84,21 @@ BASELINE_DIR="${BASELINE_DIR:-${HOME}/backups/codegrind/baseline}"
 # this stage was taken BEFORE any of them ran, against a baseline captured from
 # the PRE-abstraction service and verified after the restart onto the new code;
 # these numbers are the state the smokes left behind.
+# Moved once more by the OpenAI-compatible adapter's regression smokes, on the
+# same terms: real activity, and NO migration (user_version is still 3; that
+# stage added a second way to REACH a model, never a new thing to store).
+# bin/smoke-e2e javascript missed the bank again, so it generated one problem
+# and filed one solve (59 -> 60, 69 -> 70). bin/smoke-python, bin/smoke-go and
+# bin/smoke-isolation wrote no attempts. Everything the LOCAL model produced
+# went to a scratch instance with its own DATA_DIR and its own port, and none of
+# it is in this database — which is the entire reason that instance exists.
+# The byte-identical four-endpoint diff for this stage was taken BEFORE the
+# smokes ran, against the baseline captured from the pre-adapter service and
+# re-verified after the restart onto the new code; these numbers are the state
+# the smokes left behind.
 EXPECTED_ROWS=(
-  "problems:59"
-  "attempts:69"
+  "problems:60"
+  "attempts:70"
   "skill_state:6"
   "sessions:8"
   "review_queue:11"
