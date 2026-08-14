@@ -43,6 +43,7 @@
 
 import {
   DEFAULT_TIMEOUT_MS,
+  MAX_OUTPUT_TOKENS,
   LlmTimeoutError,
   LlmToolCallError,
   type CallMeta,
@@ -186,6 +187,13 @@ export interface OpenAiClientOptions extends OpenAiSeam {
    * See `assertNotDenied` for why this is configuration and not cleverness.
    */
   deny?: readonly string[];
+  /**
+   * Hard ceiling on the output tokens any single call may ask for, from
+   * `CODEGRIND_MAX_OUTPUT_TOKENS`. Defaults to MAX_OUTPUT_TOKENS for this
+   * implementation; `null` disables the ceiling entirely. See that constant for
+   * the measurement, and `effectiveMaxTokens` for what it does.
+   */
+  maxOutputTokens?: number | null;
 }
 
 /**
@@ -241,6 +249,32 @@ export function createOpenAiClient(model: string, opts: OpenAiClientOptions): Ll
   assertNotDenied(model, deny, endpoint);
 
   const isQwen3 = /qwen3/i.test(model);
+  const ceiling =
+    opts.maxOutputTokens === undefined
+      ? MAX_OUTPUT_TOKENS['openai-compatible']
+      : opts.maxOutputTokens;
+
+  /**
+   * The budget actually sent: the call site's number, lowered to the ceiling.
+   *
+   * NEVER RAISED — a call site that asks for 800 tokens gets 800. The ceiling is
+   * a stop on the one failure this implementation has that Anthropic's does not:
+   * a completion that degenerates into repetition and then runs to whatever
+   * budget it was given. See MAX_OUTPUT_TOKENS.
+   */
+  function effectiveMaxTokens(requested: number): number {
+    return ceiling === null ? requested : Math.min(requested, ceiling);
+  }
+
+  /** Told to the user only when a call actually hit the ceiling, never otherwise. */
+  function ceilingNote(requested: number): string {
+    if (ceiling === null || requested <= ceiling) return '';
+    return (
+      ` The call asked for ${requested} but this endpoint is capped at ${ceiling} ` +
+      `output tokens; raise CODEGRIND_MAX_OUTPUT_TOKENS if this model genuinely ` +
+      `needs the room.`
+    );
+  }
 
   /**
    * The messages array, with `system` in front as its own turn.
@@ -285,7 +319,7 @@ export function createOpenAiClient(model: string, opts: OpenAiClientOptions): Ll
     const thinkingOff = (req.thinking ?? 'off') === 'off';
     return {
       model,
-      max_tokens: req.maxTokens,
+      max_tokens: effectiveMaxTokens(req.maxTokens),
       messages: buildMessages(req.system, req.messages, thinkingOff),
       ...(tool
         ? {
@@ -433,7 +467,8 @@ export function createOpenAiClient(model: string, opts: OpenAiClientOptions): Ll
         throw new LlmToolCallError(
           `${model} at ${endpoint} did not call ${req.tool.name} as expected ` +
             `(finish_reason: ${meta.stop ?? 'none'})` +
-            (leak ? `. It replied with prose instead: "${leak}"` : '.'),
+            (leak ? `. It replied with prose instead: "${leak}"` : '.') +
+            (meta.stop === 'max_tokens' ? ceilingNote(req.maxTokens) : ''),
           meta
         );
       }
@@ -452,7 +487,8 @@ export function createOpenAiClient(model: string, opts: OpenAiClientOptions): Ll
           `${model} at ${endpoint} called ${req.tool.name} with arguments that are not ` +
             `valid JSON (finish_reason: ${meta.stop ?? 'none'}): ` +
             `${err instanceof Error ? err.message : String(err)}. ` +
-            `First 200 characters: ${raw.slice(0, 200)}`,
+            `First 200 characters: ${raw.slice(0, 200)}` +
+            (meta.stop === 'max_tokens' ? ceilingNote(req.maxTokens) : ''),
           meta
         );
       }
@@ -475,7 +511,8 @@ export function createOpenAiClient(model: string, opts: OpenAiClientOptions): Ll
         throw new Error(
           meta.stop === 'max_tokens'
             ? `${model} at ${endpoint} hit max_tokens before producing any text ` +
-              `(budget was ${req.maxTokens} tokens).`
+              `(budget was ${effectiveMaxTokens(req.maxTokens)} tokens).` +
+              ceilingNote(req.maxTokens)
             : `${model} at ${endpoint} returned no content and no reasoning_content ` +
               `(finish_reason: ${meta.stop ?? 'none'}).`
         );

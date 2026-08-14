@@ -28,6 +28,7 @@ const VARS = [
   'CODEGRIND_ENDPOINT',
   'CODEGRIND_API_KEY',
   'CODEGRIND_MODEL_DENY',
+  'CODEGRIND_MAX_OUTPUT_TOKENS',
   'QWEN_URL',
   'ANTHROPIC_MODEL',
   'ANTHROPIC_CHAT_MODEL',
@@ -216,5 +217,26 @@ describe('configuration that cannot work fails loudly', () => {
     vi.resetModules();
     const mod = await import('./llm.client.js');
     expect(() => mod.clientFor('workhorse')).toThrow(/CODEGRIND_MODEL_DENY/);
+  });
+
+  it('rejects a nonsense output-token ceiling at load, rather than at 3am', async () => {
+    // A typo here would otherwise become `Math.min(x, NaN)` — which is NaN, and
+    // a `max_tokens: null` on the wire that some servers accept and some 400.
+    for (const v of VARS) delete process.env[v];
+    process.env.CODEGRIND_PROVIDER = 'openai-compatible';
+    process.env.CODEGRIND_MAX_OUTPUT_TOKENS = 'lots';
+    vi.resetModules();
+    await expect(import('./llm.client.js')).rejects.toThrow(/CODEGRIND_MAX_OUTPUT_TOKENS/);
+  });
+
+  it('accepts 0 as "no ceiling", which is the only way to ask for that', async () => {
+    for (const v of VARS) delete process.env[v];
+    process.env.CODEGRIND_PROVIDER = 'openai-compatible';
+    process.env.CODEGRIND_ENDPOINT = 'http://127.0.0.1:9600/v1';
+    process.env.CODEGRIND_MODEL = 'some-local-model';
+    process.env.CODEGRIND_MAX_OUTPUT_TOKENS = '0';
+    vi.resetModules();
+    const mod = await import('./llm.client.js');
+    expect(() => mod.clientFor('workhorse')).not.toThrow();
   });
 });

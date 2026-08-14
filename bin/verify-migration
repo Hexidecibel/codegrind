@@ -97,8 +97,14 @@ BASELINE_DIR="${BASELINE_DIR:-${HOME}/backups/codegrind/baseline}"
 # re-verified after the restart onto the new code; these numbers are the state
 # the smokes left behind.
 EXPECTED_ROWS=(
-  "problems:60"
-  "attempts:70"
+  # 60 -> 62 and 70 -> 71 when the smoke suite was run to verify the generation
+  # quality work: bin/smoke-e2e javascript generated one problem and recorded
+  # one real attempt against it, and bin/seed-bank added one more so that
+  # bin/smoke-isolation had a slot two banks could both answer. Both are real
+  # rows from the real paths, which is what makes the smoke suite worth running
+  # and what makes these numbers need bumping afterwards.
+  "problems:62"
+  "attempts:71"
   "skill_state:6"
   "sessions:8"
   "review_queue:11"

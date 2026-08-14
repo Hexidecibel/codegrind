@@ -28,6 +28,7 @@ import { createOpenAiClient } from './llm.openai.js';
 import {
   LlmTimeoutError,
   LlmToolCallError,
+  MAX_OUTPUT_TOKENS,
   type StructuredRequest,
   type TextRequest,
   type ToolSpec,
@@ -509,5 +510,113 @@ describe('the deny list', () => {
         deny: ['Qwen3-local'],
       })
     ).not.toThrow();
+  });
+});
+
+// =============================================================================
+describe('the output-token ceiling', () => {
+  const h = makeFake();
+  beforeAll(h.listen);
+  afterAll(h.close);
+
+  function reset() {
+    h.fake.bodies = [];
+    h.fake.paths = [];
+    h.fake.reply = () => ({ json: toolCallReply() });
+  }
+
+  /** A completion that ran to the budget and came back with nothing usable. */
+  function truncatedReply() {
+    return {
+      model: 'served-by-the-router',
+      choices: [{ finish_reason: 'length', message: { content: '{"title": "…' } }],
+      usage: { prompt_tokens: 11, completion_tokens: 8000 },
+    };
+  }
+
+  it('lowers a budget that exceeds the ceiling', async () => {
+    reset();
+    const client = createOpenAiClient('qwen3-30b', {
+      endpoint: h.fake.baseURL,
+      maxOutputTokens: 8000,
+    });
+    await client.structured(request({ maxTokens: 16000 }));
+    // WHY THIS IS NOT VANDALISM OF THE CALL SITE'S NUMBER: a completion that
+    // degenerates into repetition runs to whatever budget it is handed, and the
+    // output is unusable at either number. Measured on the local fleet, 16000
+    // tokens of loop cost 293s and 8000 cost 144s, for the same thrown-away
+    // problem. See llm.types.MAX_OUTPUT_TOKENS.
+    expect(h.fake.bodies[0]?.max_tokens).toBe(8000);
+  });
+
+  it('never RAISES a budget to the ceiling', async () => {
+    reset();
+    const client = createOpenAiClient('qwen3-30b', {
+      endpoint: h.fake.baseURL,
+      maxOutputTokens: 8000,
+    });
+    await client.structured(request({ maxTokens: 800 }));
+    expect(h.fake.bodies[0]?.max_tokens).toBe(800);
+  });
+
+  it('applies the measured default when nothing is configured', async () => {
+    reset();
+    const client = createOpenAiClient('qwen3-30b', { endpoint: h.fake.baseURL });
+    await client.structured(request({ maxTokens: 16000 }));
+    expect(h.fake.bodies[0]?.max_tokens).toBe(MAX_OUTPUT_TOKENS['openai-compatible']);
+  });
+
+  it('sends the call site\'s own number when the ceiling is switched off', async () => {
+    reset();
+    const client = createOpenAiClient('qwen3-30b', {
+      endpoint: h.fake.baseURL,
+      maxOutputTokens: null,
+    });
+    await client.structured(request({ maxTokens: 16000 }));
+    expect(h.fake.bodies[0]?.max_tokens).toBe(16000);
+  });
+
+  it('still reports a truncation as max_tokens, not as "it ignored the tool"', async () => {
+    reset();
+    h.fake.reply = () => ({ json: truncatedReply() });
+    const client = createOpenAiClient('qwen3-30b', {
+      endpoint: h.fake.baseURL,
+      maxOutputTokens: 8000,
+    });
+    // The property llm.service.generateProblem depends on: a capped call that
+    // ran out of room must still arrive as a labelled truncation, or the whole
+    // fix trades a slow honest failure for a fast confusing one.
+    await expect(client.structured(request({ maxTokens: 16000 }))).rejects.toMatchObject({
+      name: 'LlmToolCallError',
+      meta: { stop: 'max_tokens' },
+    });
+  });
+
+  it('tells the user the ceiling was what stopped it, and how to raise it', async () => {
+    reset();
+    h.fake.reply = () => ({ json: truncatedReply() });
+    const client = createOpenAiClient('qwen3-30b', {
+      endpoint: h.fake.baseURL,
+      maxOutputTokens: 8000,
+    });
+    await expect(client.structured(request({ maxTokens: 16000 }))).rejects.toThrow(
+      /CODEGRIND_MAX_OUTPUT_TOKENS/
+    );
+  });
+
+  it('says nothing about a ceiling a call never came near', async () => {
+    reset();
+    h.fake.reply = () => ({ json: truncatedReply() });
+    const client = createOpenAiClient('qwen3-30b', {
+      endpoint: h.fake.baseURL,
+      maxOutputTokens: 8000,
+    });
+    // Truncated at 800 with an 8000 ceiling: the ceiling is irrelevant here, and
+    // blaming it would send the reader to the wrong knob. Caught by hand rather
+    // than with `rejects.not.toThrow`, which passes just as happily when nothing
+    // rejected at all.
+    const err = await client.structured(request({ maxTokens: 800 })).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LlmToolCallError);
+    expect((err as Error).message).not.toMatch(/CODEGRIND_MAX_OUTPUT_TOKENS/);
   });
 });

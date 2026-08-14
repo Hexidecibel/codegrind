@@ -11,6 +11,16 @@
 // using an endpoint actually feels like is the SINGLE-SHOT rate, and a retry
 // loop is designed to hide it. This makes exactly one attempt.
 //
+// --repeat MEASURES A SEQUENCE, NOT N FIRST QUESTIONS. The app never asks a
+// model to write a problem in a vacuum: it names the titles already in the slot
+// and quotes the statements it has recently served. This used to skip both, and
+// the result was a measurement that libelled the model — eight local-model runs
+// of easy/arrays came back as "find the maximum" under six different titles,
+// while the same model asked the way the app asks produced eight different
+// problems. So the same steer is built here (bank.noveltyOpts, shared with the
+// real path), and because a dry run stores nothing, this loop carries its own
+// history forward across attempts.
+//
 // It also reports WHICH STAGE failed, because "it didn't work" conflates three
 // unrelated things: the model produced no usable tool call (`generation`), it
 // produced one whose own reference errors on its own inputs (`too-few-tests`),
@@ -22,7 +32,11 @@
 
 import { TOPICS, DIFFICULTIES, type Topic, type Difficulty } from '../src/shared/types.js';
 import { LANGUAGES, isLanguage, type Language } from '../src/shared/languages.js';
-import { dryRunGenerate, type DryRunResult } from '../src/server/services/bank.service.js';
+import {
+  dryRunGenerate,
+  type DryRunResult,
+  type RecentDigest,
+} from '../src/server/services/bank.service.js';
 import { getActiveLanguage } from '../src/server/services/db.js';
 import { hydrate, isConfigured } from '../src/server/services/apikey.service.js';
 import { describeRouting, needsAnthropicKey } from '../src/server/services/llm.client.js';
@@ -44,7 +58,8 @@ function usage(): never {
       '  --topic T        one of: ' + TOPICS.join(', ') + '  (default: arrays)',
       '  --difficulty D   one of: ' + DIFFICULTIES.join(', ') + '  (default: easy)',
       '  --keep           store the problem in the bank when it succeeds',
-      '  --repeat N       run N independent attempts and report the single-shot rate',
+      '  --repeat N       run N attempts as a SEQUENCE (each told what the last ones',
+      '                   produced, as the app does) and report the single-shot rate',
       '',
       'Spends one generation call per attempt.',
     ].join('\n')
@@ -156,11 +171,26 @@ async function main(): Promise<void> {
   console.log(`  ${args.repeat} attempt(s), keep=${args.keep}\n`);
 
   const results: DryRunResult[] = [];
+  // What this run has already produced, newest first.
+  //
+  // WITHOUT THIS, --repeat MEASURES THE WRONG THING. A dry run stores nothing,
+  // so the "what have I already served for this topic" digest that the real
+  // path reads back out of the database is empty on every attempt — and N
+  // attempts are N independent first questions rather than the sequence a
+  // player would actually be served. Measured on a local model, that difference
+  // was eight variations of "find the maximum" versus eight different problems.
+  // Keeping the accumulation HERE, in the caller that owns --repeat, is what
+  // lets dryRunGenerate stay one honest attempt.
+  const seen: RecentDigest[] = [];
   for (let i = 1; i <= args.repeat; i++) {
     const result = await dryRunGenerate(args.language, args.topic, args.difficulty, {
       keep: args.keep,
+      recent: seen,
     });
     results.push(result);
+    if (result.ok) {
+      seen.unshift({ title: result.problem.title, prompt: result.problem.prompt });
+    }
     report(result, i, args.repeat);
   }
 

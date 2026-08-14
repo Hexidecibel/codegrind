@@ -28,7 +28,7 @@ import {
   type LanguageProfile,
 } from './llm.language.js';
 import { structured, text as textCall } from './llm.client.js';
-import { LlmToolCallError, type LlmMessage, type ToolSpec } from './llm.types.js';
+import { LlmToolCallError, type CallMeta, type LlmMessage, type ToolSpec } from './llm.types.js';
 
 // ---------------------------------------------------------------------------
 // This file writes PROMPTS and unwraps ANSWERS.
@@ -344,10 +344,25 @@ export async function generateProblem(
   // It is checked on BOTH exits because a cut-off tool call has two shapes: a
   // partial one that comes back and fails to parse, and none at all. The second
   // used to be indistinguishable from "the model ignored the tool".
-  const truncated = () =>
-    new Error(
-      `Generation truncated at max_tokens (${difficulty}/${topic}) — the emitted problem was cut off mid-tool-call.`
+  //
+  // The output-token count is included because it is the number that tells the
+  // two causes apart, and it cost a raw-response dump to learn that: a budget
+  // that was genuinely too small stops SHORT of it on the next attempt, while a
+  // completion that degenerated into repetition lands on it exactly, every time.
+  // The cause is chained so the client's own message — which knows about
+  // ceilings and how to raise them — survives to anyone who looks.
+  const truncated = (meta?: CallMeta, cause?: unknown) => {
+    const err = new Error(
+      `Generation truncated at max_tokens (${difficulty}/${topic})` +
+        (meta ? ` after ${meta.usage.outputTokens} output tokens` : '') +
+        ` — the emitted problem was cut off mid-tool-call.`
     );
+    // Assigned rather than passed to the constructor: the ErrorOptions overload
+    // needs lib ES2022, and raising the lib for one field is a bigger change
+    // than this line.
+    if (cause !== undefined) (err as Error & { cause?: unknown }).cause = cause;
+    return err;
+  };
 
   let input: Record<string, unknown>;
   try {
@@ -370,10 +385,12 @@ export async function generateProblem(
         },
       ],
     });
-    if (call.meta.stop === 'max_tokens') throw truncated();
+    if (call.meta.stop === 'max_tokens') throw truncated(call.meta);
     input = call.input;
   } catch (err) {
-    if (err instanceof LlmToolCallError && err.meta.stop === 'max_tokens') throw truncated();
+    if (err instanceof LlmToolCallError && err.meta.stop === 'max_tokens') {
+      throw truncated(err.meta, err);
+    }
     throw err;
   }
 
