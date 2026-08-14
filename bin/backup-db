@@ -26,7 +26,9 @@ cd "$REPO_DIR" || exit 1
 
 # better-sqlite3 is ABI-pinned to the Node the systemd unit runs. Under Node 24
 # the native module does not merely fail to load, it hard-crashes the process.
-export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+# shellcheck source=lib/node.sh
+source "$REPO_DIR/bin/lib/node.sh"
+cg_require_node
 
 if [[ -f "$REPO_DIR/.env" ]]; then
   set -a
@@ -36,7 +38,7 @@ if [[ -f "$REPO_DIR/.env" ]]; then
 fi
 
 DB="${DATA_DIR:-$REPO_DIR/data}/codegrind.db"
-BACKUP_DIR="${BACKUP_DIR:-/home/hexi/backups/codegrind}"
+BACKUP_DIR="${BACKUP_DIR:-${HOME}/backups/codegrind}"
 LABEL="${1:-}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 

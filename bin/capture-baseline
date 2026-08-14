@@ -3,7 +3,7 @@
 # aggregation that row counts cannot see. bin/verify-migration reads these back.
 #
 #   bin/capture-baseline                                   # -> the default baseline dir
-#   bin/capture-baseline /home/hexi/backups/codegrind/baseline-phase1
+#   bin/capture-baseline ~/backups/codegrind/baseline-phase1
 #
 # READ-ONLY: GETs the live API and opens SQLite with readonly:true.
 #
@@ -25,7 +25,10 @@ set -uo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR" || exit 1
 
-export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+# better-sqlite3 is ABI-pinned; lib/node.sh finds a Node that will not crash it.
+# shellcheck source=lib/node.sh
+source "$REPO_DIR/bin/lib/node.sh"
+cg_require_node
 
 if [[ -f "$REPO_DIR/.env" ]]; then
   set -a
@@ -36,7 +39,7 @@ fi
 
 DB="${DATA_DIR:-$REPO_DIR/data}/codegrind.db"
 PORT="${PORT:-9416}"
-OUT_DIR="${1:-${BASELINE_DIR:-/home/hexi/backups/codegrind/baseline}}"
+OUT_DIR="${1:-${BASELINE_DIR:-${HOME}/backups/codegrind/baseline}}"
 
 printf 'codegrind :: capture-baseline\n'
 printf '  db   %s\n' "$DB"

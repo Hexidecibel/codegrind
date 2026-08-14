@@ -24,7 +24,7 @@ export PATH="$HOME/.nvm/versions/node/v22.22.0/bin:$PATH"    # or: nvm use 22
 | `bin/start` | Start as a plain background process (setsid + nohup + pidfile in `$DATA_DIR`), wait for `/api/health`. `--quiet` speaks only on failure. **Refuses to run beside a systemd instance serving the same directory** — two processes, one SQLite file, one port. |
 | `bin/stop` | Stop what `bin/start` started. Signals the whole **process group**: `tsx` runs the server in a child, and signalling only the pidfile's process leaves it orphaned and still holding the port. TERM, wait, then KILL. |
 | `bin/status` | Service state (pidfile first, then systemd), health probe, one line per runner image, reaper timer, and any runner containers currently in flight. Run this first, always. |
-| `bin/logs` | `journalctl -u codegrind -f -n 200`. **systemd only** — for a `bin/start` instance the log is `$DATA_DIR/server.log`. |
+| `bin/logs` | Whichever log this instance actually has: `$DATA_DIR/server.log` for a `bin/start` instance, `journalctl -u codegrind` for the service. Detects in the same order `bin/status` does, and only claims the unit when its `WorkingDirectory` is this checkout. `-n N`, `--no-follow`, `--file`/`--systemd` to force. |
 | `bin/build` | `tsc -b && vite build`, then precompress `dist/` to `.br`/`.gz`. Safe against a live install — the server only reads `dist/` per request. `SKIP_INSTALL=1` skips the npm step. |
 | `bin/migrate` | Open and migrate the database, then report what it holds. `--quiet` for one line. Idempotent and self-healing. Its job is to make a migration failure be reported by the thing whose job that is, instead of arriving as "the server exited". |
 
@@ -32,8 +32,10 @@ export PATH="$HOME/.nvm/versions/node/v22.22.0/bin:$PATH"    # or: nvm use 22
 
 | | |
 |---|---|
-| `bin/deploy` | The full deploy: refresh `.env` via cush-tools `inject` (skipped harmlessly if absent) → `npm ci --include=dev` → `bin/build` → ensure every runner image → `bin/install-units` → `systemctl restart` → wait for health → `bin/status`. |
+| `bin/deploy` | The full deploy: refresh `.env` via cush-tools `inject` (skipped harmlessly if absent; `CG_INJECT` overrides where it looks) → `npm ci --include=dev` → `bin/build` → ensure every runner image → `bin/install-units` → `systemctl restart` → wait for health → `bin/status`. **No arguments, no `--help`, and it restarts the system unit** — do not run it to "see what it does". |
 | `bin/restart` | `systemctl restart` + wait for health + `bin/status`. |
+
+Both wait for health on `$PORT` from `.env`, not a literal 9416.
 | `bin/install-units` | Install/refresh `deploy/*` into `/etc/systemd/system` and enable the reaper timer. `--status` shows what is installed and whether it has drifted from `deploy/`. Rewrites the unit but does **not** restart — a change to `codegrind.service` needs a `bin/restart` after. |
 
 Three units live in `deploy/`:
@@ -82,8 +84,8 @@ bin/backup-db                # → $BACKUP_DIR/codegrind.<timestamp>.db
 bin/backup-db pre-phase5     # → $BACKUP_DIR/codegrind.pre-phase5.<timestamp>.db
 ```
 
-`BACKUP_DIR` defaults to `/home/hexi/backups/codegrind`. The path of the last successful
-backup is written to `$BACKUP_DIR/.last-backup`.
+`BACKUP_DIR` defaults to `~/backups/codegrind`. The path of the last successful backup is
+written to `$BACKUP_DIR/.last-backup`, which is what `bin/restore-db --latest` reads.
 
 The database runs in WAL mode and the log has never been checkpointed — it is **megabytes
 against a sub-megabyte main file**. `cp data/codegrind.db backup.db` copies the main file
@@ -96,13 +98,43 @@ It then re-opens the copy and compares every table's row count, `user_version` a
 `integrity_check` against the live database, and exits 1 on any mismatch. A backup nobody
 counted is a backup nobody has.
 
-**To restore:** stop the service, move the result into place as `$DATA_DIR/codegrind.db`,
-and delete any stale `-wal`/`-shm` siblings — the backup is a single self-contained file
-with no sidecars, which is exactly why it is the right thing to hand a restore. Then
-`bin/migrate` before starting, so a restore from an older schema is repaired by the thing
-whose job that is.
-
 Take a fresh backup before anything that touches the schema.
+
+### Restoring
+
+**`bin/restore-db`.** It encodes the procedure that used to live in this paragraph — stop
+the server, move the file into place, delete the stale `-wal`/`-shm` siblings, migrate —
+because every step of it was being done by hand, from memory, at the exact moment
+something had already gone wrong.
+
+```bash
+bin/restore-db --list                  # what you have
+bin/restore-db --latest --dry-run      # verify the backup, change nothing
+bin/restore-db --latest                # prompts; type "restore"
+bin/restore-db <file> --yes            # unattended
+```
+
+This is **the destructive one** — everything else in `bin/` reads or adds. So, in order:
+
+1. **It refuses against a live server** — a systemd unit serving this directory, a live
+   `bin/start` pidfile, or anything answering `/api/health` on `$PORT`. Overwriting the
+   file under an open SQLite connection does not restore anything; it corrupts two
+   databases.
+2. **It verifies the backup before touching the live one**: magic bytes, `integrity_check`,
+   the core tables (`problems`, `attempts`, `sessions`, `settings`), a refusal if every
+   table is empty (the classic wrong file — the blank database `bin/migrate` creates), and
+   a refusal if the backup's schema is *newer* than this checkout can migrate to. Then it
+   prints backup row counts beside current ones, so the loss is visible **before** it is
+   agreed to. A restore that discovers the backup is bad after deleting the original has
+   destroyed the last good copy in the building.
+3. **It takes a safety backup of the current database first**, through `bin/backup-db` so
+   the WAL comes with it, labelled `pre-restore`. That backup becomes the new
+   `.last-backup` — so if the restore was itself the mistake, `bin/restore-db --latest`
+   walks it back.
+4. Only then does it replace the file, remove the stale sidecars, and run `bin/migrate`.
+
+Without `--yes` it asks, and it will not accept a piped "y": no terminal and no `--yes` is
+a refusal, because a destructive restore should not happen by accident in a pipeline.
 
 ## Migration safety net
 
@@ -137,6 +169,7 @@ bin/verify-migration                 # must PASS
 
 | | |
 |---|---|
+| `bin/restore-db` | Put a backup back, safely. The only destructive script in `bin/` — see [Backups](#backups). |
 | `bin/reset-progress` | Wipe **learner** state (`attempts`, `sessions`, `review_queue`, `skill_state`) and free the whole bank (`used = 0`), keeping the generated problems and primers — a fresh start that reflects real performance without re-paying generation cost. |
 | `bin/fix-go-starters` | Give every banked Go problem a `starterCode` that actually compiles. Reports by default; `--apply` writes. Idempotent — a starter that already declares a package is left alone. Exists because Go's first authoring rule was wrong; see [adding-a-language.md](adding-a-language.md). |
 
@@ -162,13 +195,17 @@ absent and **never touches an existing one**.
 
 ## Known rough edges
 
-- **Six scripts hardcode the author's paths.** `bin/deploy`, `bin/reset-progress`,
-  `bin/warm-lessons` and `bin/translate-corpus` hardcode
-  `REPO=/home/hexi/local/src/codegrind`; most of the non-`setup` scripts export
-  `PATH=/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH` directly instead of sourcing
-  `bin/lib/node.sh`. On another machine they will run against the wrong tree or the wrong
-  Node. The first-run path (`setup`, `start`, `stop`, `status`, `build`, `migrate`) is
-  clean — it derives the repo root and uses `lib/node.sh`.
-- **`bin/restart` and `bin/deploy` health-check a literal `127.0.0.1:9416`**, so they
-  report a false failure on an instance moved with `--port`.
-- **`bin/logs` assumes systemd.** For a `bin/start` instance: `tail -f $DATA_DIR/server.log`.
+`grep -rn '/home/hexi' bin/` returns nothing, and that is a property worth keeping: every
+script derives its repo root from its own location (`REPO="$(cd "$(dirname
+"${BASH_SOURCE[0]}")/.." && pwd)"`), picks its Node through `bin/lib/node.sh`, and reads
+`PORT`/`DATA_DIR` from `.env`. What is left, deliberately:
+
+- **`deploy/*.service` hardcodes absolute paths** — `WorkingDirectory`, `EnvironmentFile`
+  and the pinned Node on the unit's `PATH`. These are one machine's service install, not
+  the app; running codegrind as a service anywhere else means editing them. Nothing in the
+  first-run path (`setup` → `start`) touches systemd at all.
+- **`bin/deploy` restarts the system unit and calls `sudo`.** It is the author's deploy,
+  and it is the one script in `bin/` that assumes an installed service. On any other
+  machine the equivalent is `bin/build && bin/stop && bin/start`.
+- **`BACKUP_DIR` defaults under `$HOME`, not under `DATA_DIR`.** A backup that lives inside
+  the directory it is a backup of is not a backup.

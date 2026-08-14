@@ -1,3 +1,97 @@
 #!/usr/bin/env bash
-# Tail codegrind logs. Pass --no-follow (or extra journalctl args) for a one-shot.
-exec journalctl -u codegrind -f -n 200 "$@"
+# Tail codegrind's log, whichever of the two it has.
+#
+#   bin/logs                  # follow the last 200 lines
+#   bin/logs -n 50            # a different backlog
+#   bin/logs --no-follow      # one-shot, then exit
+#   bin/logs --file           # force the bin/start logfile
+#   bin/logs --systemd        # force the journal
+#
+# THERE ARE TWO WAYS TO RUN THIS APP and until now this script only knew about
+# one of them. `journalctl -u codegrind` on a machine that started the app with
+# bin/start prints "no entries" or "unit not found" — which reads as "the app has
+# no logs", when in fact it has been writing them to $DATA_DIR/server.log the
+# whole time. So detect, in the same order bin/status detects: a live pidfile
+# belongs to THIS checkout, a systemd unit may not.
+#
+# Anything after the recognized flags is passed to journalctl (and rejected in
+# file mode, where it would mean nothing).
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ -f "${REPO_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_DIR}/.env"
+  set +a
+fi
+DATA_DIR="${DATA_DIR:-${REPO_DIR}/data}"
+case "${DATA_DIR}" in /*) ;; *) DATA_DIR="${REPO_DIR}/${DATA_DIR#./}" ;; esac
+PIDFILE="${DATA_DIR}/server.pid"
+LOGFILE="${DATA_DIR}/server.log"
+
+LINES=200
+FOLLOW=1
+MODE=auto
+EXTRA=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -n)          LINES="${2:?-n needs a number}"; shift 2 ;;
+    -n*)         LINES="${1#-n}"; shift ;;
+    --no-follow) FOLLOW=0; shift ;;
+    --file)      MODE=file; shift ;;
+    --systemd)   MODE=systemd; shift ;;
+    -h|--help)   sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)           EXTRA+=("$1"); shift ;;
+  esac
+done
+
+# Is there a unit, and is it serving THIS checkout? The second half matters: a
+# scratch clone on a box that also runs the service would otherwise be shown the
+# service's journal — somebody else's log, presented as its own. Same
+# WorkingDirectory test bin/start and bin/stop use to decide the same question.
+unit_is_ours() {
+  systemctl list-unit-files codegrind.service >/dev/null 2>&1 || return 1
+  systemctl cat codegrind >/dev/null 2>&1 || return 1
+  local unit_dir
+  unit_dir="$(systemctl show codegrind -p WorkingDirectory --value 2>/dev/null)"
+  [ -n "${unit_dir}" ] || return 1
+  [ "$(cd "${unit_dir}" 2>/dev/null && pwd)" = "${REPO_DIR}" ]
+}
+
+if [ "${MODE}" = auto ]; then
+  if [[ -f "${PIDFILE}" ]] && kill -0 "$(cat "${PIDFILE}")" 2>/dev/null; then
+    MODE=file
+  elif unit_is_ours; then
+    MODE=systemd
+  elif [[ -f "${LOGFILE}" ]]; then
+    # Not running, but it ran: the last thing it said is usually why it stopped.
+    MODE=file
+  else
+    printf 'no logs: no running bin/start instance (%s), no systemd unit\n' "${PIDFILE}" >&2
+    printf 'serving this directory, and no %s.\n' "${LOGFILE}" >&2
+    printf 'Start it with bin/setup, then try again.\n' >&2
+    exit 1
+  fi
+fi
+
+if [ "${MODE}" = file ]; then
+  if [ "${#EXTRA[@]}" -gt 0 ]; then
+    printf 'bin/logs: %s is a journalctl flag; this instance logs to a file.\n' "${EXTRA[0]}" >&2
+    exit 2
+  fi
+  if [[ ! -f "${LOGFILE}" ]]; then
+    printf 'no %s yet — has this instance ever been started with bin/start?\n' "${LOGFILE}" >&2
+    exit 1
+  fi
+  printf '==> %s\n' "${LOGFILE}" >&2
+  if [ "${FOLLOW}" -eq 1 ]; then
+    exec tail -n "${LINES}" -f "${LOGFILE}"
+  fi
+  exec tail -n "${LINES}" "${LOGFILE}"
+fi
+
+ARGS=(-u codegrind -n "${LINES}")
+[ "${FOLLOW}" -eq 1 ] && ARGS+=(-f)
+exec journalctl "${ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"}

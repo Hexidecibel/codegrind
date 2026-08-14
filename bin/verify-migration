@@ -27,11 +27,13 @@ set -uo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR" || exit 2
 
-# better-sqlite3 is compiled against the ABI of the Node the systemd unit runs.
-# Use it rather than a `sqlite3` CLI so this script reads the database through
-# exactly the library the app does. (The only sqlite3 binary on this host ships
-# with the Android SDK, which is not a dependency anybody declared.)
-export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+# better-sqlite3 rather than a `sqlite3` CLI, so this script reads the database
+# through exactly the library the app does. (The only sqlite3 binary on this host
+# ships with the Android SDK, which is not a dependency anybody declared.) That
+# native module is ABI-pinned, so lib/node.sh picks the Node it was built for.
+# shellcheck source=lib/node.sh
+source "$REPO_DIR/bin/lib/node.sh"
+cg_require_node
 
 # PORT / DATA_DIR live in .env for a CLI run; systemd hands them to the service.
 if [[ -f "$REPO_DIR/.env" ]]; then
@@ -43,7 +45,7 @@ fi
 
 DB="${DATA_DIR:-$REPO_DIR/data}/codegrind.db"
 PORT="${PORT:-9416}"
-BASELINE_DIR="${BASELINE_DIR:-/home/hexi/backups/codegrind/baseline}"
+BASELINE_DIR="${BASELINE_DIR:-${HOME}/backups/codegrind/baseline}"
 
 # -----------------------------------------------------------------------------
 # Expected row counts — the known-good pre-migration state.

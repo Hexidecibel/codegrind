@@ -3,16 +3,23 @@
 # image, restart service. Idempotent — safe to re-run.
 set -euo pipefail
 
-REPO="/home/hexi/local/src/codegrind"
-INJECT="/home/hexi/local/src/cush-tools/bin/inject"
+# Derived, not hardcoded. Same idiom as bin/build: deploying is the one thing
+# most likely to be run from a copy of this tree that is not the author's.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
-# Pin Node to the version the systemd unit runs (v22.22.0). Native modules like
-# better-sqlite3 compile against the ABI of whatever Node runs npm — if a shell's
-# default is a different major (e.g. Node 24), the built .node fails to load under
-# the service's Node 22 (NODE_MODULE_VERSION mismatch). Prepending this guarantees
+# The author's secret tooling. Optional by design — see below — and overridable
+# so a checkout that has it somewhere else does not have to edit this script.
+INJECT="${CG_INJECT:-${HOME}/local/src/cush-tools/bin/inject}"
+
+# Native modules like better-sqlite3 compile against the ABI of whatever Node
+# runs npm — if a shell's default is a different major (e.g. Node 24), the built
+# .node fails to load under the service's Node 22 (NODE_MODULE_VERSION
+# mismatch). lib/node.sh picks the same Node deploy/codegrind.service pins, so
 # install/rebuild target the runtime ABI.
-export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+# shellcheck source=lib/node.sh
+source "$REPO/bin/lib/node.sh"
+cg_require_node
 
 echo "==> Materializing .env via cush-tools inject"
 if [[ -x "$INJECT" ]]; then
@@ -20,6 +27,17 @@ if [[ -x "$INJECT" ]]; then
 else
   echo "    (inject not found at $INJECT; skipping)"
 fi
+
+# AFTER inject, because inject rewrites this file. PORT is read the same way
+# bin/start and bin/status read it — the health probe below used to be a literal
+# 9416, which reports a false failure against an instance moved with --port.
+if [[ -f "$REPO/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO/.env"
+  set +a
+fi
+PORT="${PORT:-9416}"
 
 # This box has a global npm `omit=dev`, so devDependencies (incl. @types/*, vite,
 # tsx) are skipped by a bare install — force them in or the build fails.
@@ -59,7 +77,7 @@ sudo systemctl restart codegrind
 # curls a socket that isn't listening yet and reports a false UNREACHABLE.
 echo "==> Waiting for health"
 for i in $(seq 1 30); do
-  if curl -fsS -o /dev/null http://127.0.0.1:9416/api/health 2>/dev/null; then
+  if curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/api/health" 2>/dev/null; then
     echo "    ready after ${i}s"
     break
   fi

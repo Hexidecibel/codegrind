@@ -92,7 +92,7 @@ cp "${TESTS_SRC}" "${WORK}/tests.json"
 # a few seconds, but there is no reason to widen further than the mount needs.
 #
 # Ancestor directories are not involved: the mount attaches this inode directly
-# at /work, so /home/hexi being 0750 does not matter.
+# at /work, so a 0750 home directory above it does not matter.
 chmod 0711 "${WORK}"
 chmod 0644 "${WORK}/${SRCNAME}" "${WORK}/tests.json"
 

@@ -11,12 +11,16 @@
 #   bin/warm-lessons --topic trees   # one track only
 set -euo pipefail
 
-REPO="/home/hexi/local/src/codegrind"
+# Derived, not hardcoded: a clone anywhere else used to `cd` into the author's
+# tree and warm THAT database. Same idiom as bin/build.
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
-# Same Node pin as bin/build / bin/deploy — better-sqlite3 is compiled against
-# the ABI of the Node the systemd unit runs (v22.22.0).
-export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+# Same Node selection as bin/build / bin/deploy — better-sqlite3 is compiled
+# against the ABI of whatever Node runs it.
+# shellcheck source=lib/node.sh
+source "$REPO/bin/lib/node.sh"
+cg_require_node
 
 # The service gets its env from systemd's EnvironmentFile; a CLI run has to load
 # it itself (ANTHROPIC_API_KEY, DATA_DIR). bin/inject materializes this file.

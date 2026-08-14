@@ -5,13 +5,35 @@
 # DB (WAL). Run: bin/reset-progress
 set -euo pipefail
 
-export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
-REPO="/home/hexi/local/src/codegrind"
-DB="${DATA_DIR:-$REPO/data}/codegrind.db"
+# Derived, not hardcoded — this used to be the literal author's path, so on any
+# other machine it wiped nothing, or wiped the wrong thing. Same idiom as
+# bin/build and every other entry point.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR"
 
-node -e '
-const Database = require("'"$REPO"'/node_modules/better-sqlite3");
-const db = new Database("'"$DB"'");
+# better-sqlite3 is ABI-pinned; lib/node.sh finds a Node that will not crash it.
+# shellcheck source=lib/node.sh
+source "$REPO_DIR/bin/lib/node.sh"
+cg_require_node
+
+# DATA_DIR lives in .env for a CLI run; without this the wipe targets ./data
+# even on an install that keeps its database somewhere else.
+if [[ -f "$REPO_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+DB="${DATA_DIR:-$REPO_DIR/data}/codegrind.db"
+case "$DB" in /*) ;; *) DB="$REPO_DIR/${DB#./}" ;; esac
+
+# The path goes through the environment rather than being spliced into the
+# program text: this whole thing is one single-quoted bash argument, and a
+# directory with a quote or a space in it used to produce a syntax error.
+DB="$DB" node -e '
+const Database = require("better-sqlite3");
+const db = new Database(process.env.DB);
 const wipe = ["attempts","sessions","review_queue","skill_state"];
 const kept = ["problems","pattern_primers"];
 db.pragma("foreign_keys = OFF");

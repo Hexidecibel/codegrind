@@ -1,0 +1,323 @@
+#!/usr/bin/env bash
+# Put a bin/backup-db backup back, and do it the way the runbook says.
+#
+#   bin/restore-db --list                       # what backups exist
+#   bin/restore-db --latest --dry-run           # verify only, change nothing
+#   bin/restore-db --latest                     # restore the last backup taken
+#   bin/restore-db ~/backups/codegrind/x.db     # restore a specific file
+#   bin/restore-db --latest --yes               # no prompt (scripts, replays)
+#
+# THIS IS THE DESTRUCTIVE ONE. Everything else in bin/ either reads, or adds. A
+# restore DELETES practice history — every attempt, every solve, the whole tier
+# ladder — and replaces it with whatever the file says. There is no undo except
+# the safety backup this script takes on the way past, so it takes one whether
+# you asked for it or not.
+#
+# The procedure it encodes (previously four paragraphs of docs/operations.md,
+# performed by hand, in the dark, usually at the exact moment something has
+# already gone wrong):
+#
+#   1. Refuse if a server is live. Overwriting the file under a running SQLite
+#      connection does not restore anything; it corrupts two databases.
+#   2. VERIFY THE BACKUP FIRST, before touching a byte of the live one. A restore
+#      that discovers the backup is truncated after deleting the original has
+#      destroyed the only good copy in the building. So: magic bytes,
+#      integrity_check, the tables that must exist, and row counts printed beside
+#      the current ones so the loss is visible BEFORE it is agreed to.
+#   3. Take a safety backup of the CURRENT database, through bin/backup-db, so
+#      the WAL comes with it. A `cp` here would silently save the wrong thing.
+#   4. Replace the database and DELETE the stale -wal/-shm siblings. This is the
+#      step people miss: a backup is one self-contained file with no sidecars, so
+#      the old write-ahead log left next to it belongs to a database that no
+#      longer exists, and SQLite will happily replay it into the new one.
+#   5. Run bin/migrate, so a restore from an older schema is repaired by the
+#      thing whose job that is rather than by a server that then exits.
+#
+# Exit: 0 = restored (or verified, under --dry-run), 1 = refused or failed.
+
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR" || exit 1
+
+# better-sqlite3 is ABI-pinned; lib/node.sh finds a Node that will not crash it.
+# shellcheck source=lib/node.sh
+source "$REPO_DIR/bin/lib/node.sh"
+cg_require_node
+
+if [[ -f "$REPO_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+PORT="${PORT:-9416}"
+DATA_DIR="${DATA_DIR:-$REPO_DIR/data}"
+case "$DATA_DIR" in /*) ;; *) DATA_DIR="$REPO_DIR/${DATA_DIR#./}" ;; esac
+DB="$DATA_DIR/codegrind.db"
+BACKUP_DIR="${BACKUP_DIR:-${HOME}/backups/codegrind}"
+PIDFILE="$DATA_DIR/server.pid"
+
+# -----------------------------------------------------------------------------
+# Arguments
+# -----------------------------------------------------------------------------
+SRC=""
+ASSUME_YES=0
+DRY_RUN=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -y|--yes)  ASSUME_YES=1; shift ;;
+    -n|--dry-run) DRY_RUN=1; shift ;;
+    --latest)
+      if [[ ! -f "$BACKUP_DIR/.last-backup" ]]; then
+        printf 'no %s — take a backup first, or name a file.\n' "$BACKUP_DIR/.last-backup" >&2
+        exit 1
+      fi
+      SRC="$(cat "$BACKUP_DIR/.last-backup")"
+      shift ;;
+    --list)
+      printf 'backups in %s\n\n' "$BACKUP_DIR"
+      ls -lht "$BACKUP_DIR"/codegrind.*.db 2>/dev/null || printf '  (none)\n'
+      [[ -f "$BACKUP_DIR/.last-backup" ]] &&
+        printf '\nlast: %s\n' "$(cat "$BACKUP_DIR/.last-backup")"
+      exit 0 ;;
+    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) printf 'unknown flag: %s (see bin/restore-db --help)\n' "$1" >&2; exit 1 ;;
+    *)  SRC="$1"; shift ;;
+  esac
+done
+
+if [[ -z "$SRC" ]]; then
+  printf 'usage: bin/restore-db <backup.db> | --latest   [--yes] [--dry-run]\n' >&2
+  printf '       bin/restore-db --list\n' >&2
+  exit 1
+fi
+if [[ ! -f "$SRC" ]]; then
+  printf 'no such backup: %s\n' "$SRC" >&2
+  exit 1
+fi
+SRC="$(cd "$(dirname "$SRC")" && pwd)/$(basename "$SRC")"
+
+printf 'codegrind :: restore-db\n'
+printf '  from %s (%s)\n' "$SRC" "$(du -h "$SRC" | cut -f1)"
+printf '  to   %s\n\n' "$DB"
+
+# -----------------------------------------------------------------------------
+# 1. Refuse against anything live
+# -----------------------------------------------------------------------------
+# Three checks, because there are three ways this app runs and each one holds the
+# database open in a way the other two cannot see.
+refuse_live() {
+  printf 'REFUSED: %s\n' "$1" >&2
+  printf '         %s\n' "$2" >&2
+  printf '         Then re-run this. Restoring under a live SQLite connection\n' >&2
+  printf '         does not restore anything — it corrupts two databases.\n' >&2
+  exit 1
+}
+
+if systemctl is-active --quiet codegrind 2>/dev/null; then
+  unit_dir="$(systemctl show codegrind -p WorkingDirectory --value 2>/dev/null)"
+  if [ -n "${unit_dir}" ] && [ "$(cd "${unit_dir}" 2>/dev/null && pwd)" = "$REPO_DIR" ]; then
+    refuse_live "codegrind is running under systemd from this directory." \
+                "Stop it:  sudo systemctl stop codegrind"
+  fi
+fi
+if [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+  refuse_live "codegrind is running from this directory (pid $(cat "$PIDFILE"))." \
+              "Stop it:  bin/stop"
+fi
+# The belt-and-braces one: something is answering codegrind's health endpoint on
+# our port. It may be a copy started by hand, outside both mechanisms above.
+if curl -fsS --max-time 3 -o /dev/null "http://127.0.0.1:${PORT}/api/health" 2>/dev/null; then
+  refuse_live "something is serving codegrind's health endpoint on 127.0.0.1:${PORT}." \
+              "Find and stop it:  bin/status   (then bin/stop, or systemctl stop)"
+fi
+
+# -----------------------------------------------------------------------------
+# 2. Verify the backup — BEFORE touching the live database
+# -----------------------------------------------------------------------------
+# `head -c 16` first, so a text file, a tarball or an HTML error page saved with
+# a .db extension is rejected in a millisecond with a sentence that names the
+# actual problem, rather than by better-sqlite3 in a stack trace.
+MAGIC="$(head -c 16 "$SRC" 2>/dev/null | tr -d '\0')"
+if [[ "$MAGIC" != "SQLite format 3" ]]; then
+  printf 'REFUSED: %s is not a SQLite database.\n' "$SRC" >&2
+  printf '         Its first bytes are %s, not "SQLite format 3".\n' "$(printf '%q' "$MAGIC")" >&2
+  exit 1
+fi
+
+# The schema version this code can migrate UP to. A backup from a newer codegrind
+# cannot be migrated down, and pretending otherwise gets you a server that opens
+# a database it does not understand.
+SCHEMA_MAX="$(sed -n 's/^export const SCHEMA_VERSION = \([0-9]*\).*/\1/p' \
+  src/server/services/db.migrate.ts 2>/dev/null | head -1)"
+
+SRC="$SRC" DB="$DB" SCHEMA_MAX="${SCHEMA_MAX:-0}" node -e '
+const Database = require("better-sqlite3");
+const path = require("node:path");
+const fs = require("node:fs");
+
+const bad = (msg, hint) => {
+  console.error(`REFUSED: ${msg}`);
+  if (hint) console.error(`         ${hint}`);
+  process.exit(1);
+};
+
+let src;
+try {
+  src = new Database(process.env.SRC, { readonly: true, fileMustExist: true });
+} catch (e) {
+  bad(`the backup will not open — ${e.message}`);
+}
+
+const integrity = src.pragma("integrity_check", { simple: true });
+if (integrity !== "ok") bad(`the backup fails integrity_check: ${integrity}`);
+
+const uv = src.pragma("user_version", { simple: true });
+const max = Number(process.env.SCHEMA_MAX);
+if (max && uv > max) {
+  bad(
+    `the backup is schema v${uv}; this checkout only understands v${max}.`,
+    "It was taken by a NEWER codegrind. Update the code before restoring it."
+  );
+}
+
+const tablesOf = (db) =>
+  db.prepare(`SELECT name, type FROM sqlite_master ORDER BY name`)
+    .all()
+    .filter((r) => r.type === "table" && !r.name.startsWith("sqlite_"))
+    .map((r) => r.name);
+
+const names = tablesOf(src);
+
+// The tables that make a codegrind database a codegrind database. A file that
+// is valid SQLite and has none of them belongs to some other app, and the
+// most likely way to reach this script with one is a mistyped path.
+const CORE = ["problems", "attempts", "sessions", "settings"];
+const missing = CORE.filter((t) => !names.includes(t));
+if (missing.length) {
+  bad(
+    `the backup is missing core tables: ${missing.join(", ")}`,
+    "That is a valid SQLite file, but it is not a codegrind database."
+  );
+}
+
+const count = (db, t) => {
+  try { return db.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get().n; }
+  catch { return null; }
+};
+
+const rows = {};
+let total = 0;
+for (const t of names) { rows[t] = count(src, t); total += rows[t] || 0; }
+
+// An all-zero database is the classic wrong file: somebody restored the empty
+// one bin/migrate creates on first run, over a year of real history.
+if (total === 0) {
+  bad(
+    "every table in the backup is empty.",
+    "This looks like a freshly-created database, not a backup of anything."
+  );
+}
+
+// Now the part that makes the loss visible before it is agreed to.
+let cur = null;
+const dbPath = process.env.DB;
+if (fs.existsSync(dbPath)) {
+  try { cur = new Database(dbPath, { readonly: true }); } catch { cur = null; }
+}
+const curNames = cur ? tablesOf(cur) : [];
+const all = [...new Set([...names, ...curNames])].sort();
+
+console.log(`  backup: schema v${uv}, integrity ok`);
+console.log("");
+console.log(`  ${"table".padEnd(22)}${"current".padStart(9)}${"backup".padStart(9)}   `);
+let lost = 0;
+for (const t of all) {
+  const b = names.includes(t) ? rows[t] : null;
+  const c = cur && curNames.includes(t) ? count(cur, t) : null;
+  const delta = c === null || b === null ? "" : b < c ? `  -${c - b}` : b > c ? `  +${b - c}` : "";
+  if (c !== null && b !== null && b < c) lost += c - b;
+  console.log(
+    `  ${t.padEnd(22)}${String(c === null ? "-" : c).padStart(9)}${String(b === null ? "-" : b).padStart(9)}${delta}`
+  );
+}
+console.log("");
+if (lost > 0) console.log(`  restoring DISCARDS ${lost} row(s) of live data.`);
+else if (cur) console.log("  the backup is at least as complete as the current database.");
+else console.log(`  there is no database at ${path.basename(dbPath)} yet — this is a cold restore.`);
+
+if (cur) cur.close();
+src.close();
+' || exit 1
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  printf '\nDry run — the backup verifies. Nothing was changed.\n'
+  exit 0
+fi
+
+# -----------------------------------------------------------------------------
+# 3. Consent
+# -----------------------------------------------------------------------------
+if [[ "$ASSUME_YES" -ne 1 ]]; then
+  if [ ! -t 0 ]; then
+    printf '\nREFUSED: not a terminal, and --yes was not given.\n' >&2
+    printf '         A destructive restore does not happen by accident in a pipeline.\n' >&2
+    exit 1
+  fi
+  printf '\nThis REPLACES %s. Type "restore" to confirm: ' "$DB"
+  read -r answer
+  if [[ "$answer" != "restore" ]]; then
+    printf 'Aborted — nothing was changed.\n'
+    exit 1
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# 4. Safety backup of what is about to be destroyed
+# -----------------------------------------------------------------------------
+# Through bin/backup-db, not `cp`: the current database is in WAL mode and the
+# log is where its recent history lives. This is the only undo that exists.
+if [[ -f "$DB" ]]; then
+  printf '\n==> Safety backup of the current database\n'
+  if ! "$REPO_DIR/bin/backup-db" pre-restore; then
+    printf '\nREFUSED: could not take a verified safety backup of the CURRENT database.\n' >&2
+    printf '         Restoring now would leave no way back. Nothing was changed.\n' >&2
+    exit 1
+  fi
+else
+  printf '\n==> No current database at %s — nothing to save first.\n' "$DB"
+fi
+
+# -----------------------------------------------------------------------------
+# 5. Install
+# -----------------------------------------------------------------------------
+printf '\n==> Installing %s\n' "$(basename "$SRC")"
+mkdir -p "$DATA_DIR" || exit 1
+TMP="$DB.restore.$$"
+if ! cp "$SRC" "$TMP"; then
+  printf 'FAIL: could not copy the backup into %s\n' "$DATA_DIR" >&2
+  rm -f "$TMP"
+  exit 1
+fi
+# The sidecars go with the database they belonged to. A -wal left behind here is
+# a write-ahead log for a file that no longer exists, and SQLite replays it.
+rm -f "$DB" "$DB-wal" "$DB-shm"
+mv "$TMP" "$DB"
+printf '    %s replaced; stale -wal/-shm removed\n' "$DB"
+
+# -----------------------------------------------------------------------------
+# 6. Migrate
+# -----------------------------------------------------------------------------
+printf '\n==> Migrating\n'
+if ! "$REPO_DIR/bin/migrate"; then
+  printf '\nFAIL: the restored database would not migrate.\n' >&2
+  printf '      It is in place but unmigrated. The database you replaced is at\n' >&2
+  printf '      %s\n' "$(cat "$BACKUP_DIR/.last-backup" 2>/dev/null || echo "$BACKUP_DIR")" >&2
+  exit 1
+fi
+
+printf '\nRESTORED — %s\n' "$DB"
+printf 'Start it again: bin/start   (or: sudo systemctl start codegrind)\n'
+exit 0

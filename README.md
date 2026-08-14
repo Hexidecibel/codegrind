@@ -180,7 +180,7 @@ Read next:
   how `settings` works, the client structure.
 - **[docs/adding-a-language.md](docs/adding-a-language.md)** — the contract for a fourth
   language, as a checklist.
-- **[docs/operations.md](docs/operations.md)** — every `bin/` script, backups, systemd.
+- **[docs/operations.md](docs/operations.md)** — every `bin/` script, backups and restores, systemd.
 - **[docs/troubleshooting.md](docs/troubleshooting.md)** — the failure modes and their
   fixes.
 

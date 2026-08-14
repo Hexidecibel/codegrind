@@ -26,6 +26,9 @@ if [[ -f "${REPO_DIR}/.env" ]]; then
   set +a
 fi
 
-export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+# better-sqlite3 is ABI-pinned; lib/node.sh finds a Node that will not crash it.
+# shellcheck source=lib/node.sh
+source "${REPO_DIR}/bin/lib/node.sh"
+cg_require_node
 
 exec npx tsx bin/seed-bank.ts "$@"

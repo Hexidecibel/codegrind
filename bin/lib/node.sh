@@ -14,7 +14,7 @@
 # So every entry point that runs node picks its Node here, and the rules are:
 #
 #   1. If the pinned install exists, use it. On the author's box that is
-#      /home/hexi/.nvm/versions/node/v22.22.0/bin, which is also what
+#      $HOME/.nvm/versions/node/v22.22.0/bin, which is also what
 #      deploy/codegrind.service puts on the service's PATH — so the CLI and the
 #      service compile and load the same binary against the same ABI. Every
 #      script used to hardcode this line; they now all get it from here.
@@ -120,4 +120,23 @@ cg_node_advice() {
     printf '          nvm install 22\n'
     printf '      then re-run bin/setup.\n'
   fi
+}
+
+# cg_use_node + "explain and die" — what every non-interactive entry point wants.
+#
+# It exists because the alternative is the five-line if/echo/advice/exit block
+# repeated in twenty scripts, and a block repeated twenty times is a block that
+# is wrong in three of them. Callers that want to keep going after a failure
+# (bin/setup, which formats its own errors) call cg_use_node directly instead.
+# `if`, not `cg_use_node || { … }`: most callers run under `set -e`, where a
+# failing AND/OR list at statement level aborts the shell immediately — which
+# would exit 1 with no message at all, on the one code path whose entire purpose
+# is to explain what is wrong. A condition context is exempt from `set -e`.
+cg_require_node() {
+  if cg_use_node; then
+    return 0
+  fi
+  printf 'no usable Node found.\n' >&2
+  cg_node_advice >&2
+  exit 1
 }
