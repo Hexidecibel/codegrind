@@ -174,7 +174,12 @@ setupRoutes.post('/setup/seed', async (c) => {
   // it. Cheap, idempotent, and it means a key pasted 10 seconds ago works
   // without a restart.
   apikey.hydrate();
-  if (!apikey.isConfigured()) {
+  // ...but only REQUIRE one when the configured routing actually calls Anthropic.
+  // A local install seeds happily with no key at all, and refusing here would
+  // block the bank the wizard just offered to stock — the same mistake
+  // readSetupState() used to make, one layer down and past the point where the
+  // user has already committed to spending time.
+  if (!apikey.isConfigured() && needsAnthropicKey()) {
     return c.json({ error: 'No API key is configured — add one before seeding.' }, 400);
   }
 
