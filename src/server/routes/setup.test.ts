@@ -227,6 +227,15 @@ suite('POST /api/setup/seed — the guards that run before any money is spent', 
     expect(mocks.generateAndStore).not.toHaveBeenCalled();
   });
 
+  // The same trap as the state gate, one layer down and more expensive: here the
+  // user has already chosen a provider and asked for a bank, so refusing lands
+  // them in a wizard that offered to do a thing it then won't do.
+  it('seeds a keyless local install instead of demanding a key it does not need', async () => {
+    mocks.needsAnthropicKey.mockReturnValue(false);
+    const res = await seed({ language: 'javascript', perSlot: 1, topics: ['arrays'] });
+    expect(res.status).toBe(200);
+  });
+
   it('rejects an unknown language', async () => {
     apikey.store(KEY);
     const res = await seed({ language: 'kotlin' });
