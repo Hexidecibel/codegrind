@@ -61,13 +61,37 @@ const NO_THINKING = { type: 'disabled' } as const satisfies Anthropic.ThinkingCo
 /** Teaching calls reason about how to explain before they answer. */
 const ADAPTIVE_THINKING = { type: 'adaptive' } as const satisfies Anthropic.ThinkingConfigParam;
 
+/**
+ * The message a MISSING key produces, everywhere.
+ *
+ * It used to say "provision it via bin/inject", which is correct on exactly one
+ * machine in the world and meaningless on the one this app is being handed to.
+ * The first-run wizard is now the answer for everybody else, and the
+ * environment variable stays named for the people who already use it.
+ */
+export const NO_API_KEY_MESSAGE =
+  'No Anthropic API key is configured. Open codegrind in a browser and paste one into the setup screen, or set ANTHROPIC_API_KEY in the environment.';
+
 let anthropicClient: Anthropic | null = null;
+/**
+ * The key the cached client was built with.
+ *
+ * The client used to be cached forever on first construction, which was fine
+ * while the key could only arrive before boot. The wizard can now write one
+ * into a RUNNING server (apikey.service publishes it into the environment), so
+ * the cache has to be keyed on the value or the first paste would appear to
+ * work and then every call would keep using the client that has no key.
+ */
+let anthropicClientKey: string | null = null;
+
 function getAnthropic(): Anthropic {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY not set — provision it via bin/inject.');
+  const apiKey = (process.env.ANTHROPIC_API_KEY ?? '').trim();
+  if (!apiKey) {
+    throw new Error(NO_API_KEY_MESSAGE);
   }
-  if (!anthropicClient) {
-    anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  if (!anthropicClient || anthropicClientKey !== apiKey) {
+    anthropicClient = new Anthropic({ apiKey });
+    anthropicClientKey = apiKey;
   }
   return anthropicClient;
 }

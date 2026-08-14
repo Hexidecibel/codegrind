@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Create and migrate the database, then report what it holds.
+#
+#   bin/migrate            # human-readable
+#   bin/migrate --quiet    # one line (bin/setup uses this)
+#
+# Idempotent: importing db.ts creates the schema and runs the migration, and
+# every step of that migration heals a half-applied database rather than
+# assuming a clean one. Safe to run against a live install — but take a backup
+# first anyway, because "safe" and "verified" are different words:
+#
+#     bin/backup-db && bin/migrate
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_DIR}"
+
+if [[ -f "${REPO_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_DIR}/.env"
+  set +a
+fi
+
+# shellcheck source=lib/node.sh
+source "${REPO_DIR}/bin/lib/node.sh"
+if ! cg_use_node; then
+  echo "no usable Node found." >&2
+  cg_node_advice >&2
+  exit 1
+fi
+
+exec npx tsx bin/migrate.ts "$@"

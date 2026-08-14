@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Stop a codegrind started by bin/start. The counterpart to it, and no more.
+#
+#   bin/stop
+#
+# Refuses to touch a systemd-managed instance for the same reason bin/start
+# refuses to start beside one: that copy is not ours to stop, and `sudo
+# systemctl stop codegrind` is the honest command for it.
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ -f "${REPO_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_DIR}/.env"
+  set +a
+fi
+DATA_DIR="${DATA_DIR:-${REPO_DIR}/data}"
+case "${DATA_DIR}" in /*) ;; *) DATA_DIR="${REPO_DIR}/${DATA_DIR#./}" ;; esac
+PIDFILE="${DATA_DIR}/server.pid"
+
+if [ ! -f "${PIDFILE}" ]; then
+  # Same directory test as bin/start: only claim the systemd instance when the
+  # unit really is serving THIS checkout.
+  if systemctl is-active --quiet codegrind 2>/dev/null; then
+    unit_dir="$(systemctl show codegrind -p WorkingDirectory --value 2>/dev/null)"
+    if [ -n "${unit_dir}" ] && [ "$(cd "${unit_dir}" 2>/dev/null && pwd)" = "${REPO_DIR}" ]; then
+      printf 'codegrind here is managed by systemd — stop it with:\n    sudo systemctl stop codegrind\n' >&2
+      exit 1
+    fi
+  fi
+  printf 'not running (no %s)\n' "${PIDFILE}"
+  exit 0
+fi
+
+PID="$(cat "${PIDFILE}")"
+if ! kill -0 "${PID}" 2>/dev/null; then
+  printf 'not running (stale pidfile removed)\n'
+  rm -f "${PIDFILE}"
+  exit 0
+fi
+
+# THE WHOLE PROCESS GROUP, not just the pid.
+#
+# tsx runs the server in a CHILD process, and that child is what binds the port
+# and opens the database. Signalling only the pidfile's process leaves it
+# orphaned and listening: `bin/stop` reports success, `bin/status` reports
+# nothing running, and the next `bin/setup` finds the port busy and serving
+# codegrind. That happened, it is confusing in exactly the way a first-run tool
+# must not be, and this is the fix. bin/start uses setsid so the pid IS the
+# group id; the negative pid is the group.
+#
+# TERM, then wait, then KILL — the server closes its SQLite handle on the way
+# out, and SIGKILL first would leave the WAL to be recovered on next open. That
+# recovers fine, but "fine" is not a reason to do it every time.
+signal_tree() { kill "-${1}" -- "-${PID}" 2>/dev/null || kill "-${1}" "${PID}" 2>/dev/null; }
+alive() { kill -0 "${PID}" 2>/dev/null; }
+
+signal_tree TERM
+for _ in $(seq 1 20); do
+  alive || break
+  sleep 0.5
+done
+if alive; then
+  signal_tree KILL
+  printf 'stopped (pid %s, forced)\n' "${PID}"
+else
+  printf 'stopped (pid %s)\n' "${PID}"
+fi
+rm -f "${PIDFILE}"

@@ -1,9 +1,42 @@
 #!/usr/bin/env bash
 # Show codegrind service status + health probe + sandbox readiness.
+#
+# TWO WAYS TO RUN THIS APP, and this script reports whichever one is in front of
+# it. The author's box runs it as a system service (deploy/codegrind.service). A
+# fresh clone runs it as a plain background process started by bin/start, which
+# leaves a pidfile in $DATA_DIR. The pidfile is checked FIRST and deliberately:
+# on a machine that has both — a scratch clone on the author's box, say — the
+# pidfile belongs to THIS checkout and the unit does not.
 set -uo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# PORT / DATA_DIR live in .env for a CLI run; systemd hands them to the service.
+if [[ -f "${REPO_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_DIR}/.env"
+  set +a
+fi
+
 PORT="${PORT:-9416}"
-systemctl --no-pager status codegrind | head -12 || true
+DATA_DIR="${DATA_DIR:-${REPO_DIR}/data}"
+case "${DATA_DIR}" in /*) ;; *) DATA_DIR="${REPO_DIR}/${DATA_DIR#./}" ;; esac
+PIDFILE="${DATA_DIR}/server.pid"
+
+if [[ -f "${PIDFILE}" ]] && kill -0 "$(cat "${PIDFILE}")" 2>/dev/null; then
+  PID="$(cat "${PIDFILE}")"
+  printf 'codegrind (bin/start): running, pid %s\n' "${PID}"
+  printf '  repo %s\n' "${REPO_DIR}"
+  printf '  data %s\n' "${DATA_DIR}"
+  printf '  log  %s\n' "${DATA_DIR}/server.log"
+  ps -o etime=,rss=,cmd= -p "${PID}" 2>/dev/null | sed 's/^/  /'
+elif systemctl list-unit-files codegrind.service >/dev/null 2>&1 &&
+     systemctl cat codegrind >/dev/null 2>&1; then
+  systemctl --no-pager status codegrind | head -12 || true
+else
+  printf 'codegrind: not running (no pidfile at %s, no systemd unit)\n' "${PIDFILE}"
+  printf '  start it with: bin/setup   (or bin/start, if it is already built)\n'
+fi
 echo "---"
 curl -sS -o /dev/null -w 'health: %{http_code}\n' "http://127.0.0.1:${PORT}/api/health" \
   || echo "health: UNREACHABLE"
@@ -21,6 +54,13 @@ while read -r lang; do
   fi
 done < <(cg_buildable_languages "${REPO_DIR}")
 
-printf 'reap timer: %s\n' "$(systemctl is-active codegrind-reap.timer 2>/dev/null || echo unknown)"
+# The reaper is a systemd timer, so it only exists on an install that ran
+# bin/install-units. Reporting "unknown" on a machine that never had one is
+# noise; say nothing instead.
+if systemctl list-unit-files codegrind-reap.timer >/dev/null 2>&1 &&
+   systemctl cat codegrind-reap.timer >/dev/null 2>&1; then
+  printf 'reap timer: %s\n' "$(systemctl is-active codegrind-reap.timer 2>/dev/null || echo unknown)"
+fi
 running="$(docker ps -q --filter "label=${CG_LABEL}" | wc -l)"
 [ "${running}" -gt 0 ] && echo "runner containers in flight: ${running}"
+exit 0

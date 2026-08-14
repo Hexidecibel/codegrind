@@ -684,13 +684,146 @@ export interface AskResponse {
 // setting (provider, model, apiKeyRef) is another optional field here backed by
 // another ROW — never another table and never a migration.
 
+/**
+ * Everything the client is allowed to know about the configured API key.
+ *
+ * There is deliberately no field here that could carry the key itself. `suffix`
+ * is the last four characters — enough to recognise which key is installed,
+ * useless to anyone who intercepts it. See src/server/services/apikey.service.ts.
+ */
+export interface ApiKeyStatus {
+  configured: boolean;
+  /**
+   * Where the live key comes from. `env` means the deploy supplies it
+   * (ANTHROPIC_API_KEY) and the environment ALWAYS wins — a key stored through
+   * the wizard is kept as a fallback but is not what the SDK is using, and the
+   * setup screen says so rather than pretending the paste took effect.
+   */
+  source: 'env' | 'settings' | null;
+  suffix: string | null;
+}
+
 /** Response for GET /api/settings and PUT /api/settings (the full live state). */
 export interface SettingsResponse {
   /** The language the app generates and serves problems in right now. */
   language: Language;
+  /** Status only — never the key. */
+  apiKey: ApiKeyStatus;
 }
 
 /** Body for PUT /api/settings. Every field optional — omitted means unchanged. */
 export interface SettingsUpdateRequest {
   language?: Language;
+  /**
+   * A new Anthropic key. Validated against the provider before it is stored, so
+   * a 400 from this endpoint means "that key does not work", not "malformed".
+   * Write-only: it is never echoed back.
+   */
+  apiKey?: string;
 }
+
+// -----------------------------------------------------------------------------
+// First run — what the setup screen needs to know, and what seeding reports
+// -----------------------------------------------------------------------------
+
+/** One language's readiness, for the setup screen's picker. */
+export interface SetupLanguageState {
+  language: Language;
+  displayName: string;
+  /** Rows in the bank for this language, including used and unverified ones. */
+  banked: number;
+  /** Problems this language could hand out right now — the number that matters. */
+  servable: number;
+  /**
+   * Whether a sandbox harness for this language exists in this build.
+   *
+   * `LANGUAGES` lists Java, and Java's runner has not been written — offering
+   * it in the setup picker would sell somebody a language whose every problem
+   * fails to canonicalize. The server answers this by looking for
+   * `test-harness/<language>/Dockerfile`, which is the same fact
+   * `cg_buildable_languages` in bin/lib/languages.sh reports, read from the
+   * same directory rather than from a second hand-maintained list.
+   */
+  supported: boolean;
+}
+
+/** Response for GET /api/setup/state. */
+export interface SetupState {
+  /**
+   * Whether the setup screen should take over the app.
+   *
+   * DERIVED, never a stored "have I onboarded" flag: it is true when there is
+   * no usable API key, or when the active language has nothing it can serve.
+   * A flag would be trippable by a returning user (a cleared browser profile, a
+   * restored database) and would be wrong in both directions.
+   */
+  needed: boolean;
+  reason: 'no-api-key' | 'empty-bank' | null;
+  /**
+   * Whether "skip for now" is offered. Never when the key is missing — there is
+   * nothing to skip TO, since every interesting path needs the provider.
+   */
+  dismissible: boolean;
+  apiKey: ApiKeyStatus;
+  language: Language;
+  languages: SetupLanguageState[];
+}
+
+/** One topic+difficulty slot in a seeding plan. */
+export interface SeedSlot {
+  topic: Topic;
+  difficulty: Difficulty;
+  /** Already servable in this slot. */
+  have: number;
+  /** Still to generate. */
+  need: number;
+}
+
+/**
+ * A line of the NDJSON stream from POST /api/setup/seed.
+ *
+ * Every number in these is real: `total` is counted from the database before
+ * any generating starts, and `done` advances only when a generation call has
+ * returned. Nothing here is on a timer — a bar built from these events stalls
+ * when the work stalls, which is the honest thing to show for 15-30 second
+ * steps.
+ */
+export type SeedEvent =
+  | {
+      type: 'plan';
+      language: Language;
+      slots: SeedSlot[];
+      total: number;
+      alreadyStocked: number;
+      bankSize: number;
+      dryRun: boolean;
+    }
+  | { type: 'generating'; done: number; total: number; topic: Topic; difficulty: Difficulty }
+  | {
+      type: 'generated';
+      done: number;
+      total: number;
+      topic: Topic;
+      difficulty: Difficulty;
+      title: string;
+      sampleTests: number;
+      hiddenTests: number;
+    }
+  | {
+      type: 'failed';
+      done: number;
+      total: number;
+      topic: Topic;
+      difficulty: Difficulty;
+      message: string;
+    }
+  | {
+      type: 'done';
+      language: Language;
+      generated: number;
+      skipped: number;
+      attempts: number;
+      failures: string[];
+      bankSize: number;
+      dryRun: boolean;
+    };
