@@ -6,6 +6,7 @@ import { GrindPage } from '@/client/pages/GrindPage';
 import { WorkspacePage } from '@/client/pages/WorkspacePage';
 import { ProgressPage } from '@/client/pages/ProgressPage';
 import { StudyPage } from '@/client/pages/StudyPage';
+import { SettingsPage } from '@/client/pages/SettingsPage';
 import { SetupWizard } from '@/client/components/setup/SetupWizard';
 import { getSetupState } from '@/client/lib/api';
 import type { SetupState } from '@/shared/types';
@@ -72,6 +73,11 @@ function App() {
             <Route path="/manual" element={<WorkspacePage />} />
             <Route path="/progress" element={<ProgressPage />} />
             <Route path="/study" element={<StudyPage />} />
+            {/* The config screen the wizard used to be the only way to reach.
+                It is a normal route, gated by nothing: once `needed` is false
+                the wizard never renders again, and a model or a key you cannot
+                change from the browser is one you change with curl. */}
+            <Route path="/settings" element={<SettingsPage />} />
             {/* Study replaced the pattern library; keep old bookmarks alive. */}
             <Route path="/library" element={<Navigate to="/study" replace />} />
           </Routes>

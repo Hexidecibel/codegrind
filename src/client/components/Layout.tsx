@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Code2, BarChart3, Zap, BookOpen } from 'lucide-react';
+import { Code2, BarChart3, Zap, BookOpen, Settings } from 'lucide-react';
 import { useAppHeight } from '@/client/hooks/useAppHeight';
 import { cn } from '@/lib/utils';
 
@@ -9,11 +9,18 @@ function Tab({
   icon,
   label,
   end,
+  /**
+   * Where the text label starts showing. Five labelled tabs no longer fit a
+   * `sm` header, and the gear is the one icon that needs no word — so Settings
+   * waits for `md` while the four content tabs keep their existing threshold.
+   */
+  labelClass = 'hidden sm:inline',
 }: {
   to: string;
   icon: ReactNode;
   label: string;
   end?: boolean;
+  labelClass?: string;
 }) {
   return (
     <NavLink
@@ -33,8 +40,8 @@ function Tab({
       }
     >
       {icon}
-      {/* Icons only on phones — four labelled tabs overflow a 390px header. */}
-      <span className="hidden sm:inline">{label}</span>
+      {/* Icons only on phones — labelled tabs overflow a 390px header. */}
+      <span className={labelClass}>{label}</span>
     </NavLink>
   );
 }
@@ -66,6 +73,15 @@ export function Layout({ children }: { children: ReactNode }) {
               what the page actually does now. */}
           <Tab to="/progress" icon={<BarChart3 className="h-4 w-4" />} label="Reflect" />
           <Tab to="/study" icon={<BookOpen className="h-4 w-4" />} label="Study" />
+          {/* Last, and the only tab that is not a place you practice: it is
+              where you change who writes the problems, which before this had no
+              route at all once the first-run wizard stopped rendering. */}
+          <Tab
+            to="/settings"
+            icon={<Settings className="h-4 w-4" />}
+            label="Settings"
+            labelClass="hidden md:inline"
+          />
         </nav>
       </header>
       <main className="min-h-0 flex-1">{children}</main>
