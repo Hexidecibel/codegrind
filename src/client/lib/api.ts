@@ -28,6 +28,10 @@ import type {
   SettingsResponse,
   SetupState,
   SeedEvent,
+  LlmStatus,
+  LlmModelsResponse,
+  LlmConfigRequest,
+  LlmConfigResponse,
 } from '@/shared/types';
 import type { Language } from '@/shared/languages';
 
@@ -186,6 +190,45 @@ export function updateSettings(patch: {
   return request<SettingsResponse>('/api/settings', {
     method: 'PUT',
     body: JSON.stringify(patch),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Which model answers
+// ---------------------------------------------------------------------------
+/** GET /api/providers — the live routing. Never carries a credential. */
+export function getProviders(): Promise<LlmStatus> {
+  return request<LlmStatus>('/api/providers');
+}
+
+/**
+ * POST /api/providers/models — what the endpoint says it serves.
+ *
+ * A POST rather than a GET because it may carry a bearer token, and a query
+ * string is the one place a secret is certain to be logged. Denied ids are
+ * already filtered out server-side: the picker must not be able to offer one.
+ */
+export function listProviderModels(
+  endpoint: string,
+  endpointKey?: string,
+): Promise<LlmModelsResponse> {
+  return request<LlmModelsResponse>('/api/providers/models', {
+    method: 'POST',
+    body: JSON.stringify({ endpoint, endpointKey }),
+  });
+}
+
+/**
+ * PUT /api/providers — validate a configuration, then store it.
+ *
+ * A 400 here means the endpoint failed the gate (unreachable, does not serve
+ * that model, or cannot make a forced tool call) and NOTHING was stored. The
+ * message says which, and what to do.
+ */
+export function updateProvider(body: LlmConfigRequest): Promise<LlmConfigResponse> {
+  return request<LlmConfigResponse>('/api/providers', {
+    method: 'PUT',
+    body: JSON.stringify(body),
   });
 }
 

@@ -44,6 +44,7 @@ import {
   setSetting,
 } from '../services/db.js';
 import * as apikey from '../services/apikey.service.js';
+import { describeProviders } from '../services/provider.service.js';
 import { needsAnthropicKey } from '../services/llm.client.js';
 import {
   runSeed,
@@ -108,10 +109,13 @@ export function readSetupState(): SetupState {
   // so it is checked first and is never suppressed by the dismissal row.
   //
   // But it is only a blocker when the configured routing actually needs a key.
-  // A fully local install (CODEGRIND_PROVIDER=openai-compatible for both roles)
-  // has no key, wants no key, and every API path works without one — gating the
-  // SPA on a key there would lock a working app behind a signup it never needs,
-  // which is the exact thing the provider work exists to avoid.
+  // A fully local install has no key, wants no key, and every API path works
+  // without one — gating the SPA on a key there would lock a working app behind
+  // a signup it never needs, which is the exact thing the provider work exists
+  // to avoid. This is true of a local install configured through the WIZARD, not
+  // just one configured through the environment: `needsAnthropicKey()` resolves
+  // the stored `llm.*` rows too, so the property survives the move off env-only
+  // configuration rather than quietly reverting to "everyone needs a key".
   const keyRequired = needsAnthropicKey();
   let reason: SetupState['reason'] = null;
   if (!key.configured && keyRequired) reason = 'no-api-key';
@@ -122,6 +126,7 @@ export function readSetupState(): SetupState {
     reason,
     dismissible: key.configured || !keyRequired,
     apiKey: key,
+    llm: describeProviders(),
     language,
     languages: languageStates(),
   };

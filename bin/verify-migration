@@ -103,8 +103,20 @@ EXPECTED_ROWS=(
   # bin/smoke-isolation had a slot two banks could both answer. Both are real
   # rows from the real paths, which is what makes the smoke suite worth running
   # and what makes these numbers need bumping afterwards.
-  "problems:62"
-  "attempts:71"
+  #
+  # 62 -> 64 and 71 -> 72 on the same terms for the in-app provider wizard —
+  # again NO migration (user_version is still 3; that work added two SETTINGS
+  # ROWS, `llm.workhorse` and `llm.tutor`, which is exactly what the settings
+  # table exists for). bin/smoke-e2e javascript missed the bank and generated
+  # one problem plus one solve, and bin/seed-bank added one python problem so
+  # bin/smoke-isolation had a contested slot again. Everything the LOCAL model
+  # wrote — the whole wizard run, twice, and both provider probes — went to the
+  # scratch instance's own DATA_DIR and none of it is in this database. The
+  # byte-identical four-endpoint diff for this stage was taken BEFORE the smokes
+  # ran, against a baseline captured from the pre-wizard service and re-verified
+  # after the restart onto the new code; these numbers are what the smokes left.
+  "problems:64"
+  "attempts:72"
   "skill_state:6"
   "sessions:8"
   "review_queue:11"

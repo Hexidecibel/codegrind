@@ -13,8 +13,16 @@ import { studyRoutes } from './routes/study.js';
 import { reflectRoutes } from './routes/reflect.js';
 import { settingsRoutes } from './routes/settings.js';
 import { setupRoutes } from './routes/setup.js';
+import { providerRoutes } from './routes/providers.js';
 import { hydrate as hydrateApiKey } from './services/apikey.service.js';
+import { hydrateProviderConfig } from './services/provider.service.js';
 import { describeRouting, needsAnthropicKey } from './services/llm.client.js';
+
+// Let the wizard-written `llm.workhorse` / `llm.tutor` rows count towards
+// routing. Must precede the first routing question below. The ENVIRONMENT still
+// wins field by field, so a deploy that sets CODEGRIND_* or ANTHROPIC_MODEL is
+// unaffected by anything anyone stored.
+hydrateProviderConfig();
 
 // Publish a wizard-stored API key into the environment before any route can
 // need one. Does NOTHING when ANTHROPIC_API_KEY is already set — the deploy's
@@ -36,6 +44,7 @@ app.route('/api', studyRoutes);
 app.route('/api', reflectRoutes);
 app.route('/api', settingsRoutes);
 app.route('/api', setupRoutes);
+app.route('/api', providerRoutes);
 
 app.get('/api/health', (c) => c.json({ status: 'ok' }));
 

@@ -14,16 +14,23 @@
 // -----------------------------------------------------------------------------
 // THE CONFIGURATION, AND WHY IT IS SHAPED LIKE THIS
 // -----------------------------------------------------------------------------
-// Environment only, at module load, per field:
+// There are now TWO layers, and the environment wins over the other one FIELD BY
+// FIELD (not wholesale — a deploy that pins only the model must still let the
+// wizard choose an endpoint):
+//
+//   1. The environment, read once at module load. Deployment configuration.
+//   2. Two rows in the `settings` table, `llm.workhorse` and `llm.tutor`,
+//      written by the in-app wizard. Read through an INJECTED reader — see
+//      `useStoredProviderConfig` for why this module must not import db.js.
 //
 //   | field                  | env                                              | fallback        |
 //   |------------------------|--------------------------------------------------|-----------------|
-//   | workhorse provider     | CODEGRIND_PROVIDER                               | anthropic       |
-//   | workhorse model        | ANTHROPIC_MODEL / CODEGRIND_MODEL                | provider default|
-//   | tutor provider         | CODEGRIND_CHAT_PROVIDER                          | workhorse's     |
-//   | tutor model            | ANTHROPIC_CHAT_MODEL / CODEGRIND_CHAT_MODEL      | workhorse's     |
-//   | endpoint               | CODEGRIND_ENDPOINT, then QWEN_URL                 | —               |
-//   | endpoint credential    | CODEGRIND_API_KEY                                | — (fleets have none) |
+//   | workhorse provider     | CODEGRIND_PROVIDER                               | stored, else anthropic |
+//   | workhorse model        | ANTHROPIC_MODEL / CODEGRIND_MODEL                | stored, else provider default |
+//   | tutor provider         | CODEGRIND_CHAT_PROVIDER                          | stored, else workhorse's |
+//   | tutor model            | ANTHROPIC_CHAT_MODEL / CODEGRIND_CHAT_MODEL      | stored, else workhorse's |
+//   | endpoint               | CODEGRIND_ENDPOINT, then QWEN_URL                | stored          |
+//   | endpoint credential    | CODEGRIND_API_KEY                                | stored (write-only) |
 //   | models never to touch  | CODEGRIND_MODEL_DENY (comma list)                | empty           |
 //   | output-token ceiling   | CODEGRIND_MAX_OUTPUT_TOKENS (0 = uncapped)       | llm.types.MAX_OUTPUT_TOKENS |
 //
@@ -36,15 +43,28 @@
 // could not explain. Vendor-named config configures that vendor; `CODEGRIND_*`
 // is the provider-neutral spelling.
 //
+// A STORED MODEL IS ONLY USED FOR THE PROVIDER IT WAS STORED AGAINST. The wizard
+// writes `{provider, model, endpoint}` together, so if the environment then pins
+// a different provider the stored model is silently wrong for it — a local model
+// id sent to Anthropic, or the reverse. That pair is checked rather than assumed.
+//
 // TUTOR DEFAULTS TO MATCHING THE WORKHORSE, in provider AND model. A local-only
 // install must stay local-only: no key, no signup, no spend. A tutor that
 // quietly fell back to Anthropic would be a bill the user never agreed to, which
 // is the exact thing this work exists to prevent. Using Claude for the tutor
 // while the workhorse runs locally is fully supported — it is just opt-in, via
-// CODEGRIND_CHAT_PROVIDER.
+// CODEGRIND_CHAT_PROVIDER or the wizard.
 //
 // THERE IS NO FAILOVER. If the configured endpoint is down, calls fail, loudly,
 // naming the endpoint and the model. They do not silently become Anthropic calls.
+//
+// RESOLUTION IS LAZY AND CACHED, NOT MODULE-LOAD. It used to be module-load,
+// because a request must not be able to re-route a running server. That property
+// is kept — nothing re-resolves per call — but a settings WRITE has to take
+// effect without a restart, so the cache is explicitly invalidated by
+// `reloadRouting()` and by nothing else. Environment values are still read (and
+// validated) at module load: a deploy that spells a provider wrong should fail
+// at boot, not at 3am on the first generate.
 
 import { createAnthropicClient } from './llm.anthropic.js';
 import { createOpenAiClient } from './llm.openai.js';
@@ -69,9 +89,9 @@ function env(name: string): string {
 }
 
 /** Read at module load, as these always have been: deployment configuration. */
-function readProvider(name: string, fallback: ProviderId): ProviderId {
+function readProvider(name: string): ProviderId | null {
   const raw = env(name);
-  if (!raw) return fallback;
+  if (!raw) return null;
   if (raw === 'anthropic' || raw === 'openai-compatible') return raw;
   throw new Error(
     `${name}="${raw}" is not a provider codegrind knows. Use "anthropic" or ` +
@@ -80,74 +100,77 @@ function readProvider(name: string, fallback: ProviderId): ProviderId {
   );
 }
 
-/**
- * The resolved routing for one role. Computed once; a request may not change it.
- */
-interface Routing {
-  provider: ProviderId;
-  model: string;
+// -----------------------------------------------------------------------------
+// The stored layer, injected rather than imported
+// -----------------------------------------------------------------------------
+// This module must NOT import db.js. Two reasons, both concrete:
+//
+//   * db.js opens a SQLite file at import time, from `DATA_DIR`. llm.client's own
+//     test re-imports this module seventeen times under different environments
+//     and sets no DATA_DIR, so importing db here would open — and hold open —
+//     the AUTHOR'S LIVE DATABASE seventeen times during `vitest run`.
+//   * "which model answers" is a question that should be answerable without a
+//     database at all: `bin/dry-run-generate` and the boot log both ask it.
+//
+// So provider.service.ts — which does own the rows, and does import db — pushes
+// a reader in. Until it does, the stored layer is simply empty, which is exactly
+// right for a process that never opened the database.
+
+/** One role's stored configuration, as written by the wizard. */
+export interface StoredRoleConfig {
+  provider?: ProviderId;
+  model?: string;
+  /** Base URL including the version segment, e.g. `http://127.0.0.1:9600/v1`. */
+  endpoint?: string;
+  /**
+   * Bearer token for that endpoint. WRITE-ONLY as far as HTTP is concerned: it
+   * lives in the row, it reaches the adapter, and no GET ever returns it.
+   */
+  endpointKey?: string;
 }
 
-const WORKHORSE_PROVIDER: ProviderId = readProvider('CODEGRIND_PROVIDER', 'anthropic');
-const TUTOR_PROVIDER: ProviderId = readProvider('CODEGRIND_CHAT_PROVIDER', WORKHORSE_PROVIDER);
+export interface StoredProviderConfig {
+  workhorse?: StoredRoleConfig | null;
+  tutor?: StoredRoleConfig | null;
+}
+
+type StoredReader = () => StoredProviderConfig;
+
+const NO_STORED_CONFIG: StoredReader = () => ({});
+let readStored: StoredReader = NO_STORED_CONFIG;
 
 /**
- * The workhorse: generation, forced-tool-use extraction, lesson writing, corpus
- * translation, and the per-submit coaching brief — everything that runs on a
- * schedule the user doesn't control. `small` shares it: those calls differ in
- * their token budget and their timeout, not in who answers.
- */
-const WORKHORSE: Routing = {
-  provider: WORKHORSE_PROVIDER,
-  model:
-    (WORKHORSE_PROVIDER === 'anthropic' ? env('ANTHROPIC_MODEL') : '') ||
-    env('CODEGRIND_MODEL') ||
-    (WORKHORSE_PROVIDER === 'anthropic' ? ANTHROPIC_WORKHORSE_DEFAULT : ''),
-};
-
-/**
- * The teaching model, used by `askFollowup` alone: one call per question
- * actually asked, the lowest-frequency and highest-value call in the app.
- * `coach` is the other teaching call but fires on every submit, so it stays on
- * the workhorse and buys its quality with thinking instead.
+ * Let the settings table participate in routing.
  *
- * Its default is the WORKHORSE's model — including the workhorse's provider —
- * so that pointing this app at a local endpoint moves the whole app, tutor
- * included. On the Anthropic path the historical default (a bigger model for
- * the tutor) is preserved exactly.
+ * Called by provider.service.ts on behalf of every entry point that has a
+ * database: the server, and the CLI tools that can spend money. Idempotent, and
+ * it invalidates the cache so a reader registered after something already asked
+ * a routing question still takes effect.
  */
-function tutorModel(): string {
-  if (TUTOR_PROVIDER === 'anthropic') {
-    // The vendor-named variable first, for the vendor it names: today's deploy
-    // sets ANTHROPIC_CHAT_MODEL and must keep behaving identically.
-    const named = env('ANTHROPIC_CHAT_MODEL') || env('CODEGRIND_CHAT_MODEL');
-    // No explicit model: the historical default, which is a bigger model for
-    // the one call per question actually asked. Reaching this with a LOCAL
-    // workhorse means someone opted into Claude for the tutor deliberately.
-    return named || ANTHROPIC_TUTOR_DEFAULT;
-  }
-  const named = env('CODEGRIND_CHAT_MODEL');
-  if (named) return named;
-  // Match the workhorse — the local-stays-local rule. When the providers differ
-  // there is nothing to inherit (a Claude model id is not a local model id), so
-  // the model has to be named and `build` says so.
-  return TUTOR_PROVIDER === WORKHORSE_PROVIDER ? WORKHORSE.model : '';
+export function useStoredProviderConfig(reader: StoredReader): void {
+  readStored = reader;
+  reloadRouting();
 }
 
-const TUTOR: Routing = { provider: TUTOR_PROVIDER, model: tutorModel() };
+// -----------------------------------------------------------------------------
+// The environment layer — read, and validated, once
+// -----------------------------------------------------------------------------
 
-/** Where an OpenAI-compatible endpoint lives. `QWEN_URL` is the fleet's name for it. */
-const ENDPOINT = env('CODEGRIND_ENDPOINT') || env('QWEN_URL');
-const ENDPOINT_KEY = env('CODEGRIND_API_KEY');
+const ENV_WORKHORSE_PROVIDER = readProvider('CODEGRIND_PROVIDER');
+const ENV_TUTOR_PROVIDER = readProvider('CODEGRIND_CHAT_PROVIDER');
+const ENV_ENDPOINT = env('CODEGRIND_ENDPOINT') || env('QWEN_URL');
+const ENV_ENDPOINT_KEY = env('CODEGRIND_API_KEY');
 
 /**
  * Model ids this process must never send work to.
  *
  * Configuration rather than cleverness: codegrind cannot know that one id in a
  * router's `/v1/models` is mapped onto a CPU on the same box as the user's media
- * server. The deployment's own systemd unit sets this. See llm.openai.assertNotDenied.
+ * server. The deployment's own systemd unit sets this. See llm.openai.assertNotDenied,
+ * and provider.service, which also refuses to OFFER a denied model in the wizard
+ * — a list you cannot pick from is a better guard than an error after you did.
  */
-const MODEL_DENY = env('CODEGRIND_MODEL_DENY')
+export const MODEL_DENY: readonly string[] = env('CODEGRIND_MODEL_DENY')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
@@ -177,31 +200,193 @@ function readMaxOutputTokens(): number | null | undefined {
 
 const MAX_OUTPUT_TOKENS_OVERRIDE = readMaxOutputTokens();
 
+// -----------------------------------------------------------------------------
+// Resolution
+// -----------------------------------------------------------------------------
+
+/** Where a resolved field actually came from. The wizard renders `env` read-only. */
+export type FieldSource = 'env' | 'settings' | 'default';
+
+/** The resolved routing for one role. Computed once per reload. */
+export interface Routing {
+  provider: ProviderId;
+  model: string;
+  /** Only meaningful for `openai-compatible`. Empty string when unset. */
+  endpoint: string;
+  /** Never crosses the HTTP boundary. See StoredRoleConfig.endpointKey. */
+  endpointKey: string;
+  source: {
+    provider: FieldSource;
+    model: FieldSource;
+    endpoint: FieldSource;
+    /** `default` means there is no credential at all — the usual LAN case. */
+    endpointKey: FieldSource;
+  };
+}
+
+interface Resolved {
+  workhorse: Routing;
+  tutor: Routing;
+}
+
+/**
+ * A stored model belongs to the provider it was stored against.
+ *
+ * `undefined` in the row means the row predates a provider being written, which
+ * only the Anthropic default could have produced.
+ */
+function storedMatches(stored: StoredRoleConfig, provider: ProviderId): boolean {
+  return (stored.provider ?? 'anthropic') === provider;
+}
+
+function resolveRole(
+  role: 'workhorse' | 'tutor',
+  stored: StoredRoleConfig,
+  envProvider: ProviderId | null,
+  fallbackProvider: ProviderId,
+  inherit: Routing | null
+): Routing {
+  const provider = envProvider ?? stored.provider ?? fallbackProvider;
+  const providerSource: FieldSource = envProvider
+    ? 'env'
+    : stored.provider
+      ? 'settings'
+      : 'default';
+
+  // The vendor-named variable first, for the vendor it names. Not consulted for
+  // any other provider — see the header.
+  const vendorNamed =
+    provider === 'anthropic' ? env(role === 'tutor' ? 'ANTHROPIC_CHAT_MODEL' : 'ANTHROPIC_MODEL') : '';
+  const neutral = env(role === 'tutor' ? 'CODEGRIND_CHAT_MODEL' : 'CODEGRIND_MODEL');
+
+  let model = '';
+  let modelSource: FieldSource = 'default';
+  if (vendorNamed || neutral) {
+    model = vendorNamed || neutral;
+    modelSource = 'env';
+  } else if (stored.model && storedMatches(stored, provider)) {
+    model = stored.model;
+    modelSource = 'settings';
+  } else if (provider === 'anthropic') {
+    // The historical defaults, and they are NOT the inherit rule below: on the
+    // Anthropic path the tutor has always been a bigger model than the
+    // workhorse, because it is one call per question actually asked. Reaching
+    // this for the tutor while the workhorse is local means someone opted into
+    // Claude for the tutor deliberately.
+    model = role === 'tutor' ? ANTHROPIC_TUTOR_DEFAULT : ANTHROPIC_WORKHORSE_DEFAULT;
+    modelSource = 'default';
+  } else if (inherit && inherit.provider === provider) {
+    // The local-stays-local rule: the tutor matches the workhorse, model and
+    // all, unless something said otherwise. When the providers differ there is
+    // nothing to inherit (a Claude model id is not a local model id) and `build`
+    // says which variable to set.
+    model = inherit.model;
+    modelSource = inherit.source.model;
+  }
+
+  let endpoint = '';
+  let endpointSource: FieldSource = 'default';
+  if (ENV_ENDPOINT) {
+    endpoint = ENV_ENDPOINT;
+    endpointSource = 'env';
+  } else if (stored.endpoint) {
+    endpoint = stored.endpoint;
+    endpointSource = 'settings';
+  } else if (inherit?.endpoint) {
+    endpoint = inherit.endpoint;
+    endpointSource = inherit.source.endpoint;
+  }
+
+  let endpointKey = '';
+  let endpointKeySource: FieldSource = 'default';
+  if (ENV_ENDPOINT_KEY) {
+    endpointKey = ENV_ENDPOINT_KEY;
+    endpointKeySource = 'env';
+  } else if (stored.endpointKey) {
+    endpointKey = stored.endpointKey;
+    endpointKeySource = 'settings';
+  } else if (inherit?.endpointKey) {
+    endpointKey = inherit.endpointKey;
+    endpointKeySource = inherit.source.endpointKey;
+  }
+
+  return {
+    provider,
+    model,
+    endpoint,
+    endpointKey,
+    source: {
+      provider: providerSource,
+      model: modelSource,
+      endpoint: endpointSource,
+      endpointKey: endpointKeySource,
+    },
+  };
+}
+
+function resolve(): Resolved {
+  const stored = readStored();
+  const workhorse = resolveRole(
+    'workhorse',
+    stored.workhorse ?? {},
+    ENV_WORKHORSE_PROVIDER,
+    'anthropic',
+    null
+  );
+  const tutor = resolveRole(
+    'tutor',
+    stored.tutor ?? {},
+    ENV_TUTOR_PROVIDER,
+    workhorse.provider,
+    workhorse
+  );
+  return { workhorse, tutor };
+}
+
+let resolved: Resolved | null = null;
 const clients = new Map<CallRole, LlmClient>();
+
+/**
+ * Forget the resolved routing and every client built from it.
+ *
+ * The ONLY way the routing changes in a running process. Called after a settings
+ * write; never on a read path, because a request must not be able to re-route a
+ * running server, and because a cached client is also a cached HTTP agent.
+ */
+export function reloadRouting(): void {
+  resolved = null;
+  clients.clear();
+}
+
+function config(): Resolved {
+  if (!resolved) resolved = resolve();
+  return resolved;
+}
 
 function build(routing: Routing, role: CallRole): LlmClient {
   if (routing.provider === 'anthropic') {
     return createAnthropicClient(routing.model);
   }
-  if (!ENDPOINT) {
+  if (!routing.endpoint) {
     throw new Error(
       `CODEGRIND_PROVIDER is "openai-compatible" but no endpoint is configured. ` +
         `Set CODEGRIND_ENDPOINT (or QWEN_URL) to the base URL of an OpenAI-compatible ` +
-        `server, including the version segment — e.g. http://127.0.0.1:9600/v1`
+        `server, including the version segment — e.g. http://127.0.0.1:9600/v1 — ` +
+        `or configure one in the app's setup screen.`
     );
   }
   if (!routing.model) {
     const which = role === 'tutor' ? 'CODEGRIND_CHAT_MODEL' : 'CODEGRIND_MODEL';
     throw new Error(
       `No model is configured for ${role} calls. Set ${which} to a model id the ` +
-        `endpoint at ${ENDPOINT} actually serves — there is no safe default, because ` +
+        `endpoint at ${routing.endpoint} actually serves — there is no safe default, because ` +
         `picking one for you is how a router hands the job to whatever is cheapest to ` +
         `load, which on some fleets is a CPU.`
     );
   }
   return createOpenAiClient(routing.model, {
-    endpoint: ENDPOINT,
-    apiKey: ENDPOINT_KEY || undefined,
+    endpoint: routing.endpoint,
+    apiKey: routing.endpointKey || undefined,
     deny: MODEL_DENY,
     // `undefined` when unset, which is what keeps the adapter's own default —
     // `null` is a real value here and means "no ceiling".
@@ -213,30 +398,32 @@ function build(routing: Routing, role: CallRole): LlmClient {
 
 /** How a role is routed, without building (or needing) a client. */
 export function routingFor(role: CallRole): Readonly<Routing> {
-  return role === 'tutor' ? TUTOR : WORKHORSE;
+  return role === 'tutor' ? config().tutor : config().workhorse;
 }
 
 /**
  * Does this configuration need an Anthropic API key to work at all?
  *
- * The one question the CLI entry points and the boot log have to ask before
- * refusing to run: a fully local install has no key, wants no key, and must not
- * be told to go and get one.
+ * The one question the CLI entry points, the boot log and the first-run wizard
+ * have to ask before refusing to run: a fully local install has no key, wants no
+ * key, and must not be told to go and get one.
  */
 export function needsAnthropicKey(): boolean {
-  return WORKHORSE.provider === 'anthropic' || TUTOR.provider === 'anthropic';
+  const { workhorse, tutor } = config();
+  return workhorse.provider === 'anthropic' || tutor.provider === 'anthropic';
 }
 
 /** A one-line description of the routing, for logs. Never includes a credential. */
 export function describeRouting(): string {
-  const workhorse = `${WORKHORSE.provider}:${WORKHORSE.model}`;
-  const tutor = `${TUTOR.provider}:${TUTOR.model}`;
-  const where = WORKHORSE.provider === 'anthropic' && TUTOR.provider === 'anthropic'
-    ? ''
-    : ` via ${ENDPOINT || '(no endpoint configured)'}`;
-  return workhorse === tutor
-    ? `${workhorse}${where}`
-    : `workhorse ${workhorse}, tutor ${tutor}${where}`;
+  const { workhorse: w, tutor: t } = config();
+  const workhorse = `${w.provider}:${w.model}`;
+  const tutor = `${t.provider}:${t.model}`;
+  const endpoint = w.provider !== 'anthropic' ? w.endpoint : t.endpoint;
+  const where =
+    w.provider === 'anthropic' && t.provider === 'anthropic'
+      ? ''
+      : ` via ${endpoint || '(no endpoint configured)'}`;
+  return workhorse === tutor ? `${workhorse}${where}` : `workhorse ${workhorse}, tutor ${tutor}${where}`;
 }
 
 /**

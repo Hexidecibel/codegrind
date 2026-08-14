@@ -723,6 +723,119 @@ export interface SettingsUpdateRequest {
 }
 
 // -----------------------------------------------------------------------------
+// Which model answers — the provider configuration, over HTTP
+// -----------------------------------------------------------------------------
+// Two rows in `settings` (`llm.workhorse`, `llm.tutor`), one screen in the
+// wizard, and one rule that governs every shape below: A CREDENTIAL NEVER COMES
+// BACK OUT. The endpoint's bearer token — for the minority of endpoints that
+// need one — is described exactly the way the Anthropic key is, as
+// {configured, source, suffix}, and by nothing else.
+
+/** Which implementation answers. Mirrors llm.types.ProviderId. */
+export type LlmProviderId = 'anthropic' | 'openai-compatible';
+
+/**
+ * Where a resolved field came from.
+ *
+ * `env` is the one the wizard has to render specially: the deploy set it, the
+ * environment always wins, and offering to change it would write a row that is
+ * then never used.
+ */
+export type LlmFieldSource = 'env' | 'settings' | 'default';
+
+/** A credential's status. Never the credential. Same shape as ApiKeyStatus. */
+export interface CredentialStatus {
+  configured: boolean;
+  source: 'env' | 'settings' | null;
+  suffix: string | null;
+}
+
+/** How one role (workhorse or tutor) is routed right now. */
+export interface LlmRoleStatus {
+  provider: LlmProviderId;
+  model: string;
+  /** Only meaningful for `openai-compatible`. Userinfo is stripped before storing. */
+  endpoint: string | null;
+  source: {
+    provider: LlmFieldSource;
+    model: LlmFieldSource;
+    endpoint: LlmFieldSource;
+    endpointKey: LlmFieldSource;
+  };
+  /** The endpoint's bearer token, described. Never the token. */
+  credential: CredentialStatus;
+}
+
+/** Response for GET /api/providers, and the `llm` block of GET /api/setup/state. */
+export interface LlmStatus {
+  workhorse: LlmRoleStatus;
+  tutor: LlmRoleStatus;
+  /**
+   * True when the deploy pins the provider, model or endpoint through the
+   * environment. The wizard renders the whole step read-only when it is: a row
+   * written under an env-pinned field is a row that never takes effect.
+   */
+  envLocked: boolean;
+  /**
+   * Model ids this deploy refuses to send work to (CODEGRIND_MODEL_DENY). They
+   * are filtered out of the picker rather than rejected after the fact — see
+   * the Plex-starvation incident behind the deny list.
+   */
+  deny: string[];
+  /** True when some call still routes to Anthropic, i.e. a key is required. */
+  needsAnthropicKey: boolean;
+}
+
+/** Body for POST /api/providers/models — ask an endpoint what it serves. */
+export interface LlmModelsRequest {
+  endpoint: string;
+  /** Optional bearer token, for the vLLM-behind-auth case. Never echoed back. */
+  endpointKey?: string;
+}
+
+/** Response for POST /api/providers/models. */
+export interface LlmModelsResponse {
+  /** What the endpoint advertises, with any denied id removed. */
+  models: string[];
+  /** How many ids the deny list removed. Shown so the absence is not a mystery. */
+  denied: number;
+}
+
+/**
+ * What the validation call measured. Only ever returned on success — a failure
+ * is a 400 with a message, because a configuration that fails this is not stored.
+ */
+export interface LlmProviderCheck {
+  /** What the endpoint said it actually served. A router may substitute. */
+  servedModel: string;
+  latencyMs: number;
+  /**
+   * How long a real problem is expected to take to write, derived from the
+   * measured token rate rather than guessed. Drives the seed step's copy.
+   */
+  estimatedProblemSeconds: number;
+  /** Plain-language consequence of a slow endpoint. Not a gate. */
+  warning: string | null;
+}
+
+/** Body for PUT /api/providers. */
+export interface LlmConfigRequest {
+  provider: LlmProviderId;
+  /** Required for `openai-compatible`; ignored for `anthropic`. */
+  endpoint?: string;
+  model?: string;
+  /** Write-only. Omit for the usual keyless LAN endpoint. */
+  endpointKey?: string;
+}
+
+/** Response for PUT /api/providers. */
+export interface LlmConfigResponse {
+  llm: LlmStatus;
+  /** Absent on the Anthropic path, which has its own key check. */
+  check: LlmProviderCheck | null;
+}
+
+// -----------------------------------------------------------------------------
 // First run — what the setup screen needs to know, and what seeding reports
 // -----------------------------------------------------------------------------
 
@@ -765,6 +878,13 @@ export interface SetupState {
    */
   dismissible: boolean;
   apiKey: ApiKeyStatus;
+  /**
+   * Which model answers, and whether the deploy pinned it.
+   *
+   * The wizard's first step is a PROVIDER step, not a key step: an install
+   * pointed at a local endpoint needs no key and must not be asked for one.
+   */
+  llm: LlmStatus;
   language: Language;
   languages: SetupLanguageState[];
 }
