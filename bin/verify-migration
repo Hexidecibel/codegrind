@@ -74,9 +74,19 @@ BASELINE_DIR="${BASELINE_DIR:-${HOME}/backups/codegrind/baseline}"
 # solve (57 -> 58, 67 -> 68). The byte-identical four-endpoint diff for that
 # phase was taken BEFORE these ran, against baseline-firstrun; these numbers are
 # the state they left behind.
+#
+# Moved once more by the provider-abstraction phase's regression smokes — again
+# real activity, and again NO migration (user_version is still 3; that stage
+# changed how a request is BUILT, never what is stored): bin/smoke-e2e
+# javascript missed the bank, so it generated one problem and filed one solve
+# (58 -> 59, 68 -> 69). bin/smoke-isolation and bin/dry-run-generate wrote
+# nothing — the dry run is a dry run. The byte-identical four-endpoint diff for
+# this stage was taken BEFORE any of them ran, against a baseline captured from
+# the PRE-abstraction service and verified after the restart onto the new code;
+# these numbers are the state the smokes left behind.
 EXPECTED_ROWS=(
-  "problems:58"
-  "attempts:68"
+  "problems:59"
+  "attempts:69"
   "skill_state:6"
   "sessions:8"
   "review_queue:11"

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# One honest generation attempt, scored by the stage that failed. Thin wrapper
+# around bin/dry-run-generate.ts so it runs like the other bin scripts.
+#
+#   bin/dry-run-generate --help
+#
+# THIS SPENDS REAL MONEY: one generation call per attempt. It writes NOTHING to
+# the database unless --keep is passed, which is the difference between this and
+# bin/seed-bank.
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_DIR}"
+
+# ANTHROPIC_API_KEY / DATA_DIR live in .env for a CLI run; systemd hands them to
+# the service. Without this the run aborts on the first call with "no key".
+if [[ -f "${REPO_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_DIR}/.env"
+  set +a
+fi
+
+# better-sqlite3 is ABI-pinned; lib/node.sh finds a Node that will not crash it.
+# shellcheck source=lib/node.sh
+source "${REPO_DIR}/bin/lib/node.sh"
+cg_require_node
+
+exec npx tsx bin/dry-run-generate.ts "$@"

@@ -1,4 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
 import {
   TOPICS,
   MISTAKE_TAGS,
@@ -28,88 +27,30 @@ import {
   profileFor,
   type LanguageProfile,
 } from './llm.language.js';
+import { structured, text as textCall } from './llm.client.js';
+import { LlmToolCallError, type LlmMessage, type ToolSpec } from './llm.types.js';
 
 // ---------------------------------------------------------------------------
-// Anthropic client — lazily constructed so importing this module never requires
-// a key (e.g. for type-only usage or when the sandbox path is exercised alone).
+// This file writes PROMPTS and unwraps ANSWERS.
 // ---------------------------------------------------------------------------
-/**
- * Two models, split by what the call is for.
- *
- * `ANTHROPIC_MODEL` is the workhorse: generation, forced-tool-use extraction,
- * lesson writing, and the per-submit coaching brief — everything that runs on
- * a schedule the user doesn't control.
- *
- * `ANTHROPIC_CHAT_MODEL` is the teaching model, used by `askFollowup` alone:
- * one call per question actually asked, the lowest-frequency and
- * highest-value call in the app, and the one where the model has to reason
- * about *how to explain* before it answers. `coach` is the other teaching call
- * but fires on every submit, so it stays on the workhorse model and buys its
- * quality with thinking instead — see the note at that call site.
- *
- * NOTE on thinking: on both defaults below, omitting `thinking` runs ADAPTIVE
- * thinking, and `max_tokens` caps thinking + visible text together. Every call
- * site in this file therefore sets `thinking` explicitly — `disabled` for the
- * cheap forced-tool-use calls where reasoning adds nothing and would eat the
- * budget, `adaptive` for the two teaching calls (`coach`, `askFollowup`).
- */
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
-const ANTHROPIC_CHAT_MODEL = process.env.ANTHROPIC_CHAT_MODEL || 'claude-opus-5';
-
-/** Forced-tool-use calls get nothing from thinking; keep the whole budget for output. */
-const NO_THINKING = { type: 'disabled' } as const satisfies Anthropic.ThinkingConfigParam;
-/** Teaching calls reason about how to explain before they answer. */
-const ADAPTIVE_THINKING = { type: 'adaptive' } as const satisfies Anthropic.ThinkingConfigParam;
-
-/**
- * The message a MISSING key produces, everywhere.
- *
- * It used to say "provision it via bin/inject", which is correct on exactly one
- * machine in the world and meaningless on the one this app is being handed to.
- * The first-run wizard is now the answer for everybody else, and the
- * environment variable stays named for the people who already use it.
- */
-export const NO_API_KEY_MESSAGE =
-  'No Anthropic API key is configured. Open codegrind in a browser and paste one into the setup screen, or set ANTHROPIC_API_KEY in the environment.';
-
-let anthropicClient: Anthropic | null = null;
-/**
- * The key the cached client was built with.
- *
- * The client used to be cached forever on first construction, which was fine
- * while the key could only arrive before boot. The wizard can now write one
- * into a RUNNING server (apikey.service publishes it into the environment), so
- * the cache has to be keyed on the value or the first paste would appear to
- * work and then every call would keep using the client that has no key.
- */
-let anthropicClientKey: string | null = null;
-
-function getAnthropic(): Anthropic {
-  const apiKey = (process.env.ANTHROPIC_API_KEY ?? '').trim();
-  if (!apiKey) {
-    throw new Error(NO_API_KEY_MESSAGE);
-  }
-  if (!anthropicClient || anthropicClientKey !== apiKey) {
-    anthropicClient = new Anthropic({ apiKey });
-    anthropicClientKey = apiKey;
-  }
-  return anthropicClient;
-}
-
-/** Pull the single forced tool_use block out of a response, or throw. */
-function extractToolInput(
-  response: Anthropic.Message,
-  toolName: string
-): Record<string, unknown> {
-  const toolUse = response.content.find(
-    (block): block is Anthropic.ToolUseBlock =>
-      block.type === 'tool_use' && block.name === toolName
-  );
-  if (!toolUse) {
-    throw new Error(`Claude did not call ${toolName} as expected.`);
-  }
-  return (toolUse.input ?? {}) as Record<string, unknown>;
-}
+// It does not know what is at the other end of the wire, and it must not learn.
+// `llm.client` turns a role into a configured client; `llm.anthropic` is the one
+// file that knows a vendor's request shape. Everything below is the app's own
+// vocabulary: a system prompt, a tool schema, a token budget, an answer to
+// unwrap. llm.structural.test.ts greps this file to keep it that way — the
+// failure mode it prevents is a branch per function, which starts life as one
+// `if` and ends up meaning something slightly different in each of eleven
+// places.
+//
+// NOTE on thinking: on both model defaults, omitting `thinking` runs ADAPTIVE
+// thinking, and `maxTokens` caps thinking + visible text together. Every call
+// site in this file therefore states `thinking` explicitly — `'off'` for the
+// cheap forced-tool-use calls where reasoning adds nothing and would eat the
+// budget, `'adaptive'` for the two teaching calls (`coach`, `askFollowup`).
+//
+// NOTE on roles: `role` picks the model and the wall-clock budget. `workhorse`
+// is the >= 8000-token structured work, `small` the cheap forced-tool calls,
+// `tutor` the one conversational call. See llm.types.DEFAULT_TIMEOUT_MS.
 
 // ===========================================================================
 // 1. generateProblem
@@ -117,12 +58,16 @@ function extractToolInput(
 /**
  * Built once per language at module load — never per call.
  *
- * This text is sent with `cache_control: { type: 'ephemeral' }`, which caches
- * the tools-and-system prefix of the request. Assembling it inside
+ * THE PRECOMPUTATION IS THE CACHING. Every caching scheme in play — Anthropic's
+ * ephemeral prefix, and llama.cpp's slot cache for whatever runs this next — is
+ * a match on the FRONT of the request, so what makes it work is that this text
+ * is byte-identical from one call to the next. Assembling it inside
  * `generateProblem` would work today and keep working right up until somebody
  * folded the topic or the difficulty into it, at which point every request is a
  * cache miss and nothing reports it. There is no per-call scope here to read a
  * dynamic value from, so that mistake is not available.
+ *
+ * No adapter may reformat what it is handed here either — same reason.
  *
  * For `javascript` the assembled string is byte-identical to the constant this
  * replaced. That is the regression argument: JavaScript generation sends the
@@ -154,11 +99,11 @@ Match the requested topic and difficulty. Keep it crisp and fair — the kind of
  * definition rebuilt per call is as cache-hostile as a system prompt rebuilt
  * per call, and considerably easier to overlook.
  */
-export const EMIT_PROBLEM_TOOL_BY_LANGUAGE: Record<Language, Anthropic.Tool> = perLanguage(
-  (p: LanguageProfile): Anthropic.Tool => ({
+export const EMIT_PROBLEM_TOOL_BY_LANGUAGE: Record<Language, ToolSpec> = perLanguage(
+  (p: LanguageProfile): ToolSpec => ({
   name: 'emit_problem',
   description: 'Emit one complete, auto-gradeable coding problem.',
-  input_schema: {
+  schema: {
     type: 'object',
     properties: {
       title: { type: 'string', description: 'Short problem title.' },
@@ -390,45 +335,47 @@ export async function generateProblem(
   difficulty: Difficulty,
   opts?: GenerateProblemOpts
 ): Promise<GeneratedProblem> {
-  const anthropic = getAnthropic();
   const profile = profileFor(language);
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
-    // A problem carries its whole hidden test suite as literal JSON, so the
-    // output is far larger than any other call here. At 8000 a big adversarial
-    // suite gets cut off mid-array and lands as "missing hidden tests".
-    max_tokens: 16000,
-    // Disabled deliberately: the whole output is one forced tool call of
-    // literal JSON, and thinking here would compete with the test suite for
-    // the same 16000 tokens — the exact truncation this budget exists to avoid.
-    thinking: NO_THINKING,
-    system: [
-      {
-        type: 'text',
-        text: GENERATE_SYSTEM_BY_LANGUAGE[language],
-        cache_control: { type: 'ephemeral' },
-      },
-    ],
-    tools: [EMIT_PROBLEM_TOOL_BY_LANGUAGE[language]],
-    tool_choice: { type: 'tool', name: 'emit_problem' },
-    messages: [
-      {
-        role: 'user',
-        content: buildGenerateUserMessage(language, topic, difficulty, opts),
-      },
-    ],
-  });
 
   // Truncation is the single most likely generation failure, and without this
   // check it surfaces as a confusing downstream "missing tests" error. Name it
   // so the retry in bank.service logs the real cause.
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error(
+  //
+  // It is checked on BOTH exits because a cut-off tool call has two shapes: a
+  // partial one that comes back and fails to parse, and none at all. The second
+  // used to be indistinguishable from "the model ignored the tool".
+  const truncated = () =>
+    new Error(
       `Generation truncated at max_tokens (${difficulty}/${topic}) — the emitted problem was cut off mid-tool-call.`
     );
-  }
 
-  const input = extractToolInput(response, 'emit_problem');
+  let input: Record<string, unknown>;
+  try {
+    const call = await structured({
+      role: 'workhorse',
+      // A problem carries its whole hidden test suite as literal JSON, so the
+      // output is far larger than any other call here. At 8000 a big adversarial
+      // suite gets cut off mid-array and lands as "missing hidden tests".
+      maxTokens: 16000,
+      // Off deliberately: the whole output is one forced tool call of literal
+      // JSON, and thinking here would compete with the test suite for the same
+      // 16000 tokens — the exact truncation this budget exists to avoid.
+      thinking: 'off',
+      system: GENERATE_SYSTEM_BY_LANGUAGE[language],
+      tool: EMIT_PROBLEM_TOOL_BY_LANGUAGE[language],
+      messages: [
+        {
+          role: 'user',
+          content: buildGenerateUserMessage(language, topic, difficulty, opts),
+        },
+      ],
+    });
+    if (call.meta.stop === 'max_tokens') throw truncated();
+    input = call.input;
+  } catch (err) {
+    if (err instanceof LlmToolCallError && err.meta.stop === 'max_tokens') throw truncated();
+    throw err;
+  }
 
   const title = typeof input.title === 'string' && input.title.trim() ? input.title.trim() : 'Untitled Problem';
   const functionName =
@@ -487,10 +434,10 @@ Your job: a structured coaching brief focused on INTERVIEW PATTERN MASTERY.
 Be specific and honest. Reference the real test names and outcomes. Call emit_coaching exactly once.`
 );
 
-const EMIT_COACHING_TOOL: Anthropic.Tool = {
+const EMIT_COACHING_TOOL: ToolSpec = {
   name: 'emit_coaching',
   description: 'Emit the structured coaching brief.',
-  input_schema: {
+  schema: {
     type: 'object',
     properties: {
       approach: { type: 'string' },
@@ -557,7 +504,6 @@ export async function coach(
   results: TestResult[],
   prediction?: Prediction
 ): Promise<CoachingBrief> {
-  const anthropic = getAnthropic();
   const passed = results.filter((r) => r.passed).length;
   // Off the PROBLEM, never off the active setting — the problem is what the
   // reference solution and every `expected` were written in.
@@ -591,31 +537,22 @@ ${userCode}
 TEST RESULTS (${passed}/${results.length} passed):
 ${summarizeResults(results)}${predictionBlock}`;
 
-  const response = await anthropic.messages.create({
+  const { input } = await structured({
     // Teaching call, but it fires on EVERY submit — so it stays on the
-    // workhorse model and pays for thinking rather than for the bigger model.
+    // workhorse role and pays for thinking rather than for the bigger model.
     // (askFollowup fires only when the candidate actually asks, which is why
-    // that one gets ANTHROPIC_CHAT_MODEL.) If coaching quality disappoints,
-    // switching this to ANTHROPIC_CHAT_MODEL is the whole change.
-    model: ANTHROPIC_MODEL,
+    // that one is the `tutor` role.) If coaching quality disappoints, switching
+    // this to `tutor` is the whole change.
+    role: 'workhorse',
     // 2500 was sized for a thinking-off model. With adaptive thinking the
     // budget covers thinking + the brief, so a tight cap truncates the tool
     // call mid-JSON and the whole brief is lost.
-    max_tokens: 8000,
-    thinking: ADAPTIVE_THINKING,
-    system: [
-      {
-        type: 'text',
-        text: COACH_SYSTEM_BY_LANGUAGE[problem.language],
-        cache_control: { type: 'ephemeral' },
-      },
-    ],
-    tools: [EMIT_COACHING_TOOL],
-    tool_choice: { type: 'tool', name: 'emit_coaching' },
+    maxTokens: 8000,
+    thinking: 'adaptive',
+    system: COACH_SYSTEM_BY_LANGUAGE[problem.language],
+    tool: EMIT_COACHING_TOOL,
     messages: [{ role: 'user', content: userMessage }],
   });
-
-  const input = extractToolInput(response, 'emit_coaching');
   const complexity = (input.complexity ?? {}) as Record<string, unknown>;
 
   const brief: CoachingBrief = {
@@ -650,10 +587,10 @@ Level scoping (respect it strictly):
 
 Keep it to a few sentences. Call emit_hint exactly once.`;
 
-const EMIT_HINT_TOOL: Anthropic.Tool = {
+const EMIT_HINT_TOOL: ToolSpec = {
   name: 'emit_hint',
   description: 'Emit a single level-scoped hint.',
-  input_schema: {
+  schema: {
     type: 'object',
     properties: {
       text: { type: 'string', description: 'The hint, scoped to the requested level.' },
@@ -667,8 +604,6 @@ export async function hint(
   userCode: string,
   level: HintLevel
 ): Promise<Hint> {
-  const anthropic = getAnthropic();
-
   const userMessage = `PROBLEM: ${problem.title} (pattern: ${problem.pattern})
 
 Statement:
@@ -683,20 +618,17 @@ ${userCode || '(empty)'}
 
 Give a LEVEL ${level} hint.`;
 
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
+  const { input } = await structured({
+    role: 'small',
     // A hint is a few sentences; 1000 is 700 plus tokenizer headroom.
-    max_tokens: 1000,
-    // Disabled: level-scoped nudges are a short forced tool call. Left on
-    // adaptive, thinking could consume the whole budget and return empty text.
-    thinking: NO_THINKING,
-    system: [{ type: 'text', text: HINT_SYSTEM, cache_control: { type: 'ephemeral' } }],
-    tools: [EMIT_HINT_TOOL],
-    tool_choice: { type: 'tool', name: 'emit_hint' },
+    maxTokens: 1000,
+    // Off: level-scoped nudges are a short forced tool call. Left on adaptive,
+    // thinking could consume the whole budget and return empty text.
+    thinking: 'off',
+    system: HINT_SYSTEM,
+    tool: EMIT_HINT_TOOL,
     messages: [{ role: 'user', content: userMessage }],
   });
-
-  const input = extractToolInput(response, 'emit_hint');
   return {
     level,
     text: typeof input.text === 'string' ? input.text : '',
@@ -717,10 +649,10 @@ Plan the session ARC, not individual problems (a separate scheduler picks each p
 
 Call emit_session_plan exactly once.`;
 
-const EMIT_SESSION_PLAN_TOOL: Anthropic.Tool = {
+const EMIT_SESSION_PLAN_TOOL: ToolSpec = {
   name: 'emit_session_plan',
   description: 'Emit the session plan (theme, coach intro, focus topics).',
-  input_schema: {
+  schema: {
     type: 'object',
     properties: {
       theme: { type: 'string', description: 'Short session theme name.' },
@@ -754,8 +686,6 @@ export interface SessionSnapshotTopic {
 
 /** Plan the session arc once per sitting from the tier snapshot. */
 export async function planSession(snapshot: SessionSnapshotTopic[]): Promise<SessionPlan> {
-  const anthropic = getAnthropic();
-
   const lines = snapshot.map((s) => {
     const tags = [s.weak ? 'WEAK' : '', s.due ? 'DUE' : ''].filter(Boolean).join(',');
     const climbing = s.nextTier
@@ -775,20 +705,17 @@ export async function planSession(snapshot: SessionSnapshotTopic[]): Promise<Ses
           '\n'
         )}\n\nPlan today's short session. Use the exact topic ids above for focus.`;
 
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
+  const { input } = await structured({
+    role: 'small',
     // Theme + two sentences + a few topic ids; 800 is 500 plus tokenizer headroom.
-    max_tokens: 800,
-    // Disabled: the tightest budget in the file, and picking 2-4 focus topics
-    // off a snapshot needs no deliberation.
-    thinking: NO_THINKING,
-    system: [{ type: 'text', text: PLAN_SYSTEM, cache_control: { type: 'ephemeral' } }],
-    tools: [EMIT_SESSION_PLAN_TOOL],
-    tool_choice: { type: 'tool', name: 'emit_session_plan' },
+    maxTokens: 800,
+    // Off: the tightest budget in the file, and picking 2-4 focus topics off a
+    // snapshot needs no deliberation.
+    thinking: 'off',
+    system: PLAN_SYSTEM,
+    tool: EMIT_SESSION_PLAN_TOOL,
     messages: [{ role: 'user', content: userMessage }],
   });
-
-  const input = extractToolInput(response, 'emit_session_plan');
   const validTopics = new Set<string>(TOPICS as readonly string[]);
   const focus = coerceStrings(input.focus).filter((t): t is Topic => validTopics.has(t));
 
@@ -847,15 +774,6 @@ Anchor to the candidate's ACTUAL submitted code and to this specific problem; do
 
 const MAX_HISTORY_TURNS = 10;
 
-/** Extract and join the text blocks from a (non-tool-use) message response. */
-function extractText(response: Anthropic.Message): string {
-  return response.content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n')
-    .trim();
-}
-
 /**
  * Free-form follow-up Q&A anchored to the candidate's submission. The problem
  * context is folded into the first user turn, prior history is replayed
@@ -872,7 +790,6 @@ export async function askFollowup(
   history: ChatTurn[],
   results: TestResult[] = []
 ): Promise<string> {
-  const anthropic = getAnthropic();
   const askFence = profileFor(problem.language).promptFence;
 
   const resultsBlock = results.length
@@ -903,7 +820,7 @@ ${userCode || '(empty)'}
 
 I'll ask questions about it now.`;
 
-  const messages: Anthropic.MessageParam[] = [
+  const messages: LlmMessage[] = [
     { role: 'user', content: context },
     { role: 'assistant', content: "Got it — I've got your problem and your code in front of me. What's your question?" },
   ];
@@ -916,21 +833,20 @@ I'll ask questions about it now.`;
 
   messages.push({ role: 'user', content: question.trim() || 'Can you explain the key idea here?' });
 
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_CHAT_MODEL,
+  const { text } = await textCall({
+    role: 'tutor',
     // 1000 was the root cause of the tutor emitting fragments: there is no room
     // for a whole annotated algorithm in 1000 tokens, so it emitted whatever
     // piece fit. 8000 is room for the full solution plus the explanation, and
     // it also has to cover adaptive thinking.
-    max_tokens: 8000,
+    maxTokens: 8000,
     // The tutor should reason about HOW to explain — which representation, what
     // the reader already has — before it starts writing.
-    thinking: ADAPTIVE_THINKING,
-    system: [{ type: 'text', text: ASK_SYSTEM, cache_control: { type: 'ephemeral' } }],
+    thinking: 'adaptive',
+    system: ASK_SYSTEM,
     messages,
   });
 
-  const text = extractText(response);
   return text || "I couldn't generate an answer just now — try rephrasing your question.";
 }
 
@@ -962,10 +878,10 @@ ${CORPUS_PROFILE.templateRule}
 
 Be crisp and interview-focused. Call emit_primer exactly once.`;
 
-const EMIT_PRIMER_TOOL: Anthropic.Tool = {
+const EMIT_PRIMER_TOOL: ToolSpec = {
   name: 'emit_primer',
   description: 'Emit one durable pattern primer card.',
-  input_schema: {
+  schema: {
     type: 'object',
     properties: {
       recognitionCues: {
@@ -998,19 +914,16 @@ const EMIT_PRIMER_TOOL: Anthropic.Tool = {
 
 /** Generate a durable primer card for one topic/pattern (caller caches it). */
 export async function generatePrimer(topic: Topic): Promise<Primer> {
-  const anthropic = getAnthropic();
-
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
+  const { input } = await structured({
+    role: 'small',
     // 2500: 1500 plus headroom for the new tokenizer (~30% more tokens for the
     // same text) — a truncated primer card is cached forever.
-    max_tokens: 2500,
-    // Disabled: a forced tool call emitting a cheat-sheet card, generated once
-    // per pattern and cached. No reasoning step worth paying for.
-    thinking: NO_THINKING,
-    system: [{ type: 'text', text: PRIMER_SYSTEM, cache_control: { type: 'ephemeral' } }],
-    tools: [EMIT_PRIMER_TOOL],
-    tool_choice: { type: 'tool', name: 'emit_primer' },
+    maxTokens: 2500,
+    // Off: a forced tool call emitting a cheat-sheet card, generated once per
+    // pattern and cached. No reasoning step worth paying for.
+    thinking: 'off',
+    system: PRIMER_SYSTEM,
+    tool: EMIT_PRIMER_TOOL,
     messages: [
       {
         role: 'user',
@@ -1018,8 +931,6 @@ export async function generatePrimer(topic: Topic): Promise<Primer> {
       },
     ],
   });
-
-  const input = extractToolInput(response, 'emit_primer');
   const example = (input.example ?? {}) as Record<string, unknown>;
 
   return {
@@ -1050,10 +961,10 @@ Each lesson has:
 
 Order matters — earlier lessons must not depend on later ones. Call emit_outline exactly once.`;
 
-const EMIT_OUTLINE_TOOL: Anthropic.Tool = {
+const EMIT_OUTLINE_TOOL: ToolSpec = {
   name: 'emit_outline',
   description: 'Emit the ordered lesson outline for one pattern reading track.',
-  input_schema: {
+  schema: {
     type: 'object',
     properties: {
       lessons: {
@@ -1090,17 +1001,14 @@ function coerceLessonKind(raw: unknown, fallback: LessonKind): LessonKind {
  * Seq numbering starts at 1 — seq 0 is always derived from the cached Primer.
  */
 export async function generateTrackOutline(topic: Topic): Promise<TrackOutlineItem[]> {
-  const anthropic = getAnthropic();
-
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
+  const { input } = await structured({
+    role: 'small',
     // 2500: 1500 plus tokenizer headroom; a truncated outline is cached forever.
-    max_tokens: 2500,
-    // Disabled: 6-8 {kind,title,brief} triples in a forced tool call.
-    thinking: NO_THINKING,
-    system: [{ type: 'text', text: OUTLINE_SYSTEM, cache_control: { type: 'ephemeral' } }],
-    tools: [EMIT_OUTLINE_TOOL],
-    tool_choice: { type: 'tool', name: 'emit_outline' },
+    maxTokens: 2500,
+    // Off: 6-8 {kind,title,brief} triples in a forced tool call.
+    thinking: 'off',
+    system: OUTLINE_SYSTEM,
+    tool: EMIT_OUTLINE_TOOL,
     messages: [
       {
         role: 'user',
@@ -1108,8 +1016,6 @@ export async function generateTrackOutline(topic: Topic): Promise<TrackOutlineIt
       },
     ],
   });
-
-  const input = extractToolInput(response, 'emit_outline');
   const raw = Array.isArray(input.lessons) ? input.lessons : [];
 
   const out: TrackOutlineItem[] = [];
@@ -1143,10 +1049,10 @@ Also produce:
 
 Call emit_lesson exactly once.`;
 
-const EMIT_LESSON_TOOL: Anthropic.Tool = {
+const EMIT_LESSON_TOOL: ToolSpec = {
   name: 'emit_lesson',
   description: 'Emit one written lesson body.',
-  input_schema: {
+  schema: {
     type: 'object',
     properties: {
       body: {
@@ -1183,10 +1089,9 @@ Canonical example: ${primer.example.title} — ${primer.example.insight}`;
 }
 
 function unwrapLesson(
-  response: Anthropic.Message,
+  input: Record<string, unknown>,
   base: { id: string; topic: Topic; kind: LessonKind; seq: number; title: string }
 ): Lesson {
-  const input = extractToolInput(response, 'emit_lesson');
   const code = typeof input.code === 'string' ? input.code.trim() : '';
   return {
     ...base,
@@ -1202,19 +1107,16 @@ export async function generateLessonBody(
   item: TrackOutlineItem,
   primer: Primer
 ): Promise<Lesson> {
-  const anthropic = getAnthropic();
-
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
+  const { input } = await structured({
+    role: 'small',
     // 3000: 2000 plus tokenizer headroom — a lesson body is cached forever, so
     // a truncated one is permanent.
-    max_tokens: 3000,
-    // Disabled: a ~300-word body emitted as a forced tool call, written from a
-    // brief that already says what the lesson must cover.
-    thinking: NO_THINKING,
-    system: [{ type: 'text', text: LESSON_SYSTEM, cache_control: { type: 'ephemeral' } }],
-    tools: [EMIT_LESSON_TOOL],
-    tool_choice: { type: 'tool', name: 'emit_lesson' },
+    maxTokens: 3000,
+    // Off: a ~300-word body emitted as a forced tool call, written from a brief
+    // that already says what the lesson must cover.
+    thinking: 'off',
+    system: LESSON_SYSTEM,
+    tool: EMIT_LESSON_TOOL,
     messages: [
       {
         role: 'user',
@@ -1228,7 +1130,7 @@ It must cover: ${item.brief}`,
     ],
   });
 
-  return unwrapLesson(response, {
+  return unwrapLesson(input, {
     id: `${topic}:${item.seq}`,
     topic,
     kind: item.kind,
@@ -1247,8 +1149,6 @@ export async function generateMistakeLesson(
   seq: number,
   ground: { problemTitle?: string; prompt?: string } = {}
 ): Promise<Lesson> {
-  const anthropic = getAnthropic();
-
   const grounding = ground.problemTitle
     ? `The most recent time it bit them was on "${ground.problemTitle}":
 
@@ -1257,17 +1157,16 @@ ${(ground.prompt ?? '').slice(0, 1200)}
 Use that as the concrete example.`
     : 'You have no specific problem to anchor to — use a canonical example instead.';
 
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
+  const { input } = await structured({
+    role: 'small',
     // 3000: 2000 plus tokenizer headroom — a lesson body is cached forever, so
     // a truncated one is permanent.
-    max_tokens: 3000,
-    // Disabled: a ~300-word body emitted as a forced tool call, written from a
-    // brief that already says what the lesson must cover.
-    thinking: NO_THINKING,
-    system: [{ type: 'text', text: LESSON_SYSTEM, cache_control: { type: 'ephemeral' } }],
-    tools: [EMIT_LESSON_TOOL],
-    tool_choice: { type: 'tool', name: 'emit_lesson' },
+    maxTokens: 3000,
+    // Off: a ~300-word body emitted as a forced tool call, written from a brief
+    // that already says what the lesson must cover.
+    thinking: 'off',
+    system: LESSON_SYSTEM,
+    tool: EMIT_LESSON_TOOL,
     messages: [
       {
         role: 'user',
@@ -1280,7 +1179,7 @@ Write the lesson that fixes it for good: why this failure mode happens, the spec
     ],
   });
 
-  return unwrapLesson(response, {
+  return unwrapLesson(input, {
     id: `mistake:${tag}:${seq}`,
     topic,
     kind: 'mistake',
@@ -1294,19 +1193,16 @@ export async function generateWalkthroughLesson(
   problem: ProblemRecord,
   seq: number
 ): Promise<Lesson> {
-  const anthropic = getAnthropic();
-
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
+  const { input } = await structured({
+    role: 'small',
     // 3000: 2000 plus tokenizer headroom — a lesson body is cached forever, so
     // a truncated one is permanent.
-    max_tokens: 3000,
-    // Disabled: a ~300-word body emitted as a forced tool call, written from a
-    // brief that already says what the lesson must cover.
-    thinking: NO_THINKING,
-    system: [{ type: 'text', text: LESSON_SYSTEM, cache_control: { type: 'ephemeral' } }],
-    tools: [EMIT_LESSON_TOOL],
-    tool_choice: { type: 'tool', name: 'emit_lesson' },
+    maxTokens: 3000,
+    // Off: a ~300-word body emitted as a forced tool call, written from a brief
+    // that already says what the lesson must cover.
+    thinking: 'off',
+    system: LESSON_SYSTEM,
+    tool: EMIT_LESSON_TOOL,
     messages: [
       {
         role: 'user',
@@ -1323,7 +1219,7 @@ ${problem.referenceSolution}
     ],
   });
 
-  return unwrapLesson(response, {
+  return unwrapLesson(input, {
     id: `walkthrough:${problem.id}`,
     topic: problem.topic,
     kind: 'walkthrough',
@@ -1357,10 +1253,10 @@ export interface TranslatableSnippet {
   code: string;
 }
 
-const EMIT_TRANSLATIONS_TOOL: Anthropic.Tool = {
+const EMIT_TRANSLATIONS_TOOL: ToolSpec = {
   name: 'emit_translations',
   description: 'Emit the translated form of every snippet, keyed by its original id.',
-  input_schema: {
+  schema: {
     type: 'object',
     properties: {
       translations: {
@@ -1445,7 +1341,6 @@ export async function translateSnippets(
 
   const fromProfile = profileFor(from);
   const toProfile = profileFor(to);
-  const anthropic = getAnthropic();
 
   const body = wanted
     .map(
@@ -1456,21 +1351,18 @@ ${s.code}
     )
     .join('\n\n');
 
-  const response = await anthropic.messages.create({
-    model: ANTHROPIC_MODEL,
+  const { input } = await structured({
+    role: 'workhorse',
     // A topic's whole snippet set, in and out, plus headroom. Each snippet is a
     // one-screen teaching fragment, so ~9 of them is a few hundred lines; a
     // truncated batch loses the tail of the topic, which is why this is not
     // sized to the average.
-    max_tokens: 8000,
-    // Disabled: a mechanical, well-specified rewrite emitted as a forced tool
-    // call. There is no plan to make.
-    thinking: NO_THINKING,
-    system: [
-      { type: 'text', text: translateSystem(fromProfile, toProfile), cache_control: { type: 'ephemeral' } },
-    ],
-    tools: [EMIT_TRANSLATIONS_TOOL],
-    tool_choice: { type: 'tool', name: 'emit_translations' },
+    maxTokens: 8000,
+    // Off: a mechanical, well-specified rewrite emitted as a forced tool call.
+    // There is no plan to make.
+    thinking: 'off',
+    system: translateSystem(fromProfile, toProfile),
+    tool: EMIT_TRANSLATIONS_TOOL,
     messages: [
       {
         role: 'user',
@@ -1480,8 +1372,6 @@ ${body}`,
       },
     ],
   });
-
-  const input = extractToolInput(response, 'emit_translations');
   const raw = Array.isArray(input.translations) ? input.translations : [];
   const asked = new Set(wanted.map((s) => s.id));
 
