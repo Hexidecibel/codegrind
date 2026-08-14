@@ -32,6 +32,7 @@ import {
 } from '../src/server/services/seed.service.js';
 import { getActiveLanguage } from '../src/server/services/db.js';
 import { hydrate, isConfigured } from '../src/server/services/apikey.service.js';
+import { hydrateProviderConfig } from '../src/server/services/provider.service.js';
 import { needsAnthropicKey } from '../src/server/services/llm.client.js';
 
 interface Args {
@@ -126,6 +127,9 @@ async function main(): Promise<void> {
       (args.dryRun ? ' — DRY RUN, no API calls, no writes' : '')
   );
 
+  // Which model answers, as configured in the app rather than in a unit file.
+  // The environment still wins field by field, so a systemd deploy is unaffected.
+  hydrateProviderConfig();
   // A key stored by the first-run wizard lives in the settings table, not in
   // .env — `bin/inject` truncates .env on every deploy, so a pasted key there
   // would be destroyed. hydrate() publishes it into the environment for the

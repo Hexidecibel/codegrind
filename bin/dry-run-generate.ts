@@ -39,6 +39,7 @@ import {
 } from '../src/server/services/bank.service.js';
 import { getActiveLanguage } from '../src/server/services/db.js';
 import { hydrate, isConfigured } from '../src/server/services/apikey.service.js';
+import { hydrateProviderConfig } from '../src/server/services/provider.service.js';
 import { describeRouting, needsAnthropicKey } from '../src/server/services/llm.client.js';
 
 interface Args {
@@ -153,6 +154,9 @@ function report(result: DryRunResult, index: number, total: number): void {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
+  // The provider rows the wizard writes, and the key. Both are settings-table
+  // reads that the environment still overrides field by field.
+  hydrateProviderConfig();
   hydrate();
   // The key is only demanded when a role actually routes to Anthropic. A fully
   // local install has no key and wants none — telling it to go and get one
