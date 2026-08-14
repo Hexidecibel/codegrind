@@ -177,13 +177,18 @@ export function overridesToOptions(
     // Indent width is a property of the LANGUAGE, not of the assistance rung:
     // Python's 4 is its block structure rather than a preference.
     tabSize: LANGUAGE_META[language].indentSize,
-    // Pinned true, for every language, always. In Python a literal tab is a
-    // real failure and an invisible one — the file looks correctly indented and
-    // raises TabError or, worse, silently binds a block to the wrong suite. It
-    // is pinned rather than made language-conditional because there is no
-    // language here where a hard tab is the better default, and a conditional
-    // would be one edit away from being wrong for Python.
-    insertSpaces: true,
+    // Read from the language rather than pinned, because Go broke the
+    // assumption this line used to encode.
+    //
+    // It WAS pinned true on the reasoning that no language here is better off
+    // with a hard tab — true of JavaScript, Python and Java, and the stakes are
+    // highest in Python, where a literal tab is a real failure and an invisible
+    // one (the file looks correctly indented and raises TabError or, worse,
+    // silently binds a block to the wrong suite). Go inverts it: gofmt indents
+    // with tabs, so spaces are the deviation. The fact stays in LANGUAGE_META
+    // so there is exactly one place that knows, and Python's `true` is asserted
+    // by a test rather than by a comment.
+    insertSpaces: LANGUAGE_META[language].insertSpaces,
     // Without this the two lines above are DECORATIVE. Monaco's
     // detectIndentation defaults to true, which re-derives tabSize and
     // insertSpaces from the model's own text and silently discards whatever was

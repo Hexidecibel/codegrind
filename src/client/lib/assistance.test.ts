@@ -103,18 +103,33 @@ describe('the problem language', () => {
     expect(assistanceToMonacoOptions(3, undefined, 'javascript').options.tabSize).toBe(2);
   });
 
-  it('pins spaces-not-tabs for every language and every rung', () => {
-    // In Python a literal tab is a real failure and an invisible one. This is
-    // pinned rather than language-conditional precisely so no future edit can
-    // make it conditional and get Python wrong.
+  it('takes tabs-vs-spaces from the language, not from the rung', () => {
+    // This assertion used to read `toBe(true)` for everything, on the reasoning
+    // that no language here is better off with a hard tab. Go disproved that —
+    // gofmt indents with tabs — so the rule moved into LANGUAGE_META and the
+    // test moved with it. What has NOT changed is the rung-independence: an
+    // assistance preset is about how much help the editor gives, never about
+    // how the file is indented.
     for (const l of LANGUAGES) {
       for (const lvl of [1, 2, 3, 4] as AssistanceLevel[]) {
         const { options } = assistanceToMonacoOptions(lvl, undefined, l);
-        expect(options.insertSpaces, `${l}/${lvl}`).toBe(true);
+        expect(options.insertSpaces, `${l}/${lvl}`).toBe(LANGUAGE_META[l].insertSpaces);
         // Without this Monaco re-derives both settings from the buffer's own
         // text and discards the two above.
         expect(options.detectIndentation, `${l}/${lvl}`).toBe(false);
       }
     }
+  });
+
+  it('never gives Python a hard tab, and gives Go nothing else', () => {
+    // The two facts the loop above delegates to LANGUAGE_META, asserted
+    // directly — because "matches the table" passes just as happily when the
+    // table is wrong. In Python a literal tab is a real failure and an
+    // invisible one; in Go a space is merely un-gofmt'd, which is why only one
+    // of these two is a correctness issue.
+    expect(assistanceToMonacoOptions(3, undefined, 'python').options.insertSpaces).toBe(true);
+    expect(assistanceToMonacoOptions(3, undefined, 'javascript').options.insertSpaces).toBe(true);
+    expect(assistanceToMonacoOptions(3, undefined, 'java').options.insertSpaces).toBe(true);
+    expect(assistanceToMonacoOptions(3, undefined, 'go').options.insertSpaces).toBe(false);
   });
 });

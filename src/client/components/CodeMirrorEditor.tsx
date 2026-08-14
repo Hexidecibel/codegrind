@@ -36,6 +36,7 @@ import {
 import { highlightSelectionMatches } from '@codemirror/search';
 import { javascript } from '@codemirror/lang-javascript';
 import { python } from '@codemirror/lang-python';
+import { go } from '@codemirror/lang-go';
 import { oneDark } from '@codemirror/theme-one-dark';
 import type { AssistanceOverrides } from '@/client/lib/assistance';
 import type { CodeEditorImplProps } from '@/client/components/CodeEditor';
@@ -51,10 +52,16 @@ import { LANGUAGE_META, type Language } from '@/shared/languages';
  * falls back to no grammar at all, which is a plain (still editable, still
  * usable) buffer rather than a crash — the mobile editor degrades to the "Raw"
  * look for that one language instead of breaking the page.
+ *
+ * THAT GRACEFUL DEGRADATION IS ALSO A TRAP, which is why there is a test
+ * asserting an entry exists for every language whose harness is built: a
+ * forgotten `npm install` would not throw, it would just quietly serve an
+ * unhighlighted buffer to every phone user of that language.
  */
 const GRAMMARS: Partial<Record<Language, () => Extension>> = {
   javascript,
   python,
+  go,
 };
 
 /**
@@ -98,17 +105,20 @@ function extensionsFor(
   onRun: () => void,
   onSubmit: () => void,
 ): Extension[] {
-  // Indent width comes from the language, and the unit is ALWAYS spaces. In
-  // Python a hard tab is a real failure and an invisible one, and CM6's
-  // indentUnit is what every indent command (Enter, the phone's indent buttons,
-  // indentOnInput) inserts — so this string is the whole tabs-vs-spaces policy.
-  const indent = ' '.repeat(LANGUAGE_META[language].indentSize);
+  // CM6's indentUnit is the string every indent command inserts (Enter, the
+  // phone's indent buttons, indentOnInput), so it IS the tabs-vs-spaces policy
+  // for the mobile editor — and the policy is the language's, not the editor's.
+  // Spaces everywhere except Go, where gofmt uses tabs; `indentSize` is then a
+  // display width rather than a count, which is why it is not used to build the
+  // string in that branch.
+  const meta = LANGUAGE_META[language];
+  const indent = meta.insertSpaces ? ' '.repeat(meta.indentSize) : '\t';
   const ext: Extension[] = [
     history(),
     // Horizontal scrolling in a code editor is miserable on a phone; Monaco's
     // desktop default (no wrap) does not translate.
     EditorView.lineWrapping,
-    EditorState.tabSize.of(LANGUAGE_META[language].indentSize),
+    EditorState.tabSize.of(meta.indentSize),
     indentUnit.of(indent),
     oneDark,
     BASE_THEME,
