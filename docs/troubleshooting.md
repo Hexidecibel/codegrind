@@ -104,9 +104,14 @@ bin/build-runner-image go
 ### "the server did not come up"
 
 ```bash
-tail -50 $DATA_DIR/server.log        # bin/start instance
-bin/logs                             # systemd instance
+bin/logs --no-follow -n 50
 ```
+
+`bin/logs` finds whichever log this instance has — `$DATA_DIR/server.log` for a
+`bin/start` instance, the journal for the service — so you do not have to know which one
+you are looking at. It only claims the systemd unit when that unit's `WorkingDirectory` is
+this checkout, which is what stops a scratch clone from being shown the service's log and
+told it is its own. Force either with `--file` / `--systemd`.
 
 The commonest cause after a fresh clone is a missing `dist/` — `bin/start` checks for it
 and says so. Run `bin/setup` (or `bin/build`).
@@ -216,6 +221,29 @@ the WAL**, silently loses most of your recent history, and exits 0 looking exact
 worked. `bin/backup-db` uses SQLite's online backup API, then re-opens the copy and
 verifies every row count, `user_version` and `integrity_check`. See
 [operations.md](operations.md#backups).
+
+### I need to put a backup back
+
+`bin/restore-db --latest` — never a `cp` in the other direction either, and never while
+the server is up.
+
+```bash
+bin/restore-db --list                # what you have
+bin/restore-db --latest --dry-run    # verify the file and see what restoring would cost
+sudo systemctl stop codegrind        # or: bin/stop
+bin/restore-db --latest              # prompts; type "restore"
+sudo systemctl start codegrind       # or: bin/start
+```
+
+It refuses while anything is serving the database, verifies the backup **before** touching
+the live one, and takes a `pre-restore` safety backup on the way past — so a restore that
+was itself the mistake is undone by running `bin/restore-db --latest` again. The full
+list of what it checks is in [operations.md](operations.md#restoring).
+
+Two refusals that look like bugs and are not: *"every table in the backup is empty"* means
+you pointed it at a freshly-created database rather than a backup, and *"the backup is
+schema vN; this checkout only understands vM"* means the file came from a newer codegrind
+— update the code first, because migrations do not run backwards.
 
 ### The service is crash-looping after a schema change
 

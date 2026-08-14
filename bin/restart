@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 # Restart codegrind and report status.
 set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# PORT the same way bin/start and bin/status read it. This was a literal 9416,
+# which meant an instance moved with `bin/setup --port N` restarted fine and then
+# reported "still not healthy after 30s" — a false failure, on the one command
+# whose whole job is to tell you whether the restart worked.
+if [[ -f "${REPO_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_DIR}/.env"
+  set +a
+fi
+PORT="${PORT:-9416}"
+
 sudo systemctl restart codegrind
 
 # systemctl returns as soon as the unit is started, not when the app has bound
@@ -8,7 +23,7 @@ sudo systemctl restart codegrind
 # curls a socket that isn't listening yet and reports a false UNREACHABLE.
 # Same loop bin/deploy uses; kept in sync deliberately.
 for i in $(seq 1 30); do
-  if curl -fsS -o /dev/null http://127.0.0.1:9416/api/health 2>/dev/null; then
+  if curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/api/health" 2>/dev/null; then
     break
   fi
   if [[ "$i" == "30" ]]; then
@@ -17,4 +32,4 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-exec "$(dirname "${BASH_SOURCE[0]}")/status"
+exec "${REPO_DIR}/bin/status"
