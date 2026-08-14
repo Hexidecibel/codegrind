@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# =============================================================================
+# A second codegrind, from the same checkout, that cannot touch the real one
+# =============================================================================
+#
+#   bin/scratch start        # start it (reads bin/../.env.scratch if present)
+#   bin/scratch stop
+#   bin/scratch status
+#   bin/scratch logs [-f]
+#   bin/scratch reset        # delete its database and start over
+#   bin/scratch env          # print the environment it would use
+#
+# WHY THIS IS NOT bin/start. bin/start deliberately refuses to run a second copy
+# out of a directory the systemd unit already owns — same port, same SQLite file,
+# two writers. This runs the SAME code with a DIFFERENT DATA_DIR and a DIFFERENT
+# PORT, which is the one shape of "second copy" that is safe, and the only way to
+# exercise a new provider without pointing it at a database full of real practice
+# history.
+#
+# THE ANTHROPIC KEY IS STRIPPED ON PURPOSE. `.env` carries ANTHROPIC_API_KEY and
+# every other entry point sources it; this one does not, and actively unsets it
+# unless CG_SCRATCH_ALLOW_ANTHROPIC=1. A local-provider run whose key was quietly
+# in the environment proves nothing about whether the app works without one — and
+# "works without one" is the entire claim being tested. It also means a
+# misconfiguration cannot silently spend money here.
+#
+# Configure it in .env.scratch (gitignored, same format as .env), e.g.:
+#
+#     CODEGRIND_PROVIDER=openai-compatible
+#     CODEGRIND_ENDPOINT=http://127.0.0.1:9600/v1
+#     CODEGRIND_MODEL=Qwen3-local-q8
+#     CODEGRIND_MODEL_DENY=Qwen3-local
+#
+# CODEGRIND_MODEL_DENY IS NOT OPTIONAL ON THIS BOX. One id the local router
+# advertises is served by a CPU llama.cpp on this same machine, where it has
+# already been observed starving the media server's transcoder. The deny list is
+# what keeps a typo from finding it.
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_DIR}" || exit 1
+
+# shellcheck source=lib/node.sh
+source "${REPO_DIR}/bin/lib/node.sh"
+
+SCRATCH_ENV="${CG_SCRATCH_ENV:-${REPO_DIR}/.env.scratch}"
+if [[ -f "${SCRATCH_ENV}" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${SCRATCH_ENV}"
+  set +a
+fi
+
+# 9421, not 9417: the obvious neighbour of the live 9416 is already taken by
+# another service on this box (see the port registry in INFRASTRUCTURE.md), and
+# "next to it" is not a reason to fight over a port. data-scratch/ sits next to
+# data/ so it is obvious which is which in a file listing.
+PORT="${PORT:-9421}"
+HOST="${HOST:-127.0.0.1}"
+DATA_DIR="${DATA_DIR:-${REPO_DIR}/data-scratch}"
+case "${DATA_DIR}" in /*) ;; *) DATA_DIR="${REPO_DIR}/${DATA_DIR#./}" ;; esac
+
+# The guard that makes this script safe to run at all.
+LIVE_DATA_DIR="$(cd "${REPO_DIR}" && printf '%s' "${REPO_DIR}/data")"
+if [[ "${DATA_DIR}" == "${LIVE_DATA_DIR}" ]]; then
+  printf 'refusing to run a scratch instance against the LIVE data directory (%s).\n' "${DATA_DIR}" >&2
+  printf 'Set DATA_DIR to something else in %s\n' "${SCRATCH_ENV}" >&2
+  exit 1
+fi
+if [[ "${PORT}" == "9416" ]]; then
+  printf 'refusing to use port 9416 — that is the live instance.\n' >&2
+  exit 1
+fi
+
+if [[ "${CG_SCRATCH_ALLOW_ANTHROPIC:-0}" != "1" ]]; then
+  unset ANTHROPIC_API_KEY
+fi
+
+export PORT HOST DATA_DIR
+PIDFILE="${DATA_DIR}/server.pid"
+LOGFILE="${DATA_DIR}/server.log"
+
+running() {
+  [[ -f "${PIDFILE}" ]] && kill -0 "$(cat "${PIDFILE}")" 2>/dev/null
+}
+
+cmd_env() {
+  printf 'PORT=%s\n' "${PORT}"
+  printf 'HOST=%s\n' "${HOST}"
+  printf 'DATA_DIR=%s\n' "${DATA_DIR}"
+  printf 'CODEGRIND_PROVIDER=%s\n' "${CODEGRIND_PROVIDER:-(unset -> anthropic)}"
+  printf 'CODEGRIND_ENDPOINT=%s\n' "${CODEGRIND_ENDPOINT:-${QWEN_URL:-(unset)}}"
+  printf 'CODEGRIND_MODEL=%s\n' "${CODEGRIND_MODEL:-(unset)}"
+  printf 'CODEGRIND_CHAT_MODEL=%s\n' "${CODEGRIND_CHAT_MODEL:-(unset -> matches workhorse)}"
+  printf 'CODEGRIND_MODEL_DENY=%s\n' "${CODEGRIND_MODEL_DENY:-(unset)}"
+  # Presence only, never the value.
+  printf 'ANTHROPIC_API_KEY=%s\n' "${ANTHROPIC_API_KEY:+present}${ANTHROPIC_API_KEY:-absent}"
+}
+
+cmd_start() {
+  if running; then
+    printf 'already running (pid %s) on http://127.0.0.1:%s\n' "$(cat "${PIDFILE}")" "${PORT}"
+    return 0
+  fi
+  cg_require_node
+  mkdir -p "${DATA_DIR}" || return 1
+
+  printf 'codegrind :: scratch\n'
+  cmd_env | sed 's/^/  /'
+  printf '\n'
+
+  TSX="${REPO_DIR}/node_modules/.bin/tsx"
+  [[ -x "${TSX}" ]] || TSX="npx tsx"
+  # setsid so the whole process tree can be killed by group — tsx spawns the
+  # node that actually holds the port, exactly as bin/start documents.
+  # shellcheck disable=SC2086
+  setsid nohup ${TSX} src/server/index.ts >>"${LOGFILE}" 2>&1 &
+  local pid=$!
+  printf '%s' "${pid}" > "${PIDFILE}"
+
+  for _ in $(seq 1 45); do
+    if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:${PORT}/api/health" 2>/dev/null; then
+      printf 'up on http://127.0.0.1:%s (pid %s, log %s)\n' "${PORT}" "${pid}" "${LOGFILE}"
+      return 0
+    fi
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      printf 'the scratch server exited immediately. Last lines of %s:\n\n' "${LOGFILE}" >&2
+      tail -20 "${LOGFILE}" >&2
+      rm -f "${PIDFILE}"
+      return 1
+    fi
+    sleep 1
+  done
+  printf 'started (pid %s) but did not answer on %s within 45s. See %s\n' \
+    "${pid}" "${PORT}" "${LOGFILE}" >&2
+  return 1
+}
+
+cmd_stop() {
+  if ! running; then
+    printf 'not running\n'
+    rm -f "${PIDFILE}"
+    return 0
+  fi
+  local pid
+  pid="$(cat "${PIDFILE}")"
+  kill -- "-${pid}" 2>/dev/null || kill "${pid}" 2>/dev/null
+  for _ in $(seq 1 15); do
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 1
+  done
+  kill -9 -- "-${pid}" 2>/dev/null
+  rm -f "${PIDFILE}"
+  printf 'stopped\n'
+}
+
+cmd_status() {
+  if running; then
+    printf 'running (pid %s) on http://127.0.0.1:%s\n' "$(cat "${PIDFILE}")" "${PORT}"
+    curl -fsS --max-time 3 "http://127.0.0.1:${PORT}/api/health" && printf '\n'
+  else
+    printf 'not running\n'
+  fi
+  cmd_env | sed 's/^/  /'
+}
+
+cmd_reset() {
+  cmd_stop
+  rm -f "${DATA_DIR}/codegrind.db" "${DATA_DIR}/codegrind.db-wal" "${DATA_DIR}/codegrind.db-shm"
+  printf 'scratch database deleted (%s)\n' "${DATA_DIR}"
+}
+
+case "${1:-status}" in
+  start)  shift; cmd_start "$@" ;;
+  stop)   shift; cmd_stop "$@" ;;
+  status) shift; cmd_status "$@" ;;
+  reset)  shift; cmd_reset "$@" ;;
+  env)    shift; cmd_env "$@" ;;
+  logs)   shift; tail "${@:--n50}" "${LOGFILE}" ;;
+  *) printf 'usage: bin/scratch {start|stop|status|reset|env|logs}\n' >&2; exit 2 ;;
+esac

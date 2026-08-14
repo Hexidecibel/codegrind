@@ -32,6 +32,7 @@ import {
 } from '../src/server/services/seed.service.js';
 import { getActiveLanguage } from '../src/server/services/db.js';
 import { hydrate, isConfigured } from '../src/server/services/apikey.service.js';
+import { needsAnthropicKey } from '../src/server/services/llm.client.js';
 
 interface Args {
   language: Language;
@@ -130,7 +131,9 @@ async function main(): Promise<void> {
   // would be destroyed. hydrate() publishes it into the environment for the
   // SDK, and does nothing at all when the environment already has one.
   hydrate();
-  if (!args.dryRun && !isConfigured()) {
+  // Only when a role actually routes to Anthropic: a fully local install (see
+  // CODEGRIND_PROVIDER) has no key, needs none, and must not be asked for one.
+  if (!args.dryRun && needsAnthropicKey() && !isConfigured()) {
     console.error(
       'No Anthropic API key is configured. Set ANTHROPIC_API_KEY, or start the app\n' +
         '(bin/setup) and paste one into the setup screen.'
