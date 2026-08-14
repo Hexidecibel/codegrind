@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Give every banked Go problem a starterCode that actually compiles.
+#
+#   bin/fix-go-starters            # report what would change
+#   bin/fix-go-starters --apply    # write it
+#
+# WHY THIS EXISTS. The Go profile's first draft told the model "no package
+# clause in starterCode", on the theory that boilerplate is noise in an editor
+# that only ever asks for one function. That was wrong, and the first seed run
+# is what showed it: the harness compiles the candidate's file BYTE FOR BYTE
+# under its own name — which is the only reason a compile_error verdict can
+# quote a line and column that mean anything — so a starter with no `package
+# main` is a starter that fails to compile the instant it is submitted
+# unchanged. The alternative, having the driver prepend the clause, would offset
+# every diagnostic by a line and quietly make the whole verdict a lie.
+#
+# The profile now demands a complete compilable file, so newly generated
+# problems are correct. This repairs the ones seeded before that.
+#
+# IDEMPOTENT: a starter that already declares a package is left exactly alone,
+# so re-running is a no-op and running it against a clean bank prints "nothing
+# to do". Safe at any time; the service does not need to be down.
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR" || exit 1
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+if [[ -f "$REPO_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+DB="${DATA_DIR:-$REPO_DIR/data}/codegrind.db"
+APPLY=0
+[[ "${1:-}" == "--apply" ]] && APPLY=1
+
+DB="$DB" APPLY="$APPLY" node -e '
+const Database = require("better-sqlite3");
+const apply = process.env.APPLY === "1";
+const db = new Database(process.env.DB, { readonly: !apply });
+
+const rows = db.prepare(
+  "SELECT id, title, starterCode FROM problems WHERE language = ? ORDER BY createdAt"
+).all("go");
+
+// A package clause is the first thing in a Go file that is not a comment or
+// blank. Matching it anywhere at line start is deliberately loose: a false
+// POSITIVE only means "leave this one alone", which is the safe direction.
+const hasPackage = (src) => /^\s*package\s+\w+/m.test(src || "");
+
+const broken = rows.filter((r) => !hasPackage(r.starterCode));
+console.log(`go problems: ${rows.length}, starters missing a package clause: ${broken.length}`);
+for (const r of broken) console.log(`  - ${r.id}  "${r.title}"`);
+
+if (!broken.length) { console.log("\nNothing to do."); db.close(); process.exit(0); }
+if (!apply) { console.log("\nDry run — re-run with --apply to write."); db.close(); process.exit(0); }
+
+const upd = db.prepare("UPDATE problems SET starterCode = ? WHERE id = ?");
+const fix = db.transaction((list) => {
+  for (const r of list) upd.run("package main\n\n" + r.starterCode.replace(/^\n+/, ""), r.id);
+});
+fix(broken);
+
+const left = db.prepare("SELECT starterCode FROM problems WHERE language = ?").all("go")
+  .filter((r) => !hasPackage(r.starterCode)).length;
+db.close();
+if (left) { console.log(`\nFAIL: ${left} starter(s) still have no package clause.`); process.exit(1); }
+console.log(`\nPASS — repaired ${broken.length} starter(s).`);
+'

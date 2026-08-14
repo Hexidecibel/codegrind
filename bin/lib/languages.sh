@@ -23,11 +23,12 @@
 # match the public class it declares. That is a compiler constraint, not a
 # preference, and it has no meaning at all in a code editor.
 #
-# STATUS: javascript and python are wired up end to end. The java row is a real
-# set of values, not placeholders — but nothing builds or runs it yet, because
-# `test-harness/java/` does not exist. `cg_buildable_languages` is what keeps
-# that honest: it reports what is on disk rather than what is in this table, so
-# bin/build-runner-image cannot fail on a language that has not been written yet.
+# STATUS: javascript, python and go are wired up end to end. The java row is a
+# real set of values, not placeholders — but nothing builds or runs it yet,
+# because `test-harness/java/` does not exist. `cg_buildable_languages` is what
+# keeps that honest: it reports what is on disk rather than what is in this
+# table, so bin/build-runner-image cannot fail on a language that has not been
+# written yet.
 #
 # The python row's numbers were measured, not guessed: 29 000 recursion frames
 # complete inside `--memory=256m` (the harness reserves a 64 MB thread stack so
@@ -35,11 +36,16 @@
 # 31 000 returns a clean RecursionError rather than a segfault. Raising the
 # memory cap would not raise the depth — sys.setrecursionlimit is the binding
 # constraint, and it lives in the harness.
+#
+# GO IS THE FIRST COMPILED LANGUAGE, and it is what introduced CG_TMPFS below.
+# Its numbers were measured too: a warm `go build` of runner.go + solution.go +
+# shim.go is ~0.1s and a cold one ~3s, against a 10s compile budget inside the
+# harness; the 30s outer cap is what has to stay strictly above compile + run.
 
 # The order the rest of the tooling iterates in. Matches LANGUAGES in
 # src/shared/languages.ts — the two lists are the same set, deliberately, so a
 # language that exists to the app also exists to the build.
-CG_LANGUAGES=(javascript python java)
+CG_LANGUAGES=(javascript python go java)
 
 # --- image ---------------------------------------------------------------
 # One image per language, tagged with the language so `docker images` reads as
@@ -51,6 +57,7 @@ CG_LANGUAGES=(javascript python java)
 declare -A CG_IMAGE=(
   [javascript]=codegrind-runner-javascript:latest
   [python]=codegrind-runner-python:latest
+  [go]=codegrind-runner-go:latest
   [java]=codegrind-runner-java:latest
 )
 
@@ -62,6 +69,7 @@ declare -A CG_IMAGE=(
 declare -A CG_SRCNAME=(
   [javascript]=solution.mjs
   [python]=solution.py
+  [go]=solution.go
   [java]=Solution.java
 )
 
@@ -72,6 +80,7 @@ declare -A CG_SRCNAME=(
 declare -A CG_CMD=(
   [javascript]="node /app/runner.mjs"
   [python]="python3 /app/runner.py"
+  [go]="/app/cgrun"
   [java]="java -XX:TieredStopAtLevel=1 -cp /app:/app/gson.jar Runner"
 )
 
@@ -81,12 +90,14 @@ declare -A CG_CMD=(
 declare -A CG_MEMORY=(
   [javascript]=256m
   [python]=256m
+  [go]=512m
   [java]=512m
 )
 
 declare -A CG_PIDS=(
   [javascript]=128
   [python]=128
+  [go]=256
   [java]=256
 )
 
@@ -100,7 +111,28 @@ declare -A CG_PIDS=(
 declare -A CG_TIMEOUT=(
   [javascript]=12
   [python]=12
+  [go]=30
   [java]=30
+)
+
+# --- the /tmp mount -------------------------------------------------------
+# The value handed to `docker run --tmpfs`. Every container is `--read-only`, so
+# /tmp is the only writable surface any of them get; what varies is whether that
+# surface may be EXECUTED from.
+#
+# Docker mounts a --tmpfs `noexec` by default, and for an interpreted language
+# that is exactly right — there is nothing to execute. A COMPILED language needs
+# the opposite: `go build` writes a linked binary and then the driver runs it,
+# and under noexec that is a permission-denied that looks nothing like a
+# compiler problem. Java will need the same thing for javac's output.
+#
+# This is per-language rather than global on purpose: `exec` is a real
+# relaxation, and the two languages that do not need it should not have it.
+declare -A CG_TMPFS=(
+  [javascript]=/tmp
+  [python]=/tmp
+  [go]=/tmp:exec
+  [java]=/tmp:exec
 )
 
 # --- CPU share ------------------------------------------------------------

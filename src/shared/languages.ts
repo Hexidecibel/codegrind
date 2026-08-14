@@ -27,7 +27,7 @@
  * which is in turn what makes a missed call site a compile error once the db
  * accessors take a required `language` parameter.
  */
-export const LANGUAGES = ['javascript', 'python', 'java'] as const;
+export const LANGUAGES = ['javascript', 'python', 'go', 'java'] as const;
 
 export type Language = (typeof LANGUAGES)[number];
 
@@ -47,9 +47,13 @@ export interface LanguageMeta {
   /** Human-facing name, for pickers and badges. */
   displayName: string;
   /**
-   * Monaco's language id. Both `python` and `java` grammars ship in
-   * monaco-editor's default ESM entry and neither needs a web worker, so the
-   * desktop editor costs nothing beyond this string.
+   * Monaco's language id. The `python`, `go` and `java` grammars all ship in
+   * monaco-editor's default ESM entry (verified against 0.56: `esm/vs/index.js`
+   * imports `languages/definitions/<id>/register.js` for each) and none of them
+   * needs a web worker, so the desktop editor costs nothing beyond this string.
+   *
+   * CodeMirror on mobile is the opposite — every grammar is a separate package
+   * that must be imported to exist. See GRAMMARS in CodeMirrorEditor.tsx.
    */
   monacoId: string;
   /**
@@ -61,11 +65,28 @@ export interface LanguageMeta {
   fileExtension: string;
   /**
    * Editor indent width. Python's 4 is not cosmetic: it is the language's
-   * block structure. Whatever consumes this MUST also pin `insertSpaces`
-   * true — a literal tab in Python source is a real failure and an invisible
-   * one.
+   * block structure.
+   *
+   * When `insertSpaces` is false this is the DISPLAY width of a tab rather than
+   * a count of spaces to insert — which is why Go's is 4 and not 1. A tab shown
+   * one column wide is unreadable, and nothing about gofmt's output cares how
+   * many columns a tab occupies on screen.
    */
   indentSize: number;
+  /**
+   * Whether pressing Tab (and every auto-indent) inserts spaces or a hard tab.
+   *
+   * True for three of the four languages, and Go is the exception that forced
+   * this field to exist at all. gofmt indents with tabs and reformats any file
+   * it is given, so a Go answer written with spaces is a Go answer that does
+   * not look like Go — while in Python a hard tab is a real failure and an
+   * invisible one, and in JavaScript it is merely unfashionable.
+   *
+   * Deliberately explicit rather than derived from the language, because the
+   * consumers (Monaco's `insertSpaces`, CodeMirror's `indentUnit`) both need
+   * the answer and neither should re-derive it.
+   */
+  insertSpaces: boolean;
   /** Line-comment marker, for generated scaffolding and stub comments. */
   commentPrefix: string;
 }
@@ -77,6 +98,7 @@ export const LANGUAGE_META: Record<Language, LanguageMeta> = {
     codeFence: 'js',
     fileExtension: '.js',
     indentSize: 2,
+    insertSpaces: true,
     commentPrefix: '//',
   },
   python: {
@@ -85,7 +107,20 @@ export const LANGUAGE_META: Record<Language, LanguageMeta> = {
     codeFence: 'python',
     fileExtension: '.py',
     indentSize: 4,
+    insertSpaces: true,
     commentPrefix: '#',
+  },
+  go: {
+    displayName: 'Go',
+    monacoId: 'go',
+    codeFence: 'go',
+    fileExtension: '.go',
+    // Tabs, at a display width of 4. Go is the one language here where
+    // `insertSpaces` is false: gofmt indents with tabs, so spaces are the
+    // deviation rather than the safe default.
+    indentSize: 4,
+    insertSpaces: false,
+    commentPrefix: '//',
   },
   java: {
     displayName: 'Java',
@@ -93,6 +128,7 @@ export const LANGUAGE_META: Record<Language, LanguageMeta> = {
     codeFence: 'java',
     fileExtension: '.java',
     indentSize: 4,
+    insertSpaces: true,
     commentPrefix: '//',
   },
 };

@@ -167,6 +167,63 @@ const PYTHON: LanguageProfile = {
     'Plain Python 3 with 4-space indentation and never a tab, no imports beyond the standard library, and no print noise.',
 };
 
+// GO IS THE FIRST COMPILED LANGUAGE, and its profile is where that shows.
+//
+// Every rule below is a failure the Go harness can actually produce, and the
+// three that matter most have no analogue in the interpreted profiles:
+//
+//   1. THE TYPE ALLOWLIST. Args arrive as untyped JSON and are unmarshalled
+//      into whatever the user's own signature declares. That is what makes "no
+//      type metadata anywhere" work — and it means a parameter type json cannot
+//      fill is a problem nobody can solve. Unbriefed, the model invents a
+//      `TreeNode` for the trees topic and the problem is simply unrunnable.
+//   2. SINGLE RETURN VALUE. `(result, error)` is the most natural thing a Go
+//      author can write, and there is nowhere for the error to go. The harness
+//      rejects it with an authored message rather than a reflect panic, but a
+//      rejected problem still cost a generation call.
+//   3. UNUSED IMPORTS AND VARIABLES ARE COMPILE ERRORS. Unique among the four
+//      languages here, and the single cheapest generation failure to prevent:
+//      a leftover `import "sort"` after a rewrite fails the whole build.
+const GO: LanguageProfile = {
+  language: 'go',
+  displayName: 'Go',
+  promptFence: 'go',
+  signatureRule:
+    '- Provide a clear function signature via starterCode: the line `package main`, a blank line, then one top-level `func` with the right parameters, one return value, and a body containing just a `// your code here` comment and a zero-value return. starterCode must be a COMPLETE, COMPILABLE Go file — it is the exact text the candidate starts editing and the exact text that gets compiled.',
+  authoringRules: [
+    '- The solution is ONE top-level function in package main, plus any helper functions it needs. Both starterCode and referenceSolution open with `package main` and are complete compilable files — the candidate\'s file is compiled exactly as written, with nothing wrapped around it, which is also why every compiler error points at the line they are looking at.',
+    '- Never write `func main()`. The harness supplies one, and a second is a redeclaration error that fails the build before any test runs.',
+    '- RETURN EXACTLY ONE VALUE. The (result, error) idiom cannot be graded: there is no expected value to compare an error against. Signal an impossible input with a sentinel the problem defines (-1, an empty slice) instead.',
+    '- PARAMETER AND RETURN TYPES ARE LIMITED TO: int, float64, string, bool, and slices and maps built from those — []int, []string, []float64, [][]int, []bool, map[string]int, map[string][]int, map[string]string. Nothing else. No custom structs (no TreeNode, no ListNode, no Pair), no pointers, no interfaces, no `any`, no channels, no generics or type parameters, no variadic parameters, no rune or byte or int64 or float32. A type outside this list has no JSON form and the problem cannot be run at all.',
+    '- Unused imports and unused local variables are COMPILE ERRORS in Go, not warnings. Every import must be used and every declared variable must be read.',
+    '- The standard library only, and nothing that touches the outside world: no fmt.Scan, no os, no time.Now, no math/rand, no network. sort, strings, strconv, math and container/heap are all fine and are usually the right answer.',
+    '- Return a slice rather than a nil slice where the answer is "nothing" — though the harness treats a nil slice as an empty one, so an idiomatic `var out []int` accumulator is safe.',
+    '- Indent with TABS, as gofmt does.',
+  ],
+  referenceRule:
+    '- referenceSolution is a COMPLETE, COMPILABLE Go file defining the same function name; it must pass every sample and hidden test. Open with `package main`, then any imports it needs, then the function definition(s) — no surrounding prose and no func main.',
+  starterCodeSchema:
+    'Go starter: `package main`, then one top-level func with the right parameters, a single return value and a stub body. Must compile as-is.',
+  referenceSolutionSchema:
+    'Complete correct Go (package main + imports + funcs) defining functionName; passes all tests.',
+  integerRubric:
+    `- integer edges that stay well inside ±(2^53-1). ${INTEGER_TRANSPORT_BOUND} ` +
+    "Go's `int` is 64-bit on every platform this runs on, so it reaches far past what a JSON " +
+    'number survives and does so without a murmur: 1<<62 computes exactly, prints correctly, and ' +
+    'is then a DIFFERENT number on the far side of the round-trip — after which the problem can ' +
+    'never be solved again by anyone. The harness refuses to serialize an integer outside the ' +
+    'range rather than let that happen, so a problem whose answer grows past it is simply broken. ' +
+    'Probe near ±2^31 to exercise the boundary, and never make the answer depend on unbounded ' +
+    'growth (no unbounded factorials, powers or Fibonacci indices).',
+  starterStub: (fn) => `package main\n\nfunc ${fn}() int {\n\t// your code here\n\treturn 0\n}`,
+  snippetRule:
+    "code: OPTIONAL plain Go illustrating this lesson's specific point. Omit it entirely when prose alone is clearer. A bare function or statements, no package clause unless the point needs one, no fmt.Println noise, tab-indented.",
+  templateRule:
+    '- template: a reusable, GENERIC Go code skeleton for the pattern — the canonical shape (loops, pointers, structures) with placeholder comments, NOT a solution to a specific problem. Tab-indented, no package clause.',
+  snippetStyle:
+    'Plain Go indented with tabs, no package clause unless the point needs one, only standard-library imports, and no printing noise.',
+};
+
 // Phase 5 owns this one. It is authored rather than left empty because
 // `Record<Language, LanguageProfile>` is exhaustive by construction — a missing
 // key is a compile error, which is exactly the property that stops a language
@@ -210,6 +267,7 @@ const JAVA: LanguageProfile = {
 export const LANGUAGE_PROFILES: Record<Language, LanguageProfile> = {
   javascript: JAVASCRIPT,
   python: PYTHON,
+  go: GO,
   java: JAVA,
 };
 

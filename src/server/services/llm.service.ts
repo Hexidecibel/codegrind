@@ -295,7 +295,8 @@ export interface GenerateProblemOpts {
 // through Node's JSON.parse, and it holds even where the language could
 // represent more. What differs is why a model would breach it and what breaks
 // when it does — silent precision loss in JS, arbitrary-precision ints in
-// Python, 32-bit wraparound in Java. See LanguageProfile.integerRubric.
+// Python, a 64-bit `int` in Go, 32-bit wraparound in Java. See
+// LanguageProfile.integerRubric.
 // ---------------------------------------------------------------------------
 export const DIFFICULTY_BRIEF_BY_LANGUAGE: Record<Language, Partial<Record<Difficulty, string>>> =
   perLanguage((p: LanguageProfile) => ({

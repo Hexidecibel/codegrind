@@ -1,0 +1,344 @@
+#!/usr/bin/env bash
+# The Go-specific hazards, each proven where it actually bites.
+#
+#   bin/smoke-go
+#
+# Separate from bin/smoke-e2e on purpose. smoke-e2e asks "does the app drive
+# this language end to end"; this asks "does the Go TOOLCHAIN behave" — and Go
+# is the first language where that question includes a compiler:
+#
+#   1. compile diagnostics — a compiled language's headline feature. The
+#                            verdict must be `compile_error`, the phase
+#                            "compile", and the message must carry the LINE and
+#                            COLUMN of the user's own file. That last part is
+#                            only true because the driver compiles solution.go
+#                            byte for byte under its own name; any wrapping or
+#                            re-indenting would offset every number and make the
+#                            whole verdict a lie.
+#   2. unused imports      — a compile error in Go and in none of the other
+#                            three, and the cheapest generation failure there is.
+#   3. deep recursion      — the free win over Python. Goroutine stacks grow on
+#                            demand, so >10000 frames must work with NO thread,
+#                            no limit and no workaround anywhere in the harness.
+#   4. (result, error)     — the most idiomatic signature in the language, and
+#                            one the harness cannot grade. It must be refused
+#                            with an authored message, never a reflect panic.
+#   5. float tolerance     — averaging anything produces 0.30000000000000004.
+#   6. nil slice           — `var out []int` with nothing appended stays nil,
+#                            and encoding/json would render that `null`. The
+#                            harness normalizes it to [] instead; without that,
+#                            every empty-input edge case rejects correct code.
+#   7. fmt.Println         — including from a package-level initializer, which
+#                            runs before main and so before any capture could
+#                            have been installed. Go is the only language here
+#                            with that hazard.
+#
+# 1 (as a VERDICT) and 7 go through the LIVE API, because the verdict is derived
+# in sandbox.service above the runner and exists nowhere else. Everything else
+# goes through bin/run-submission, because it is a property of the harness
+# rather than of any stored problem.
+#
+# Read-only with respect to the database: /api/run records nothing. Costs no
+# LLM calls.
+#
+# Exit: 0 = every proof held, 1 = something failed.
+set -uo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_DIR" || exit 1
+export PATH="/home/hexi/.nvm/versions/node/v22.22.0/bin:$PATH"
+
+if [[ -f "$REPO_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+DB="${DATA_DIR:-$REPO_DIR/data}/codegrind.db"
+PORT="${PORT:-9416}"
+API="http://127.0.0.1:${PORT}"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+FAILURES=0
+fail() { printf '  FAIL %s\n' "$*"; FAILURES=$((FAILURES + 1)); }
+
+printf 'codegrind :: smoke-go\n\n'
+
+# =============================================================================
+printf '== 1. compiler diagnostics carry file, line and column\n'
+# =============================================================================
+# Two shapes: a syntax error, and the "declared and not used" that only Go
+# treats as fatal. Both must name solution.go and both must carry line:column.
+cat > "$TMP/syntax.go" <<'GO'
+package main
+
+func solve(n int) int {
+	return n +
+}
+GO
+cat > "$TMP/unused.go" <<'GO'
+package main
+
+import "sort"
+
+func solve(n int) int {
+	leftover := 42
+	return n * 2
+}
+GO
+echo '{"functionName":"solve","tests":[{"name":"a","args":[1],"expected":2}]}' > "$TMP/one.json"
+
+for case in syntax unused; do
+  bin/run-submission go "$TMP/${case}.go" "$TMP/one.json" > "$TMP/${case}.out" 2>/dev/null
+  LABEL="$case" node -e '
+    const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const label = process.env.LABEL;
+    if (r.phase !== "compile") {
+      console.log(`  FAIL ${label}: phase=${r.phase}, expected "compile"`);
+      console.log(`       ${JSON.stringify(r).slice(0, 300)}`);
+      process.exit(1);
+    }
+    // solution.go:LINE:COL — the whole point of a compile_error verdict.
+    const m = /solution\.go:(\d+):(\d+):/.exec(r.error || "");
+    if (!m) {
+      console.log(`  FAIL ${label}: no file:line:column in ${JSON.stringify(r.error)}`);
+      process.exit(1);
+    }
+    console.log(`  ok   ${label}: phase="compile" at solution.go line ${m[1]}, column ${m[2]}`);
+    console.log(`       ${(r.error || "").split("\n")[0]}`);
+  ' "$TMP/${case}.out" || FAILURES=$((FAILURES + 1))
+done
+
+# …and it must name the IMPORT specifically. Go reports the unused import and
+# stops before the unused variable, so this is the diagnostic the model will
+# actually be shown after leaving a stale import behind in a rewrite.
+# (Matched loosely: the message is inside a JSON string, so its quotes around
+# "sort" arrive backslash-escaped.)
+grep -q 'imported and not used' "$TMP/unused.out" \
+  && printf '  ok   the unused IMPORT is named, which is the diagnostic a stale rewrite produces\n' \
+  || fail 'the unused import was not reported'
+
+# =============================================================================
+printf '\n== 2. deep recursion with no workaround anywhere\n'
+# =============================================================================
+# Python needed a 64MB thread stack and sys.setrecursionlimit(30000) to get
+# past frame 1000. Go needs nothing: stacks start at 8KB and grow on demand.
+# 200000 frames is an order of magnitude past what the expert rubric asks for.
+cat > "$TMP/deep.go" <<'GO'
+package main
+
+func solve(n int) int {
+	var down func(int) int
+	down = func(k int) int {
+		if k == 0 {
+			return 0
+		}
+		return k + down(k-1)
+	}
+	return down(n)
+}
+GO
+cat > "$TMP/deep.json" <<'JSON'
+{"functionName":"solve","tests":[
+ {"name":"20000 frames","args":[20000],"expected":200010000},
+ {"name":"200000 frames","args":[200000],"expected":20000100000}
+]}
+JSON
+bin/run-submission go "$TMP/deep.go" "$TMP/deep.json" > "$TMP/deep.out" 2>/dev/null
+node -e '
+const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (r.passed === 2 && r.total === 2) {
+  console.log(`  ok   2/2 at 20k and 200k frames (${r.results[1].timeMs}ms), no stack workaround in the harness`);
+} else {
+  console.log(`  FAIL ${r.passed}/${r.total}: ${JSON.stringify(r.results?.map(x=>x.stderr).filter(Boolean))}`);
+  process.exit(1);
+}
+' "$TMP/deep.out" || FAILURES=$((FAILURES + 1))
+
+# And the failure end: infinite recursion must be NAMED, not reported as an
+# opaque kill. The harness caps the stack below the container's memory limit
+# precisely so the Go runtime beats the OOM killer to the diagnosis.
+cat > "$TMP/runaway.go" <<'GO'
+package main
+
+func solve(n int) int { return solve(n + 1) }
+GO
+bin/run-submission go "$TMP/runaway.go" "$TMP/one.json" > "$TMP/runaway.out" 2>/dev/null
+node -e '
+const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+if (/stack overflow/.test(r.error || "")) console.log("  ok   runaway recursion reports a stack overflow, not an opaque kill");
+else { console.log(`  FAIL runaway recursion: ${JSON.stringify(r.error || r).slice(0, 200)}`); process.exit(1); }
+' "$TMP/runaway.out" || FAILURES=$((FAILURES + 1))
+
+# =============================================================================
+printf '\n== 3. a (result, error) signature is refused, clearly\n'
+# =============================================================================
+cat > "$TMP/pair.go" <<'GO'
+package main
+
+import "errors"
+
+func solve(n int) (int, error) {
+	if n < 0 {
+		return 0, errors.New("negative")
+	}
+	return n * 2, nil
+}
+GO
+bin/run-submission go "$TMP/pair.go" "$TMP/one.json" > "$TMP/pair.out" 2>/dev/null
+node -e '
+const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+const msg = r.error || "";
+// It must be the AUTHORED message, not a reflect panic. "Call with too many
+// output values" is what an unguarded reflect.Call produces, and it teaches
+// nobody anything.
+if (r.phase === "load" && /must return exactly ONE/.test(msg) && !/reflect/.test(msg)) {
+  console.log("  ok   refused at phase=\"load\" with an authored message, not a reflect panic");
+} else {
+  console.log(`  FAIL multi-return: phase=${r.phase} ${JSON.stringify(msg).slice(0, 250)}`);
+  process.exit(1);
+}
+' "$TMP/pair.out" || FAILURES=$((FAILURES + 1))
+
+# =============================================================================
+printf '\n== 4. float tolerance, and a nil slice that must not become null\n'
+# =============================================================================
+cat > "$TMP/avg.go" <<'GO'
+package main
+
+func solve(nums []float64) float64 {
+	sum := 0.0
+	for _, n := range nums {
+		sum += n
+	}
+	return sum / float64(len(nums))
+}
+GO
+cat > "$TMP/avg.json" <<'JSON'
+{"functionName":"solve","tests":[
+ {"name":"average with rounding noise","args":[[0.1,0.2]],"expected":0.15},
+ {"name":"thirds","args":[[0.1,0.2,0.3]],"expected":0.2},
+ {"name":"a genuinely wrong average is still wrong","args":[[1,2]],"expected":2.0}
+]}
+JSON
+bin/run-submission go "$TMP/avg.go" "$TMP/avg.json" > "$TMP/avg.out" 2>/dev/null
+node -e '
+const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+let bad = 0;
+const [noise, thirds, wrong] = r.results || [];
+if (noise?.passed) console.log(`  ok   ${noise.actual} accepted against expected 0.15`);
+else { console.log(`  FAIL rounding noise rejected: ${JSON.stringify(noise)}`); bad++; }
+if (thirds?.passed) console.log(`  ok   ${thirds.actual} accepted against expected 0.2`);
+else { console.log(`  FAIL rounding noise rejected: ${JSON.stringify(thirds)}`); bad++; }
+if (wrong && !wrong.passed) console.log("  ok   a real difference (1.5 vs 2) is still rejected");
+else { console.log("  FAIL the tolerance swallowed a genuinely wrong answer"); bad++; }
+process.exit(bad ? 1 : 0);
+' "$TMP/avg.out" || FAILURES=$((FAILURES + 1))
+
+cat > "$TMP/nils.go" <<'GO'
+package main
+
+func solve(nums []int) []int {
+	var out []int
+	for _, n := range nums {
+		if n > 100 {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+GO
+echo '{"functionName":"solve","tests":[{"name":"nothing matches","args":[[1,2,3]],"expected":[]}]}' > "$TMP/nil.json"
+bin/run-submission go "$TMP/nils.go" "$TMP/nil.json" > "$TMP/nil.out" 2>/dev/null
+node -e '
+const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+const t = (r.results || [])[0];
+if (t?.passed && t.actual === "[]") console.log("  ok   an idiomatic nil accumulator serializes as [], not null");
+else { console.log(`  FAIL nil slice: ${JSON.stringify(t)}`); process.exit(1); }
+' "$TMP/nil.out" || FAILURES=$((FAILURES + 1))
+
+# =============================================================================
+printf '\n== 5. fmt.Println and the compile_error VERDICT, through the LIVE API\n'
+# =============================================================================
+# Both need a real stored Go problem, because the thing being proven is the
+# VERDICT the server derives — which only exists above the runner.
+PID="$(DB="$DB" node -e '
+const Database = require("better-sqlite3");
+const db = new Database(process.env.DB, { readonly: true });
+const row = db.prepare(
+  "SELECT id FROM problems WHERE language = ? AND canonicalized = 1 ORDER BY createdAt DESC LIMIT 1"
+).get("go");
+db.close();
+if (!row) process.exit(1);
+process.stdout.write(row.id);
+')"
+if [[ -z "${PID:-}" ]]; then
+  fail "no canonicalized go problem in the bank — run bin/seed-bank --language go"
+else
+  REF="$(DB="$DB" PID="$PID" node -e '
+    const Database = require("better-sqlite3");
+    const db = new Database(process.env.DB, { readonly: true });
+    const r = db.prepare("SELECT referenceSolution FROM problems WHERE id = ?").get(process.env.PID);
+    db.close();
+    process.stdout.write(r.referenceSolution);
+  ')"
+
+  post_run() { # $1 = file holding the code, $2 = label, $3 = expected verdict
+    node -e '
+      const fs = require("node:fs");
+      fs.writeFileSync(process.argv[4], JSON.stringify({
+        problemId: process.argv[2], code: fs.readFileSync(process.argv[3], "utf8") }));
+    ' _ "$PID" "$1" "$TMP/body.json"
+    curl -sS --max-time 120 -X POST "${API}/api/run" -H 'Content-Type: application/json' \
+      --data-binary "@$TMP/body.json" > "$TMP/resp.json"
+    LABEL="$2" WANT="$3" node -e '
+      const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+      const want = process.env.WANT;
+      if (r.verdict === want) {
+        const extra = r.phase ? ` phase="${r.phase}"` : "";
+        const printed = r.results?.find((t) => t.stdout)?.stdout;
+        console.log(`  ok   ${process.env.LABEL}: verdict=${r.verdict}${extra}` +
+          (printed ? ` (captured stdout: ${JSON.stringify(printed.trim().slice(0, 40))})` : ""));
+        process.exit(0);
+      }
+      console.log(`  FAIL ${process.env.LABEL}: verdict=${r.verdict}, expected ${want}`);
+      console.log(`       ${JSON.stringify(r.results?.[0] ?? r).slice(0, 300)}`);
+      process.exit(1);
+    ' "$TMP/resp.json"
+  }
+
+  # --- fmt.Println must not corrupt the payload ----------------------------
+  # A package-level initializer AND a print from inside the function. The
+  # initializer is the one Go alone can produce: it runs before main, so no
+  # in-process capture can exist yet, which is why the harness writes its
+  # payload to a file instead of to stdout.
+  #
+  # The import is appended as a second `import` declaration rather than merged
+  # into the reference's own — Go allows repeated import statements, so this
+  # works whatever shape the banked solution happens to have.
+  { printf 'package main\n\nimport "fmt"\n\nvar _ = cgBanner()\n\nfunc cgBanner() int {\n\tfmt.Println("noisy banner from package init")\n\treturn 0\n}\n\n'
+    printf '%s\n' "$REF" | sed '/^package main$/d'
+  } > "$TMP/noisy.go"
+  post_run "$TMP/noisy.go" 'a solution that fmt.Println()s from package init' 'accepted' \
+    || FAILURES=$((FAILURES + 1))
+
+  # --- a compile error must be compile_error, not "0 of N failed" ----------
+  # A parse error ANYWHERE in the file means no test ever runs, which is the
+  # whole reason `compile_error` exists as a verdict distinct from "0 of 12
+  # passed" — there is no behaviour to discuss and no partial credit to give.
+  { printf 'package main\n\nfunc cgMisplaced() int {\n\treturn 1 +\n}\n\n'
+    printf '%s\n' "$REF" | sed '/^package main$/d'
+  } > "$TMP/broken.go"
+  printf '  ..   (an unterminated expression prepended to the reference)\n'
+  post_run "$TMP/broken.go" 'a Go syntax error' 'compile_error' || FAILURES=$((FAILURES + 1))
+fi
+
+printf '\n'
+if [[ $FAILURES -gt 0 ]]; then
+  printf 'FAIL — %d Go proof(s) failed.\n' "$FAILURES"
+  exit 1
+fi
+printf 'PASS — diagnostics, deep recursion, arity, tolerance, nil slices and stdout all behaved.\n'
+exit 0

@@ -77,7 +77,7 @@ for lang in "${LANGS[@]}"; do
         --cpus="${CG_CPUS}" \
         --pids-limit="${CG_PIDS[$lang]}" \
         --read-only \
-        --tmpfs /tmp \
+        --tmpfs "${CG_TMPFS[$lang]}" \
         --cap-drop=ALL \
         --security-opt no-new-privileges \
         --label "${CG_LABEL}" \

@@ -31,10 +31,13 @@ import {
 } from './llm.service.js';
 
 /** Tokens that must never appear in another language's prompt. */
+// `\bJava\b` does not match "JavaScript" — the boundary after "Java" fails
+// against the `S` — so the two can be listed independently.
 const FOREIGN_TOKENS: Record<Language, RegExp[]> = {
-  javascript: [/\bPython\b/, /\bJava\b/],
-  python: [/\bJavaScript\b/, /\bTypeScript\b/, /\bJava\b/, /\bJS\b/],
-  java: [/\bJavaScript\b/, /\bTypeScript\b/, /\bPython\b/],
+  javascript: [/\bPython\b/, /\bJava\b/, /\bGo\b/],
+  python: [/\bJavaScript\b/, /\bTypeScript\b/, /\bJava\b/, /\bJS\b/, /\bGo\b/],
+  go: [/\bJavaScript\b/, /\bTypeScript\b/, /\bPython\b/, /\bJava\b/, /\bJS\b/],
+  java: [/\bJavaScript\b/, /\bTypeScript\b/, /\bPython\b/, /\bGo\b/],
 };
 
 describe('the profile registry', () => {
@@ -138,6 +141,72 @@ describe('the Python authoring rules', () => {
   });
 });
 
+describe('the Go authoring rules', () => {
+  const go = LANGUAGE_PROFILES.go;
+  const prompt = GENERATE_SYSTEM_BY_LANGUAGE.go;
+
+  it('states an explicit parameter and return TYPE ALLOWLIST', () => {
+    // The single most important rule in the profile. Args arrive as untyped
+    // JSON and are unmarshalled into whatever the user's own signature
+    // declares — which is what makes "no type metadata anywhere" work, and
+    // which also means a type json cannot fill is a problem nobody can solve.
+    // Unbriefed, the model invents a TreeNode for the trees topic.
+    expect(prompt).toMatch(/TYPES ARE LIMITED TO/i);
+    expect(prompt).toContain('map[string]int');
+    for (const banned of ['TreeNode', 'ListNode', 'struct', 'pointer', 'channel', 'generic']) {
+      expect(prompt, banned).toMatch(new RegExp(banned, 'i'));
+    }
+  });
+
+  it('forbids the (result, error) idiom the harness cannot grade', () => {
+    // Go's most idiomatic signature is the one that breaks the contract: there
+    // is no expected value to compare an error against. The runner rejects it
+    // with an authored message, but a rejected problem still cost a call.
+    expect(prompt).toMatch(/RETURN EXACTLY ONE VALUE/);
+    expect(prompt).toMatch(/result, error/);
+  });
+
+  it('warns that unused imports and variables are compile errors', () => {
+    // Unique to Go among these four, and the cheapest generation failure to
+    // prevent: one leftover import after a rewrite fails the whole build.
+    expect(prompt).toMatch(/[Uu]nused imports/);
+    expect(prompt).toMatch(/COMPILE ERRORS/);
+  });
+
+  it('bans a second func main, which the harness already supplies', () => {
+    // solution.go is compiled into the same package as runner.go, so a user
+    // main() is a redeclaration that fails the build before any test runs.
+    expect(prompt).toMatch(/Never write `func main\(\)`/);
+  });
+
+  it('demands a complete compilable file, package clause and all', () => {
+    // The candidate's file is compiled BYTE FOR BYTE under its own name, which
+    // is the only reason a compile_error verdict can quote a line and column
+    // that mean anything. Nothing is wrapped around it — so starterCode that
+    // omitted `package main` would not compile the moment it was submitted
+    // unchanged, and the alternative (the driver prepending one) would offset
+    // every diagnostic by a line. Java inherits this constraint exactly, minus
+    // Go's `//line` escape hatch, which javac has no equivalent of.
+    expect(go.signatureRule).toContain('package main');
+    expect(go.signatureRule).toMatch(/COMPLETE, COMPILABLE/);
+    expect(go.referenceRule).toContain('package main');
+    expect(go.starterCodeSchema).toContain('package main');
+    expect(go.starterStub('twoSum')).toContain('package main');
+  });
+
+  it('asks for tabs, because gofmt does', () => {
+    expect(prompt).toMatch(/TABS/i);
+  });
+
+  it('emits a starter stub that is tab-indented and declares a package', () => {
+    const stub = go.starterStub('twoSum');
+    expect(stub).toContain('func twoSum(');
+    expect(stub).toContain('package main');
+    expect(stub).toContain('\t');
+    expect(stub).not.toMatch(/\n {2,}\S/);
+  });
+});
+
 describe('the safe-integer rubric', () => {
   it('binds every language to the transport bound', () => {
     // The bound is imposed by the harness, not by the language: every
@@ -157,6 +226,7 @@ describe('the safe-integer rubric', () => {
     // breaches the bound is lost.
     expect(LANGUAGE_PROFILES.javascript.integerRubric).toMatch(/loses precision|silent/i);
     expect(LANGUAGE_PROFILES.python.integerRubric).toMatch(/arbitrary precision/i);
+    expect(LANGUAGE_PROFILES.go.integerRubric).toMatch(/64-bit/i);
     expect(LANGUAGE_PROFILES.java.integerRubric).toMatch(/wraps|overflow/i);
 
     const rubrics = LANGUAGES.map((l) => LANGUAGE_PROFILES[l].integerRubric);
