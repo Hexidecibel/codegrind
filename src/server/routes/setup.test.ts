@@ -21,8 +21,19 @@ import type { Language } from '../../shared/languages.js';
 // Seeding must never actually run in a unit test. Mocking the bank is what
 // makes "the route rejected this before spending anything" a provable claim
 // rather than a hopeful one.
-const mocks = vi.hoisted(() => ({ generateAndStore: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  generateAndStore: vi.fn(),
+  // Defaults to an Anthropic install, so every pre-existing case below reads
+  // exactly as it did before local providers existed.
+  needsAnthropicKey: vi.fn(() => true),
+}));
 vi.mock('../services/bank.service.js', () => ({ generateAndStore: mocks.generateAndStore }));
+// Only the one question is faked; the rest of the module is real, because
+// seed.service imports it too and a bare stub would break that graph.
+vi.mock('../services/llm.client.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/llm.client.js')>()),
+  needsAnthropicKey: mocks.needsAnthropicKey,
+}));
 
 const TEST_DATA_DIR = mkdtempSync(path.join(tmpdir(), 'codegrind-setup-test-'));
 if (!TEST_DATA_DIR.startsWith(tmpdir())) {
@@ -78,6 +89,7 @@ beforeEach(() => {
   delete process.env.ANTHROPIC_API_KEY;
   db.db.exec(`DELETE FROM settings`);
   mocks.generateAndStore.mockReset();
+  mocks.needsAnthropicKey.mockReturnValue(true);
 });
 
 afterAll(() => {
@@ -93,6 +105,29 @@ suite('GET /api/setup/state', () => {
     expect(s.reason).toBe('no-api-key');
     // Nothing to skip TO: every interesting path needs the provider.
     expect(s.dismissible).toBe(false);
+  });
+
+  // A fully local install has no Anthropic key, wants none, and every API path
+  // works without one. Gating the SPA on a key here would lock a working app
+  // behind a signup it never needs — the precise outcome the provider work
+  // exists to prevent, and invisible from the server side because every route
+  // answers 200 while the browser refuses to leave the wizard.
+  it('does not demand a key when the configured routing needs no key', async () => {
+    mocks.needsAnthropicKey.mockReturnValue(false);
+    bankOne();
+    const s = await state();
+    expect(s.needed).toBe(false);
+    expect(s.reason).toBe(null);
+    // Skippable even with nothing banked: there is no blocker to resolve.
+    expect(s.dismissible).toBe(true);
+  });
+
+  it('sends a keyless local install to the bank, never to the key screen', async () => {
+    mocks.needsAnthropicKey.mockReturnValue(false);
+    const s = await state();
+    expect(s.needed).toBe(true);
+    expect(s.reason).toBe('empty-bank');
+    expect(s.dismissible).toBe(true);
   });
 
   it('needs setup when the key is fine but the bank is empty', async () => {
