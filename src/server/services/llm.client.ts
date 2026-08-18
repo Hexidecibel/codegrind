@@ -68,6 +68,7 @@
 
 import { createAnthropicClient } from './llm.anthropic.js';
 import { createOpenAiClient } from './llm.openai.js';
+import { findLeakedToolCallFraming, LlmToolCallError } from './llm.types.js';
 import type {
   CallRole,
   LlmClient,
@@ -463,9 +464,38 @@ export function clientFor(role: CallRole): LlmClient {
   return client;
 }
 
-/** A forced-tool-use call: the tool's schema IS the response schema. */
-export function structured(req: StructuredRequest): Promise<StructuredResult> {
-  return clientFor(req.role).structured(req);
+/**
+ * A forced-tool-use call: the tool's schema IS the response schema.
+ *
+ * THE GUARD BELONGS HERE, not in either adapter. A tool call that collapsed into
+ * one of its own string fields is a property of the ANSWER, not of the wire
+ * format that carried it — the Anthropic and OpenAI-compatible paths would need
+ * the identical check, and a check written twice is a check that goes out of
+ * step. This is the one place every one of the app's forced-tool calls passes
+ * through, so `emit_problem` gets the same protection `emit_coaching` does
+ * without a single call site knowing about it.
+ *
+ * See findLeakedToolCallFraming for what is detected, why it is a guard rather
+ * than a fix, and why it rejects instead of repairing.
+ */
+export async function structured(req: StructuredRequest): Promise<StructuredResult> {
+  const result = await clientFor(req.role).structured(req);
+  const leak = findLeakedToolCallFraming(result.input, req.tool);
+  if (leak) {
+    // LlmToolCallError, not a plain Error: this is semantically identical to
+    // "the arguments were not valid JSON" — the model answered, the answer is
+    // unusable, and the layer that knows how to vary the prompt is the one that
+    // should decide about a retry. Never retried at the transport layer.
+    throw new LlmToolCallError(
+      `${result.meta.servedModel} called ${req.tool.name}, but the field "${leak.field}" ` +
+        `contains the raw markup of the tool call itself (${leak.marker}) — the model ` +
+        `serialized the fields that should have followed it INTO it, so those fields are ` +
+        `missing. The brief was rejected rather than rendered: it would have shown that ` +
+        `markup to the user with every later field blank.`,
+      result.meta
+    );
+  }
+  return result;
 }
 
 /** A prose call. Exactly one call site in the app uses it: the tutor chat. */

@@ -5,6 +5,7 @@ import type { Problem, Difficulty } from '@/shared/types';
 import { LANGUAGE_META } from '@/shared/languages';
 import { Badge } from '@/client/components/ui/badge';
 import { humanize } from '@/client/lib/format';
+import { unshownExamples } from '@/client/lib/examples';
 import { cn } from '@/lib/utils';
 
 // Same four hues as reflect/chart.DIFFICULTY_COLOR (emerald / amber / rose /
@@ -29,6 +30,14 @@ export function ProblemPanel({
    */
   footer?: ReactNode;
 }) {
+  // The statement and the structured array are two renderings of the same
+  // examples, and problems generated before the prompt forbade it carry both —
+  // which is how the pane came to print "Example 1" twice in two different
+  // styles. Only the ones the statement has NOT already shown are rendered here.
+  // See client/lib/examples.ts for why the de-duplication is per-example and
+  // content-based rather than a prompt fix or a markdown edit.
+  const examples = unshownExamples(problem.prompt, problem.examples);
+
   return (
     <div className="flex h-full flex-col overflow-y-auto">
       <div className="space-y-4 p-6">
@@ -71,12 +80,12 @@ export function ProblemPanel({
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{problem.prompt}</ReactMarkdown>
         </article>
 
-        {problem.examples.length > 0 && (
+        {examples.length > 0 && (
           <section className="space-y-3">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
               Examples
             </h2>
-            {problem.examples.map((ex, i) => (
+            {examples.map((ex, i) => (
               <div
                 key={i}
                 className="rounded-lg border border-border bg-muted/20 p-3 text-sm"
