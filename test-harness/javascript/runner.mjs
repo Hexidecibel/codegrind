@@ -410,6 +410,30 @@ const functionName = spec.functionName;
 const tests = Array.isArray(spec.tests) ? spec.tests : [];
 if (!functionName) fail(PHASE_LOAD, 'runner: tests json missing functionName');
 
+// `functionName` is pasted straight into the `new Function` body below, so it
+// is checked before it can become anything other than an identifier. The server
+// already rejects a bad one (llm.service.validateFunctionName) — this is the
+// same check at the point of interpolation, the way test-harness/go/runner.go
+// carries its own. Not a sandbox boundary: `userCode` on the next line is
+// arbitrary by design and the whole container exists to hold it. This is here
+// so a malformed name fails as ITSELF instead of as an inscrutable SyntaxError
+// blamed on the player's solution.
+const JS_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const JS_RESERVED = new Set([
+  'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
+  'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false',
+  'finally', 'for', 'function', 'if', 'implements', 'import', 'in',
+  'instanceof', 'interface', 'let', 'new', 'null', 'package', 'private',
+  'protected', 'public', 'return', 'static', 'super', 'switch', 'this',
+  'throw', 'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield',
+]);
+if (typeof functionName !== 'string' || !JS_IDENT.test(functionName) || JS_RESERVED.has(functionName)) {
+  fail(
+    PHASE_LOAD,
+    `runner: tests json functionName is not a usable JavaScript identifier: ${JSON.stringify(functionName)}`
+  );
+}
+
 // --- compile -----------------------------------------------------------------
 // `new Function` PARSES the source at construction and only executes it when
 // called, which splits the two failure modes cleanly: a SyntaxError here means

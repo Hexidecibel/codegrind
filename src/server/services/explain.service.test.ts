@@ -63,7 +63,7 @@ suite('nothing was listening', () => {
   it.each([
     'fetch failed',
     'connect ECONNREFUSED 127.0.0.1:9600',
-    'getaddrinfo ENOTFOUND spark.local',
+    'getaddrinfo ENOTFOUND llm.example',
   ])('recognises %s', (raw) => {
     const e = explainError(new Error(raw));
     expect(e.message).toMatch(/could not reach the model endpoint/i);

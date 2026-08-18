@@ -1,7 +1,6 @@
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
-import { cors } from 'hono/cors';
 import './services/db.js'; // create tables on startup (idempotent)
 import { problemsRoutes } from './routes/problems.js';
 import { bankRoutes } from './routes/bank.js';
@@ -18,6 +17,7 @@ import { providerRoutes } from './routes/providers.js';
 import { hydrate as hydrateApiKey } from './services/apikey.service.js';
 import { hydrateProviderConfig } from './services/provider.service.js';
 import { describeRouting, needsAnthropicKey } from './services/llm.client.js';
+import { crossOriginPolicy, readAllowedOrigins, CORS_ORIGINS_ENV } from './cors.js';
 
 // Let the wizard-written `llm.workhorse` / `llm.tutor` rows count towards
 // routing. Must precede the first routing question below. The ENVIRONMENT still
@@ -34,7 +34,12 @@ const bootKey = hydrateApiKey();
 
 const app = new Hono();
 
-app.use('/*', cors());
+// Cross-origin policy. See ./cors.ts for why a loopback bind is not enough on
+// its own and why the default refuses everything — the short version is that
+// `HOST=127.0.0.1` keeps other machines out but every browser on this machine
+// is already inside, and this app has no authentication of its own to stop one.
+const corsOrigins = readAllowedOrigins(process.env[CORS_ORIGINS_ENV]);
+app.use('/*', crossOriginPolicy(corsOrigins));
 app.route('/api', problemsRoutes);
 app.route('/api', bankRoutes);
 app.route('/api', submitRoutes);
@@ -66,6 +71,13 @@ const host = process.env.HOST || '127.0.0.1';
 console.log(`codegrind server running on ${host}:${port}`);
 // Which models answer which calls, and where. Never a credential.
 console.log(`  models: ${describeRouting()}`);
+// Printed only when it is NOT the default. An empty allowlist is the shipped
+// behaviour and needs no announcement; a populated one is a deliberate
+// loosening of the only cross-origin control this app has, and it belongs in
+// the journal of the boot that applied it.
+if (corsOrigins.length) {
+  console.log(`  cross-origin allowlist (${CORS_ORIGINS_ENV}): ${corsOrigins.join(', ')}`);
+}
 // The key's SOURCE, never its value — this line goes to the journal. It is only
 // a problem when something actually routes to Anthropic: a fully local install
 // has no key by design, and reporting that as a fault would be a lie.

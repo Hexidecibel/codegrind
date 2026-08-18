@@ -185,9 +185,10 @@ const ENV_ENDPOINT_KEY = env('CODEGRIND_API_KEY');
  *
  * Configuration rather than cleverness: codegrind cannot know that one id in a
  * router's `/v1/models` is mapped onto a CPU on the same box as the user's media
- * server. The deployment's own systemd unit sets this. See llm.openai.assertNotDenied,
- * and provider.service, which also refuses to OFFER a denied model in the wizard
- * — a list you cannot pick from is a better guard than an error after you did.
+ * server. The deployment's own systemd unit is what sets this. See
+ * llm.openai.assertNotDenied, and provider.service, which also refuses to OFFER
+ * a denied model in the wizard — a list you cannot pick from is a better guard
+ * than an error after you did.
  */
 export const MODEL_DENY: readonly string[] = env('CODEGRIND_MODEL_DENY')
   .split(',')
