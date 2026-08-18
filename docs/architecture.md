@@ -1,7 +1,9 @@
 # Architecture
 
-One Node process. One SQLite file. Docker for execution, Claude for everything that
-needs judgement. No queues, no workers, no second service.
+One Node process. One SQLite file. Docker for execution, and one configured LLM for
+everything that needs judgement — Claude, or any OpenAI-compatible endpoint you run
+yourself; see [Who answers](#who-answers--the-llm-seam). No queues, no workers, no
+second service.
 
 ```
 src/
@@ -132,6 +134,78 @@ identically.
 interpreted, 30s compiled) → `sandbox.service`'s own 45s `execFile` cap. If an outer one
 fired first you would lose the structured partial results and see an opaque kill instead
 of "3 of 8 passed, then this one hung."
+
+---
+
+## Who answers — the LLM seam
+
+Nothing in this app talks to a vendor. `llm.service.ts` — every prompt, every schema,
+all eleven calls — says *what* it wants and *what kind of call* it is, and one file
+turns that into a client:
+
+```
+llm.service.ts     WHAT: "structured, this schema, this budget, role=workhorse"
+  └─ llm.client.ts   WHO:  resolves the role → a configured LlmClient   ← the only
+       ├─ llm.anthropic.ts   the Anthropic SDK                            file that
+       └─ llm.openai.ts      anything speaking /v1/chat/completions       knows
+  llm.types.ts     the contract all three share: LlmClient, ToolSpec, CallRole,
+                   per-provider timeouts, the output-token ceiling
+```
+
+The word "provider" does not appear in `llm.service.ts`, and that is the design, not a
+coincidence: a second implementation was added by adding **one branch to `clientFor`**,
+and no call site changed or could tell. (The counter-example is one directory over in
+soulseek-helper, where an `if` per function went out of step function by function.)
+
+**Three call roles, two routes.** `CallRole` is `workhorse | small | tutor`.
+
+| role | what it is | routed as |
+|---|---|---|
+| `workhorse` | generation, hints, session plans, primers, lessons, coaching | its own configuration |
+| `small` | the cheap structured calls — classification, tagging, short rewrites | **the workhorse's client**, with a tighter timeout |
+| `tutor` | the chat behind `POST /api/ask`, one call per question actually asked | its own configuration |
+
+`small` deliberately has no configuration of its own. It exists so
+`DEFAULT_TIMEOUT_MS` can give a 3-second classification a different budget from a
+30-second generation without inventing a second model to configure;
+`clientFor('small') === clientFor('workhorse')` and there is a test that says so.
+
+**Resolution is two layers, and the environment wins field by field** — not wholesale,
+so a deploy that pins only the model still lets the wizard choose an endpoint. The
+environment is read **once at module load** (a misspelt provider is a boot error, not a
+3am one); the stored layer is two rows in `settings`, `llm.workhorse` and `llm.tutor`,
+written by the wizard and by Settings. `llm.client` does **not** import `db.ts` — it
+would open a SQLite file at import time, and its own test re-imports the module
+seventeen times under different environments. `provider.service.ts` pushes a reader in
+through `useStoredProviderConfig` instead. Until something does, the stored layer is
+simply empty, which is exactly right for a process that never opened a database.
+
+Routing is resolved **lazily and cached**: a request must not be able to re-route a
+running server, but a settings write has to take effect without a restart, so the cache
+is invalidated by `reloadRouting()` and by nothing else.
+
+**The tutor defaults to matching the workhorse — except on Anthropic, where it never
+has.** A local install must stay local: no key, no signup, no spend, so an unconfigured
+tutor inherits the workhorse's provider *and* model. On the Anthropic path the defaults
+are `claude-sonnet-5` for the workhorse and `claude-opus-5` for the tutor, which is a
+deliberate quality choice — but `storeProviderConfig` writes both rows from one
+configuration, so nobody chose it and nothing said so. `roleDefaultModel()` now reports
+each role's default through `GET /api/providers`, the wizard's Ready screen and Settings
+name both models by the job they do, and Settings can pin the coach to the workhorse's
+model (`chatModel` on `PUT /api/providers`; `null` restores the default). An absent
+`chatModel` deliberately leaves an existing pin alone, because ProviderPicker's key form
+posts `{provider:'anthropic'}` on every key save. `client/lib/role-summary.ts` is the
+pure, tested half — including the rule that a local install, where both roles are the
+same self-hosted model, is told about no cost at all.
+
+**There is no failover.** A configured endpoint that is down produces failures naming
+the endpoint and the model. They never silently become Anthropic calls.
+
+`CODEGRIND_MODEL_DENY` is filtered out of the wizard's model list *and* refused at call
+time — a list you cannot pick from is a better guard than an error after you did. The
+ids it holds are facts about one machine's router, so they live in a systemd drop-in and
+never in the repo. Every environment variable is tabulated in
+[operations.md](operations.md#running-on-something-other-than-claude).
 
 ---
 
@@ -288,7 +362,9 @@ during a 15–30s generate and is telling the truth when it does. A failed gener
 Client: `App.tsx` asks `/api/setup/state` on mount, before the router renders. **A failed
 request renders the app** — help that appears when the server is merely unreachable would
 lock a working install behind a form nobody can submit. `SetupWizard.tsx` is four screens
-(key → language → seed → ready); the last one calls `POST /api/session/start` and writes
+(provider → language → seed → ready — a PROVIDER step, not a key step, because an
+install pointed at a local endpoint needs no key and must not open by demanding one);
+the last one calls `POST /api/session/start` and writes
 the same `codegrind.grind` localStorage snapshot GrindPage persists for itself, so you
 land inside a live session rather than at a menu.
 

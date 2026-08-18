@@ -41,6 +41,7 @@
 import {
   MODEL_DENY,
   reloadRouting,
+  roleDefaultModel,
   routingFor,
   useStoredProviderConfig,
   type Routing,
@@ -50,6 +51,7 @@ import {
 import { createOpenAiClient } from './llm.openai.js';
 import { LlmTimeoutError, LlmToolCallError, type ToolSpec } from './llm.types.js';
 import { getSetting, setSetting } from './db.js';
+import { recordProbeEstimate } from './pace.service.js';
 import type {
   CredentialStatus,
   LlmProviderCheck,
@@ -194,10 +196,14 @@ function describeCredential(routing: Routing): CredentialStatus {
   };
 }
 
-function describeRole(routing: Routing): LlmRoleStatus {
+function describeRole(routing: Routing, role: 'workhorse' | 'tutor'): LlmRoleStatus {
   return {
     provider: routing.provider,
     model: routing.model,
+    // Asked for per ROLE, not per provider: the tutor's Anthropic default is a
+    // bigger (and dearer) model than the workhorse's, which is the whole reason
+    // this field exists — see roleDefaultModel in llm.client.
+    defaultModel: roleDefaultModel(role, routing.provider),
     endpoint: routing.endpoint || null,
     source: { ...routing.source },
     credential: describeCredential(routing),
@@ -211,8 +217,8 @@ export function describeProviders(): LlmStatus {
   const pinned = (r: Routing) =>
     r.source.provider === 'env' || r.source.model === 'env' || r.source.endpoint === 'env';
   return {
-    workhorse: describeRole(workhorse),
-    tutor: describeRole(tutor),
+    workhorse: describeRole(workhorse, 'workhorse'),
+    tutor: describeRole(tutor, 'tutor'),
     envLocked: pinned(workhorse) || pinned(tutor),
     deny: [...MODEL_DENY],
     needsAnthropicKey: workhorse.provider === 'anthropic' || tutor.provider === 'anthropic',
@@ -428,6 +434,11 @@ export async function validateOpenAiProvider(input: {
 
   const { latencyMs, usage, servedModel } = result.meta;
   const seconds = estimateProblemSeconds(latencyMs, usage.outputTokens);
+  // Persist it. Until now this number lived for exactly as long as the wizard's
+  // React state, so the rest of the app had nothing to quote and every other
+  // "this takes a while" message was a hardcoded guess. See pace.service.ts —
+  // a real generation overwrites it the moment one happens.
+  recordProbeEstimate(seconds);
   // Two things worth saying and neither is a gate: how long problems will take,
   // and whether a router quietly answered as something else.
   const notes: string[] = [];
@@ -526,6 +537,17 @@ function checkProbeShape(input: Record<string, unknown>): string | null {
 // -----------------------------------------------------------------------------
 
 /**
+ * What to do with the tutor's model when a configuration is stored.
+ *
+ * `undefined` — say nothing, and the existing pin is kept if it still belongs to
+ * this provider. `null` — clear it, so the role falls back to its own default.
+ * A string — pin it.
+ */
+export interface TutorModelChoice {
+  model: string | null;
+}
+
+/**
  * Store a validated configuration for BOTH roles, and make it live.
  *
  * Both roles together, because the tutor defaults to matching the workhorse and
@@ -534,16 +556,51 @@ function checkProbeShape(input: Record<string, unknown>): string | null {
  * be one. Opting the tutor onto Claude stays available through
  * CODEGRIND_CHAT_PROVIDER, where it is deliberate.
  *
+ * THE TUTOR'S MODEL IS THE ONE FIELD THAT MAY DIFFER, and it exists because on
+ * the Anthropic path the two roles have never actually matched: llm.client's
+ * defaults are `claude-sonnet-5` for the workhorse and `claude-opus-5` for the
+ * tutor. That is a deliberate quality choice — the tutor is one call per
+ * question actually asked — but it was invisible, so every "ask the coach"
+ * follow-up quietly ran on the more expensive model. Settings can now pin the
+ * tutor to the workhorse's model instead, and `null` puts the default back.
+ *
+ * An UNSPECIFIED tutor model KEEPS an existing pin, provided the stored tutor
+ * row was written against the same provider AND the incoming configuration
+ * names no model of its own. Without that, re-saving an API key — which posts
+ * `{provider:'anthropic'}` and nothing else — would silently undo somebody's
+ * choice to run the coach on the cheaper model, which is the exact class of
+ * surprise this whole change exists to remove. A local save always names a
+ * model, so there the tutor always follows the one just validated; and switching
+ * provider resets it either way, because a Claude model id is not a local one.
+ *
  * `reloadRouting()` is what makes the change take effect without a restart, and
  * it is the only place the running server's routing may change.
  */
-export function storeProviderConfig(cfg: StoredRoleConfig): LlmStatus {
+export function storeProviderConfig(
+  cfg: StoredRoleConfig,
+  tutor?: TutorModelChoice
+): LlmStatus {
   const row: StoredRoleConfig = { provider: cfg.provider };
   if (cfg.model) row.model = cfg.model;
   if (cfg.endpoint) row.endpoint = cfg.endpoint;
   if (cfg.endpointKey) row.endpointKey = cfg.endpointKey;
+
+  const tutorRow: StoredRoleConfig = { ...row };
+  if (tutor) {
+    if (tutor.model) tutorRow.model = tutor.model;
+    else delete tutorRow.model;
+  } else if (!row.model) {
+    // Only reachable on the Anthropic path — a local configuration always
+    // arrives with a freshly VALIDATED model, and the tutor must follow it or a
+    // model swap on the same endpoint would strand the coach on the old id.
+    const existing = readRole(TUTOR_SETTING);
+    if (existing?.model && (existing.provider ?? 'anthropic') === (cfg.provider ?? 'anthropic')) {
+      tutorRow.model = existing.model;
+    }
+  }
+
   setSetting(WORKHORSE_SETTING, row);
-  setSetting(TUTOR_SETTING, row);
+  setSetting(TUTOR_SETTING, tutorRow);
   hydrateProviderConfig();
   reloadRouting();
   return describeProviders();

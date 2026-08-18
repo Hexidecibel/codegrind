@@ -32,10 +32,19 @@
 // language and key status from GET/PUT /api/settings.
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Cpu, KeyRound, Loader2, ShieldCheck } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Coins,
+  Cpu,
+  KeyRound,
+  Loader2,
+  ShieldCheck,
+} from 'lucide-react';
 import type { ApiKeyStatus, LlmProviderCheck, LlmRoleStatus, LlmStatus } from '@/shared/types';
 import { LANGUAGE_META } from '@/shared/languages';
-import { getProviders, getSettings } from '@/client/lib/api';
+import { getProviders, getSettings, updateProvider } from '@/client/lib/api';
+import { summariseRoles, coachCostSentence, type RoleSummary } from '@/client/lib/role-summary';
 import {
   ProviderPicker,
   EnvPinnedFields,
@@ -45,12 +54,26 @@ import {
 import { LanguagePicker } from '@/client/components/LanguagePicker';
 import { Badge } from '@/client/components/ui/badge';
 import { sourceLabel, roleIsEnvPinned } from '@/client/lib/provider-source';
+import { cn } from '@/lib/utils';
 import type { Language } from '@/shared/languages';
 
 /** What each role actually does, in the terms the user experiences it. */
 const ROLE_BLURB = {
   workhorse: 'Writes every problem, hint, lesson and grade.',
   tutor: 'Answers you in the coach chat.',
+} as const;
+
+/**
+ * The heading, in the same terms.
+ *
+ * "Workhorse" and "tutor" are the words the code uses; nobody arrives at this
+ * page knowing them, and the cost surprise this section exists to prevent is
+ * about WHICH JOB costs what. The internal name stays alongside so the routing
+ * on screen is still greppable against llm.client.ts and the env variables.
+ */
+const ROLE_TITLE = {
+  workhorse: 'Problems',
+  tutor: 'Coach chat',
 } as const;
 
 function Section({
@@ -117,12 +140,24 @@ function Origin({ source }: { source: LlmRoleStatus['source']['model'] }) {
 }
 
 /** How one role is routed right now, field by field, with each field's origin. */
-function RoleCard({ name, role }: { name: 'workhorse' | 'tutor'; role: LlmRoleStatus }) {
+function RoleCard({
+  name,
+  role,
+  children,
+}: {
+  name: 'workhorse' | 'tutor';
+  role: LlmRoleStatus;
+  /** The coach's model control, on the one card that has one. */
+  children?: React.ReactNode;
+}) {
   const pinned = roleIsEnvPinned(role);
   return (
     <div className="rounded-xl border bg-card p-4 shadow">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="font-semibold capitalize">{name}</h3>
+        <h3 className="font-semibold">
+          {ROLE_TITLE[name]}{' '}
+          <span className="text-xs font-normal capitalize text-muted-foreground">({name})</span>
+        </h3>
         <span className="text-xs text-muted-foreground">{ROLE_BLURB[name]}</span>
       </div>
       <div className="mt-2 divide-y divide-border/60">
@@ -159,6 +194,109 @@ function RoleCard({ name, role }: { name: 'workhorse' | 'tutor'; role: LlmRoleSt
             <EnvPinnedSentence /> Change it where the service is configured, not here.
           </span>
         </p>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/**
+ * The coach's model: what it is, what it costs, and the one control that changes it.
+ *
+ * This lives inside the tutor's card because the fact it is correcting is a fact
+ * ABOUT THAT ROLE. Before this, `storeProviderConfig` wrote the same row for both
+ * roles, but llm.client's Anthropic defaults are `claude-sonnet-5` for the
+ * workhorse and `claude-opus-5` for the tutor — so every coach follow-up ran on
+ * the dearer model, chosen by nobody, mentioned nowhere. Opus stays the default
+ * (it is genuinely better at the conversation); it is just no longer a secret.
+ *
+ * NOTHING HERE IS A HARDCODED MODEL ID. Both options come off `GET /api/providers`:
+ * the writer's resolved model, and the role's own `defaultModel`.
+ *
+ * It renders nothing on the local path, where both roles are the same self-hosted
+ * model and the extra cost is zero — a warning that does not apply is how you
+ * teach somebody to ignore the next one.
+ */
+function CoachModelControl({
+  summary,
+  onChange,
+  busy,
+  error,
+}: {
+  summary: RoleSummary;
+  onChange: (model: string | null) => void;
+  busy: boolean;
+  error: string | null;
+}) {
+  const cost = coachCostSentence(summary);
+  if (!cost && !summary.canChooseCoachModel) return null;
+
+  const matched = summary.sameModel;
+  const options: { key: 'default' | 'match'; model: string; label: string; note: string }[] = [
+    {
+      key: 'default',
+      model: summary.coachDefaultModel,
+      label: 'Best answers',
+      note: 'codegrind’s default. The bigger model, and the more expensive one.',
+    },
+    {
+      key: 'match',
+      model: summary.writerModel,
+      label: 'Same as problems',
+      note: 'One model for everything, so the coach costs what the rest of the app does.',
+    },
+  ];
+
+  return (
+    <div className="mt-3 space-y-2 border-t border-border/60 pt-3">
+      {cost && (
+        <p className="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground">
+          <Coins className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{cost}</span>
+        </p>
+      )}
+      {summary.canChooseCoachModel && (
+        <>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {options.map((o) => {
+              const selected = (o.key === 'match') === matched;
+              return (
+                <button
+                  key={o.key}
+                  type="button"
+                  disabled={busy || selected || !o.model}
+                  onClick={() => onChange(o.key === 'match' ? summary.writerModel : null)}
+                  className={cn(
+                    'rounded-lg border bg-background p-3 text-left text-xs transition-colors',
+                    'hover:border-primary/60 hover:bg-accent disabled:hover:bg-background',
+                    selected && 'border-primary/60 bg-accent disabled:opacity-100',
+                    !selected && 'disabled:opacity-50',
+                  )}
+                >
+                  <span className="flex items-center gap-1.5 font-semibold">
+                    {o.label}
+                    {selected && <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />}
+                  </span>
+                  <span className="mt-0.5 block truncate font-mono text-[0.7rem] text-muted-foreground">
+                    {o.model || '—'}
+                  </span>
+                  <span className="mt-1 block leading-relaxed text-muted-foreground">{o.note}</span>
+                </button>
+              );
+            })}
+          </div>
+          {busy && (
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…
+            </p>
+          )}
+          {error && (
+            <p className="flex items-start gap-1.5 text-xs text-destructive-foreground">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{error}</span>
+            </p>
+          )}
+        </>
       )}
     </div>
   );
@@ -224,6 +362,11 @@ export function SettingsPage() {
   // save took. Both are cleared on the next attempt by the picker's own state.
   const [check, setCheck] = useState<LlmProviderCheck | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  // The coach-model control's own in-flight state. Separate from the picker's:
+  // this write neither validates an endpoint nor spends anything, so it must not
+  // borrow the picker's "testing a real tool call" language or its spinner.
+  const [coachBusy, setCoachBusy] = useState(false);
+  const [coachError, setCoachError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const [providers, settings] = await Promise.all([getProviders(), getSettings()]);
@@ -259,6 +402,33 @@ export function SettingsPage() {
       setCheck(next);
       await load();
       setSavedAt(Date.now());
+    },
+    [load],
+  );
+
+  /**
+   * Pin the coach's model, or clear the pin.
+   *
+   * `null` clears it — `PUT /api/providers` distinguishes an ABSENT chatModel
+   * ("leave it alone") from a null one ("back to the default"), which is what
+   * lets re-saving an API key stop wiping this choice. Re-reads afterwards for
+   * the same reason every other save here does: the response says what was
+   * stored, `GET /api/providers` says what the app will actually use.
+   */
+  const chooseCoachModel = useCallback(
+    async (model: string | null) => {
+      setCoachError(null);
+      setCoachBusy(true);
+      try {
+        await updateProvider({ provider: 'anthropic', chatModel: model });
+        await load();
+      } catch (err) {
+        setCoachError(
+          err instanceof Error ? err.message : 'Could not change the coach’s model.',
+        );
+      } finally {
+        setCoachBusy(false);
+      }
     },
     [load],
   );
@@ -301,14 +471,23 @@ export function SettingsPage() {
           title="How you're routed"
           blurb={
             <>
-              What every call actually goes to right now, and where each value came from.
-              Anything your deploy set in the environment wins over anything saved here.
+              Two jobs, routed separately: one model writes your problems, another answers
+              you in the coach chat. This is what each actually goes to right now, and where
+              every value came from — anything your deploy set in the environment wins over
+              anything saved here.
             </>
           }
         >
           <div className="space-y-3">
             <RoleCard name="workhorse" role={llm.workhorse} />
-            <RoleCard name="tutor" role={llm.tutor} />
+            <RoleCard name="tutor" role={llm.tutor}>
+              <CoachModelControl
+                summary={summariseRoles(llm)}
+                onChange={(model) => void chooseCoachModel(model)}
+                busy={coachBusy}
+                error={coachError}
+              />
+            </RoleCard>
             <ApiKeyCard status={apiKey} relevant={llm.needsAnthropicKey} />
           </div>
         </Section>

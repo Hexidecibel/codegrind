@@ -84,6 +84,25 @@ export { NO_API_KEY_MESSAGE } from './llm.anthropic.js';
 const ANTHROPIC_WORKHORSE_DEFAULT = 'claude-sonnet-5';
 const ANTHROPIC_TUTOR_DEFAULT = 'claude-opus-5';
 
+/**
+ * What a role falls back to when nothing is stored and nothing is pinned.
+ *
+ * Exported so the UI can NAME the default it is offering instead of repeating
+ * these two ids in TypeScript. The Settings page shows "the coach runs on X,
+ * which is the bigger model" and offers to pin it to the workhorse's instead;
+ * the moment it is pinned, the default is no longer the resolved value, so
+ * there has to be a way to ask for it that is not a second copy of these
+ * strings going stale.
+ *
+ * Empty string for `openai-compatible`, and that is a real answer rather than a
+ * gap: there is deliberately no default local model, because picking one for
+ * somebody is how a router hands the job to whatever is cheapest to load.
+ */
+export function roleDefaultModel(role: CallRole, provider: ProviderId): string {
+  if (provider !== 'anthropic') return '';
+  return role === 'tutor' ? ANTHROPIC_TUTOR_DEFAULT : ANTHROPIC_WORKHORSE_DEFAULT;
+}
+
 function env(name: string): string {
   return (process.env[name] ?? '').trim();
 }

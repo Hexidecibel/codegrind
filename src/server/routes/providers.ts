@@ -90,7 +90,25 @@ providerRoutes.put('/providers', async (c) => {
         400
       );
     }
-    return c.json({ llm: storeProviderConfig({ provider: 'anthropic' }), check: null });
+    // `chatModel` is the coach's model, and the three states are distinct:
+    // absent leaves whatever is stored alone, `null` clears it back to the
+    // role's default, and a string pins it. `undefined` and `null` mean
+    // different things here, so `in` rather than a truthiness test.
+    let tutor: { model: string | null } | undefined;
+    if (body !== null && typeof body === 'object' && 'chatModel' in body) {
+      const raw = body.chatModel;
+      if (raw === null || (typeof raw === 'string' && !raw.trim())) {
+        tutor = { model: null };
+      } else if (typeof raw === 'string') {
+        tutor = { model: raw.trim() };
+      } else {
+        return c.json(
+          { error: 'chatModel must be a model id, or null to use the default' },
+          400
+        );
+      }
+    }
+    return c.json({ llm: storeProviderConfig({ provider: 'anthropic' }, tutor), check: null });
   }
 
   if (body?.provider !== 'openai-compatible') {
