@@ -66,6 +66,7 @@ import {
 } from '@/client/components/CodeEditor';
 import { EditorSettings } from '@/client/components/EditorSettings';
 import { ResultsPanel, VERDICT_META } from '@/client/components/ResultsPanel';
+import { HelpHint } from '@/client/components/HelpHint';
 import { CoachPanel } from '@/client/components/CoachPanel';
 
 /** localStorage-safe re-derivation of the active level from stored overrides. */
@@ -633,6 +634,10 @@ export function SolveSurface({
     <div className="flex shrink-0 items-center gap-2 border-b border-rose-500/25 bg-rose-500/[0.07] px-4 py-1.5 text-xs text-rose-300/90">
       <Snowflake className="h-3.5 w-3.5 shrink-0 text-rose-400" />
       Cold review — no hints, solve it from scratch.
+      {/* The banner says WHAT is happening; the missing Hint button is the part
+          that reads as a bug rather than a rule, so the hint says why it is
+          gone, what clears the queue, and that Answer is still there. */}
+      <HelpHint id="cold-review" />
     </div>
   );
 

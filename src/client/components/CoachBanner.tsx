@@ -17,10 +17,16 @@ import type {
   SchedulerIntentKind,
 } from '@/shared/types';
 import { Badge } from '@/client/components/ui/badge';
+import { HelpHint } from '@/client/components/HelpHint';
 import { humanize } from '@/client/lib/format';
 import { cn } from '@/lib/utils';
 
-const KIND_META: Record<
+/**
+ * Exported so the Help tab can enumerate the six reasons with the SAME label and
+ * glyph the banner draws. A second list over there would be a second thing to
+ * keep in step, and the one it would drift from is the one people actually see.
+ */
+export const KIND_META: Record<
   SchedulerIntentKind,
   { label: string; className: string; icon: typeof Flame }
 > = {
@@ -125,6 +131,11 @@ export function CoachBanner({
           {humanize(why.topic)}
         </Badge>
         <span className="text-sm text-foreground/90">{why.text}</span>
+        {/* The rationale says why THIS problem; the hint says who decided and
+            on what evidence — which is the question the chip actually raises,
+            and the one whose answer ("arithmetic over your own history, no
+            model") is the reason to believe the rationale at all. */}
+        <HelpHint id="why-this-problem" />
       </div>
 
       {/* Up next peek */}

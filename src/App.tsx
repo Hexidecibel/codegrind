@@ -7,6 +7,7 @@ import { WorkspacePage } from '@/client/pages/WorkspacePage';
 import { ProgressPage } from '@/client/pages/ProgressPage';
 import { StudyPage } from '@/client/pages/StudyPage';
 import { SettingsPage } from '@/client/pages/SettingsPage';
+import { HelpPage } from '@/client/pages/HelpPage';
 import { SetupWizard } from '@/client/components/setup/SetupWizard';
 import { getSetupState } from '@/client/lib/api';
 import type { SetupState } from '@/shared/types';
@@ -78,6 +79,11 @@ function App() {
                 the wizard never renders again, and a model or a key you cannot
                 change from the browser is one you change with curl. */}
             <Route path="/settings" element={<SettingsPage />} />
+            {/* The manual. Deliberately a plain route with no gate and no data
+                fetch of its own: it is the page you send someone to when the
+                app is confusing them, which includes when it is misconfigured
+                and every other page is showing an error. */}
+            <Route path="/help" element={<HelpPage />} />
             {/* Study replaced the pattern library; keep old bookmarks alive. */}
             <Route path="/library" element={<Navigate to="/study" replace />} />
           </Routes>

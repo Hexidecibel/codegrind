@@ -4,6 +4,15 @@
 // Hero numbers. No sparklines, no tooltips, no plot: a tile that needs a hover
 // to be understood is a chart wearing the wrong clothes, and the charts below
 // already do that job. Each tile is a value, a label, and a quiet icon.
+//
+// The `help` slot is NOT a retreat from that rule, and the line is worth being
+// precise about. What is banned is a hover that reveals more DATA — a hidden
+// series, a breakdown, a number the tile should have shown in the first place.
+// What three of these six tiles genuinely need is the opposite: the number is
+// right there and complete, and it is the *definition* that is unguessable.
+// "Tiers cleared: 4" tells you nothing until someone says what a tier is. So the
+// hint explains the word, never the value, and it stays off the three tiles
+// (solved, streak, lessons read) whose labels already mean what they say.
 
 import {
   BookOpen,
@@ -17,6 +26,8 @@ import {
 import type { ReflectTiles } from '@/shared/types';
 import { RAMP, pct } from './chart';
 import { Card } from '@/client/components/ui/card';
+import { HelpHint } from '@/client/components/HelpHint';
+import type { HelpHintId } from '@/client/lib/help-content';
 import { cn } from '@/lib/utils';
 
 function Tile({
@@ -26,6 +37,7 @@ function Tile({
   note,
   colour,
   emphasise,
+  help,
 }: {
   icon: LucideIcon;
   value: string;
@@ -33,6 +45,8 @@ function Tile({
   note?: string;
   colour: string;
   emphasise?: boolean;
+  /** Explains the LABEL, for the tiles whose word is jargon. See the header. */
+  help?: HelpHintId;
 }) {
   return (
     <Card
@@ -44,6 +58,9 @@ function Tile({
       <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <Icon className="h-3.5 w-3.5 shrink-0" style={{ color: colour }} />
         <span className="truncate">{label}</span>
+        {/* After the label and inside its row, so it never costs the value a
+            pixel — the number stays the thing the eye lands on. */}
+        {help && <HelpHint id={help} className="ml-auto" />}
       </span>
       <span className="text-2xl font-bold leading-none tabular-nums text-foreground">
         {value}
@@ -73,6 +90,7 @@ export function StatTiles({ tiles }: { tiles: ReflectTiles }) {
         value={String(tiles.tiersCleared)}
         label="Tiers cleared"
         note="across all topics"
+        help="tiers-cleared"
       />
       <Tile
         icon={Flame}
@@ -86,7 +104,11 @@ export function StatTiles({ tiles }: { tiles: ReflectTiles }) {
         colour={RAMP[2]}
         value={pct(tiles.hintFreeRate)}
         label="Hint-free"
-        note="solves without a nudge"
+        // "solves" was wrong and the hint would have contradicted it: the rate
+        // is over ATTEMPTS (getHintFreeRate counts every row in `attempts`,
+        // solved or not), which is a different and less flattering number.
+        note="submissions without a nudge"
+        help="hint-free"
       />
       <Tile
         icon={BookOpen}
@@ -102,6 +124,7 @@ export function StatTiles({ tiles }: { tiles: ReflectTiles }) {
         label="Review due"
         note={tiles.reviewDue > 0 ? 'waiting on you' : 'nothing overdue'}
         emphasise={tiles.reviewDue > 0}
+        help="review-due"
       />
     </div>
   );
