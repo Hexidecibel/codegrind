@@ -150,6 +150,36 @@ CG_LABEL="codegrind.runner=1"
 # Helpers
 # -----------------------------------------------------------------------------
 
+# Run a built image's OWN conformance gate under the production sandbox flags.
+# `$1` is the language; the image's output is passed through and its exit status
+# is the verdict.
+#
+# The flags are the ones bin/run-submission passes, and that is load-bearing
+# rather than tidy: a gate that ran with privileges the real thing does not have
+# would be proving something else. The Go image's build-cache probe only fails
+# under --read-only + USER nobody, which is the exact combination that produced
+# the 24-hour trim bug (test-harness/go/Dockerfile tells that story).
+#
+# Three callers, one definition: bin/build-runner-image gates what it publishes,
+# and bin/deploy + bin/setup use it to decide whether an image that ALREADY
+# EXISTS is one they are willing to keep. Both of those used to accept any image
+# whose tag was present, which is how a broken Go image survived every redeploy.
+cg_selftest_image() {
+  local lang="$1" cmd
+  read -r -a cmd <<< "${CG_CMD[$lang]}"
+  docker run --rm \
+    --network none \
+    --memory="${CG_MEMORY[$lang]}" \
+    --cpus="${CG_CPUS}" \
+    --pids-limit="${CG_PIDS[$lang]}" \
+    --read-only \
+    --tmpfs "${CG_TMPFS[$lang]}" \
+    --cap-drop=ALL \
+    --security-opt no-new-privileges \
+    --label "${CG_LABEL}" \
+    "${CG_IMAGE[$lang]}" "${cmd[@]}" --selftest
+}
+
 # True if $1 appears in CG_LANGUAGES.
 cg_is_language() {
   local want="$1" l

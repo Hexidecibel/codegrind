@@ -32,11 +32,20 @@
 #                            runs before main and so before any capture could
 #                            have been installed. Go is the only language here
 #                            with that hazard.
+#   8. an OLD image        — the only hazard here that is about the clock. Go
+#                            trims its build cache once every 24h and dies if
+#                            it cannot rewrite $GOCACHE/trim.txt, so the image
+#                            worked for one day and then failed every
+#                            compiling submission; nothing rebuilds an image
+#                            that already exists, so it never recovered. The
+#                            check forces the aged condition rather than
+#                            waiting a day for it.
 #
 # 1 (as a VERDICT) and 7 go through the LIVE API, because the verdict is derived
-# in sandbox.service above the runner and exists nowhere else. Everything else
-# goes through bin/run-submission, because it is a property of the harness
-# rather than of any stored problem.
+# in sandbox.service above the runner and exists nowhere else. 8 goes straight
+# to `docker run`, because what it is testing is the IMAGE. Everything else goes
+# through bin/run-submission, because it is a property of the harness rather
+# than of any stored problem.
 #
 # Read-only with respect to the database: /api/run records nothing. Costs no
 # LLM calls.
@@ -51,6 +60,13 @@ cd "$REPO_DIR" || exit 1
 # shellcheck source=lib/node.sh
 source "$REPO_DIR/bin/lib/node.sh"
 cg_require_node
+
+# Proof 8 runs `docker run` itself rather than through bin/run-submission — it
+# has to inject an aged trim stamp before the driver starts — so it needs the
+# same sandbox facts that script uses. They come from the one table that owns
+# them; only the entrypoint differs.
+# shellcheck source=lib/languages.sh
+source "$REPO_DIR/bin/lib/languages.sh"
 
 if [[ -f "$REPO_DIR/.env" ]]; then
   set -a
@@ -339,10 +355,85 @@ else
   post_run "$TMP/broken.go" 'a Go syntax error' 'compile_error' || FAILURES=$((FAILURES + 1))
 fi
 
+# =============================================================================
+printf '\n== 6. an image more than 24 hours old still compiles\n'
+# =============================================================================
+# THE 24-HOUR BUG. `go build` calls Trim() on its build cache once per
+# trimInterval (24h) and base.Fatalf()s if it cannot rewrite $GOCACHE/trim.txt.
+# The file was baked root-owned into an image that runs as `nobody` under
+# --read-only, so every Go image compiled fine for exactly one day and then
+# answered every COMPILING submission with
+#
+#     go: failed to trim cache: open /gocache/trim.txt: permission denied
+#
+# while submissions with compile ERRORS still passed, because go prints its
+# diagnostics before it dies. bin/deploy and bin/setup only build images that
+# are MISSING, so nothing ever rebuilt the broken one.
+#
+# Testing a FRESHLY BUILT image proves nothing — that is the state the bug hid
+# in for a day. So this forces the aged condition instead of waiting for it: it
+# writes a 2001 timestamp into the trim stamp and then runs a real submission
+# through the real driver with the real sandbox flags. On an image without the
+# fix the write itself is impossible (exit 3); on a fixed one the stamp lives on
+# the tmpfs, go performs the trim it has been putting off, and the submission
+# runs.
+#
+# test-harness/go/Dockerfile carries the full story; the image's own --selftest
+# gate runs the same probe at BUILD time so a broken image cannot be published.
+# This one is about the image already on disk, which is the one that has aged.
+AGED="$TMP/aged"
+mkdir -p "$AGED"
+cat > "$AGED/solution.go" <<'GO'
+package main
+
+func solve(n int) int { return n * 2 }
+GO
+cp "$TMP/one.json" "$AGED/tests.json"
+# Same mode dance bin/run-submission does: `nobody` must traverse the work dir.
+chmod 0711 "$AGED"
+chmod 0644 "$AGED/solution.go" "$AGED/tests.json"
+
+STARTED=$(date +%s%N)
+docker run --rm \
+  --label "${CG_LABEL}" \
+  --network none \
+  --memory="${CG_MEMORY[go]}" \
+  --cpus="${CG_CPUS}" \
+  --pids-limit="${CG_PIDS[go]}" \
+  --read-only \
+  --tmpfs "${CG_TMPFS[go]}" \
+  --cap-drop=ALL \
+  --security-opt no-new-privileges \
+  -v "${AGED}:/work:ro" \
+  "${CG_IMAGE[go]}" \
+  sh -c 'printf %s 1000000000 > /gocache/trim.txt || exit 3
+         exec /app/cgrun /work/solution.go /work/tests.json' \
+  > "$TMP/aged.out" 2> "$TMP/aged.err"
+AGED_EXIT=$?
+AGED_MS=$(( ($(date +%s%N) - STARTED) / 1000000 ))
+
+if [[ $AGED_EXIT -eq 3 ]]; then
+  fail "the trim stamp is not writable inside the sandbox — this image is the 24-hour bug"
+  printf '       rebuild it: bin/build-runner-image go\n'
+elif [[ $AGED_EXIT -ne 0 ]]; then
+  fail "an aged image exited $AGED_EXIT: $(head -c 300 "$TMP/aged.err")"
+else
+  MS="$AGED_MS" node -e '
+    const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    if (r.passed === 1 && r.total === 1) {
+      console.log(`  ok   a submission compiled and passed with a 24h-stale trim stamp ` +
+        `(${process.env.MS}ms end to end, container included)`);
+      process.exit(0);
+    }
+    console.log(`  FAIL aged image: ${JSON.stringify(r).slice(0, 300)}`);
+    process.exit(1);
+  ' "$TMP/aged.out" || FAILURES=$((FAILURES + 1))
+fi
+
 printf '\n'
 if [[ $FAILURES -gt 0 ]]; then
   printf 'FAIL — %d Go proof(s) failed.\n' "$FAILURES"
   exit 1
 fi
-printf 'PASS — diagnostics, deep recursion, arity, tolerance, nil slices and stdout all behaved.\n'
+printf 'PASS — diagnostics, deep recursion, arity, tolerance, nil slices, stdout and an aged image all behaved.\n'
 exit 0
