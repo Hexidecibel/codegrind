@@ -5,8 +5,13 @@
 #   bin/build-runner-image javascript      # just one
 #   bin/build-runner-image --no-selftest   # build without the gate (debugging only)
 #
-# Idempotent — re-run after editing a runner. hexi is in the docker group; no
-# sudo needed.
+# Idempotent — re-run after editing a runner.
+#
+# THE INVOKING USER MUST REACH THE DOCKER DAEMON WITHOUT SUDO. `docker build`
+# and the `docker run` selftest below are issued as-is; bin/setup and bin/deploy
+# both call this script non-interactively, so a sudo password prompt would stall
+# a first-run install with no indication of what it was waiting for. bin/setup's
+# preflight checks `docker info` for exactly this and prints the usermod line.
 #
 # THE BUILD CONTEXT IS `test-harness/`, ONE LEVEL ABOVE EACH LANGUAGE. Docker
 # forbids `COPY ../…`, and every language's runner has to bake in the SAME
@@ -31,7 +36,7 @@ LANGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-selftest) SELFTEST=0; shift ;;
-    -h|--help)     sed -n '2,10p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,8p' "$0"; exit 0 ;;
     -*)            echo "unknown flag: $1" >&2; exit 2 ;;
     *)             cg_require_language "$1"; LANGS+=("$1"); shift ;;
   esac

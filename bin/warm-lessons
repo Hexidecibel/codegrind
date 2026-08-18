@@ -23,7 +23,10 @@ source "$REPO/bin/lib/node.sh"
 cg_require_node
 
 # The service gets its env from systemd's EnvironmentFile; a CLI run has to load
-# it itself (ANTHROPIC_API_KEY, DATA_DIR). bin/inject materializes this file.
+# it itself (PORT, HOST, DATA_DIR, and ANTHROPIC_API_KEY if you keep one there).
+# bin/setup writes this file; on the author's box cush-tools' bin/inject
+# rewrites it. Absent is fine — a wizard-configured install keeps its key and
+# its provider rows in the database, and the .ts entrypoint hydrates both.
 if [[ -f "$REPO/.env" ]]; then
   set -a
   # shellcheck disable=SC1091

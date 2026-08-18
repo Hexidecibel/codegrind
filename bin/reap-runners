@@ -25,6 +25,8 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/languages.sh
 source "${REPO_DIR}/bin/lib/languages.sh"
+# shellcheck source=lib/scratch.sh
+source "${REPO_DIR}/bin/lib/scratch.sh"
 
 MAX_AGE=300        # 10x the 30s java cap — nothing legitimate lives this long
 DRY_RUN=0
@@ -44,7 +46,11 @@ done
 # lives under DATA_DIR so the host-path indirection can survive
 # containerization. Nothing sweeps DATA_DIR. Same trap, same failure, same
 # script — so the same age rule cleans both.
-SCRATCH_DIR="${CG_SCRATCH_DIR:-${DATA_DIR:-${REPO_DIR}/data}/tmp}"
+#
+# Resolved through bin/lib/scratch.sh so this sweeps the directory the writers
+# actually write to. It used to carry its own copy of the expression, which was
+# fine until a third copy (the server's) disagreed with it.
+SCRATCH_DIR="$(cg_scratch_dir "${REPO_DIR}/data")"
 
 now="$(date +%s)"
 reaped=0

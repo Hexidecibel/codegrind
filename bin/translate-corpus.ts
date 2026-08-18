@@ -15,6 +15,9 @@ import { LANGUAGES, isLanguage, type Language } from '../src/shared/languages.js
 import { getCorpusSnippets, getTranslatedSourceIds, getActiveLanguage } from '../src/server/services/db.js';
 import { CORPUS_LANGUAGE } from '../src/server/services/llm.language.js';
 import { ensureTranslations } from '../src/server/services/study.service.js';
+import { hydrate, isConfigured } from '../src/server/services/apikey.service.js';
+import { hydrateProviderConfig } from '../src/server/services/provider.service.js';
+import { describeRouting, needsAnthropicKey } from '../src/server/services/llm.client.js';
 
 // ---------------------------------------------------------------------------
 // Args
@@ -101,8 +104,25 @@ async function main(): Promise<void> {
     );
     return;
   }
-  if (!args.dryRun && !process.env.ANTHROPIC_API_KEY) {
-    console.error('ANTHROPIC_API_KEY not set — provision it via bin/inject.');
+  // Which model answers, as the app has it configured, before anything asks
+  // whether a key is needed. Reading the environment alone would send a fully
+  // local install's ~18 batched translation calls to Anthropic instead of to
+  // the endpoint it was set up with. The environment still wins field by field,
+  // so a systemd deploy is unaffected.
+  hydrateProviderConfig();
+  // A key stored by the first-run wizard lives in the settings table, not in
+  // .env. hydrate() publishes it into the environment for the SDK, and does
+  // nothing at all when the environment already has one.
+  hydrate();
+  // Only when a role actually routes to Anthropic. A fully local install (see
+  // CODEGRIND_PROVIDER) has no key, needs none, and must not be turned away —
+  // this check used to read process.env directly, which refused BOTH a keyless
+  // local install and a perfectly good wizard-configured one.
+  if (!args.dryRun && needsAnthropicKey() && !isConfigured()) {
+    console.error(
+      'No Anthropic API key is configured. Set ANTHROPIC_API_KEY, or start the app\n' +
+        '(bin/setup) and paste one into the setup screen.'
+    );
     process.exit(1);
   }
 
@@ -112,6 +132,7 @@ async function main(): Promise<void> {
       (args.limit === Infinity ? '' : `, stopping after ${args.limit} that need work`) +
       (args.dryRun ? ' — DRY RUN, no API calls, no writes' : '')
   );
+  console.log(`Routing: ${describeRouting()}`);
 
   const have = getTranslatedSourceIds(args.language);
   let calls = 0;
