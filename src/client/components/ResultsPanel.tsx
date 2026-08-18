@@ -1,5 +1,10 @@
-import { CheckCircle2, XCircle, Clock, AlertTriangle, Ban } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, AlertTriangle, Ban, EyeOff } from 'lucide-react';
 import type { RunResult, TestResult, Verdict } from '@/shared/types';
+import {
+  expectedDisplay,
+  suiteFor,
+  type SuiteKind,
+} from '@/client/lib/test-visibility';
 import { cn } from '@/lib/utils';
 
 /**
@@ -52,7 +57,8 @@ export const VERDICT_META: Record<
   },
 };
 
-function TestRow({ t }: { t: TestResult }) {
+function TestRow({ t, suite }: { t: TestResult; suite: SuiteKind }) {
+  const expected = expectedDisplay(suite, t.expected);
   return (
     <div
       className={cn(
@@ -78,11 +84,25 @@ function TestRow({ t }: { t: TestResult }) {
 
       {!t.passed && (
         <div className="mt-2 space-y-1.5 pl-6 font-mono text-xs">
-          {t.expected !== undefined && (
+          {expected.kind === 'value' && (
             <div className="flex gap-2">
               <span className="shrink-0 text-muted-foreground">expected</span>
               <span className="whitespace-pre-wrap break-all text-emerald-300/90">
-                {t.expected}
+                {expected.text}
+              </span>
+            </div>
+          )}
+          {/* Deliberately withheld, and said so. An omitted row reads as a bug
+              in the app; this reads as a rule, which is what it is. */}
+          {expected.kind === 'hidden' && (
+            <div className="flex items-center gap-2">
+              <span className="shrink-0 text-muted-foreground">expected</span>
+              <span
+                title="Hidden tests keep their answers — that is what makes the submit a real check."
+                className="inline-flex items-center gap-1 rounded border border-border bg-muted/40 px-1.5 py-0.5 text-[11px] font-sans not-italic text-muted-foreground"
+              >
+                <EyeOff aria-hidden className="h-3 w-3" />
+                hidden
               </span>
             </div>
           )}
@@ -114,6 +134,9 @@ export function ResultsPanel({
 }) {
   const meta = VERDICT_META[result.verdict];
   const Icon = meta.icon;
+  // Run = the sample suite (published in the statement, safe to show in full);
+  // Submit = the hidden suite, whose expected values stay withheld.
+  const suite = suiteFor(mode);
 
   return (
     <div className="space-y-3">
@@ -134,7 +157,7 @@ export function ResultsPanel({
 
       <div className="space-y-2">
         {result.results.map((t, i) => (
-          <TestRow key={i} t={t} />
+          <TestRow key={i} t={t} suite={suite} />
         ))}
       </div>
     </div>

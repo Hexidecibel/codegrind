@@ -8,6 +8,7 @@ import {
 } from '../../shared/types.js';
 import { generateAndStore, getNextProblem, getProblem } from '../services/bank.service.js';
 import { getActiveLanguage } from '../services/db.js';
+import { errorBody } from '../services/explain.service.js';
 
 export const problemsRoutes = new Hono();
 
@@ -35,9 +36,11 @@ problemsRoutes.post('/problems/generate', async (c) => {
     const record = await generateAndStore(getActiveLanguage(), body.topic, body.difficulty);
     return c.json(toPlayerProblem(record));
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[problems/generate]', message);
-    return c.json({ error: message }, 500);
+    // Explained, not echoed: a cold generation that fails does so with an
+    // internal sentence about canonicalization, max_tokens or raw docker
+    // output, and this route is the one a player is staring at when it happens.
+    // Full detail still reaches the journal and rides along as `detail`.
+    return c.json(errorBody('problems/generate', err), 500);
   }
 });
 
@@ -55,9 +58,11 @@ problemsRoutes.get('/problems/next', async (c) => {
     const record = await getNextProblem(getActiveLanguage(), topic, difficulty);
     return c.json(toPlayerProblem(record));
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[problems/next]', message);
-    return c.json({ error: message }, 500);
+    // Explained, not echoed: a cold generation that fails does so with an
+    // internal sentence about canonicalization, max_tokens or raw docker
+    // output, and this route is the one a player is staring at when it happens.
+    // Full detail still reaches the journal and rides along as `detail`.
+    return c.json(errorBody('problems/next', err), 500);
   }
 });
 

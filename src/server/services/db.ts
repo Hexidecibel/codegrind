@@ -399,6 +399,36 @@ export function servableBankTotal(language: Language): number {
   return (countServableTotalStmt.get(language) as { n: number }).n;
 }
 
+const servableSlotsStmt = db.prepare(`
+  SELECT topic, difficulty, COUNT(*) AS n FROM problems
+  WHERE language = ? AND used = 0 AND canonicalized = 1
+  GROUP BY topic, difficulty
+`);
+
+/**
+ * Every slot this language can serve from right now, with its count.
+ *
+ * The same predicate as `servableBankSize` again, grouped instead of filtered —
+ * one query rather than the 72 (18 topics x 4 difficulties) a caller would
+ * otherwise issue to ask "which slot is stocked?". The answer drives /manual's
+ * opening topic: seeding only fills `easy` x the four ROOT_TOPICS, so a page
+ * that opens on any other slot pays a cold generation on a brand-new install.
+ */
+export function servableSlots(
+  language: Language
+): Array<{ topic: Topic; difficulty: Difficulty; servable: number }> {
+  const rows = servableSlotsStmt.all(language) as Array<{
+    topic: string;
+    difficulty: string;
+    n: number;
+  }>;
+  return rows.map((r) => ({
+    topic: r.topic as Topic,
+    difficulty: r.difficulty as Difficulty,
+    servable: r.n,
+  }));
+}
+
 // -----------------------------------------------------------------------------
 // Attempts
 // -----------------------------------------------------------------------------

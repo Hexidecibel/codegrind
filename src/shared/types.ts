@@ -572,16 +572,37 @@ export interface SubmitRequest {
   prediction?: Prediction;
 }
 
-export interface SubmitResponse {
-  result: SubmitResult;
-  coaching: CoachingBrief;
-  /**
-   * The reference solution, returned ONLY once the submission was accepted —
-   * you earned it by solving it. Absent on every unsolved submit, which is
-   * what keeps `toPlayerProblem` stripping it meaningful.
-   */
-  referenceSolution?: string;
-}
+/**
+ * One line of the NDJSON stream from POST /api/submit.
+ *
+ * WHY THIS IS A STREAM AND NOT ONE JSON BODY. The hidden tests finish in a
+ * couple of seconds; the coaching call after them is `role: 'workhorse'`,
+ * `maxTokens: 8000`, `thinking: 'adaptive'`, with a budget of 180s on Anthropic
+ * and 300s on a local endpoint (DEFAULT_TIMEOUT_MS). Holding the verdict — which
+ * is already computed and sitting in a variable — behind a multi-minute essay is
+ * the single longest unexplained wait in the app.
+ *
+ * The shape is copied deliberately from POST /api/setup/seed, for the same
+ * reason it was chosen there: a POST that spends money cannot use EventSource,
+ * and NDJSON needs no reconnection semantics — when the socket dies the run is
+ * over, which is exactly true.
+ *
+ * ORDER IS GUARANTEED: `result` is always written first and always exactly once;
+ * `coaching` follows it and also exactly once (a coaching failure degrades to a
+ * stub brief rather than being omitted, so the client never waits forever).
+ */
+export type SubmitEvent =
+  | {
+      type: 'result';
+      result: SubmitResult;
+      /**
+       * The reference solution, returned ONLY once the submission was accepted —
+       * you earned it by solving it. Absent on every unsolved submit, which is
+       * what keeps `toPlayerProblem` stripping it meaningful.
+       */
+      referenceSolution?: string;
+    }
+  | { type: 'coaching'; coaching: CoachingBrief };
 
 /** POST /api/reveal — "show me the answer", at the cost of the clean-solve credit. */
 export interface RevealRequest {
@@ -754,6 +775,16 @@ export interface CredentialStatus {
 export interface LlmRoleStatus {
   provider: LlmProviderId;
   model: string;
+  /**
+   * What this role would use with nothing stored and nothing pinned.
+   *
+   * Reported rather than assumed by the client, because the two Anthropic roles
+   * do NOT share a default — the workhorse is `claude-sonnet-5` and the tutor is
+   * `claude-opus-5` — and a UI that offered to "restore the default" would
+   * otherwise have to keep its own copy of those ids. Empty string on the local
+   * path, where there deliberately is no default model.
+   */
+  defaultModel: string;
   /** Only meaningful for `openai-compatible`. Userinfo is stripped before storing. */
   endpoint: string | null;
   source: {
@@ -826,6 +857,18 @@ export interface LlmConfigRequest {
   model?: string;
   /** Write-only. Omit for the usual keyless LAN endpoint. */
   endpointKey?: string;
+  /**
+   * The **tutor's** model, when it should not be the role's own default.
+   *
+   * Anthropic only, and it exists because the two roles have never matched
+   * there: `llm.client` defaults the workhorse to `claude-sonnet-5` and the
+   * tutor to `claude-opus-5`, so every coach follow-up ran on the pricier model
+   * with nothing on screen saying so. Send the workhorse's model id to pin them
+   * together, `null` to go back to the default, and omit it to leave whatever is
+   * stored alone. Ignored on the local path, where both roles are the same model
+   * and there is no bill either way.
+   */
+  chatModel?: string | null;
 }
 
 /** Response for PUT /api/providers. */
@@ -947,3 +990,46 @@ export type SeedEvent =
       bankSize: number;
       dryRun: boolean;
     };
+
+// -----------------------------------------------------------------------------
+// Bank status — what can be served right now, and what a miss will cost
+// -----------------------------------------------------------------------------
+/** One topic+difficulty slot and how many problems it can hand out this second. */
+export interface BankSlot {
+  topic: Topic;
+  difficulty: Difficulty;
+  /** Unused AND canonicalized — the same predicate `findUnusedProblem` uses. */
+  servable: number;
+}
+
+/**
+ * GET /api/bank — "what would happen if I asked for a problem right now?"
+ *
+ * Two questions, one round trip, because both callers ask them together:
+ *
+ *   1. WHICH SLOT IS STOCKED. Seeding fills `easy` × the four ROOT_TOPICS and
+ *      nothing else, while /manual used to default to `two-pointer`/`easy` — a
+ *      slot that is empty by construction on every fresh install. So a brand-new
+ *      user's very first click on Manual paid a full cold generation under the
+ *      words "Loading problem…". `suggested` is the fix, and it is a QUERY rather
+ *      than a second hardcoded topic so it stays right as the bank changes.
+ *   2. HOW LONG A MISS TAKES. `generationSeconds` is measured, never guessed —
+ *      see pace.service.ts.
+ */
+export interface BankStatus {
+  language: Language;
+  /** Across every slot. 0 means every request is a cold generation. */
+  servableTotal: number;
+  /** Only the slots that can serve something; an empty bank sends `[]`. */
+  slots: BankSlot[];
+  /** The best slot to open on, or null when nothing is banked at all. */
+  suggested: { topic: Topic; difficulty: Difficulty } | null;
+  /** Seconds one generation takes on this install, or null if never measured. */
+  generationSeconds: number | null;
+  /**
+   * Where that number came from. `measured` is this install's own generations,
+   * `probe` is the provider check the setup wizard already ran, and `null` means
+   * there is no measurement and the UI must not pretend otherwise.
+   */
+  generationSource: 'measured' | 'probe' | null;
+}

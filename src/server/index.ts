@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import './services/db.js'; // create tables on startup (idempotent)
 import { problemsRoutes } from './routes/problems.js';
+import { bankRoutes } from './routes/bank.js';
 import { submitRoutes } from './routes/submit.js';
 import { hintsRoutes } from './routes/hints.js';
 import { progressRoutes } from './routes/progress.js';
@@ -35,6 +36,7 @@ const app = new Hono();
 
 app.use('/*', cors());
 app.route('/api', problemsRoutes);
+app.route('/api', bankRoutes);
 app.route('/api', submitRoutes);
 app.route('/api', hintsRoutes);
 app.route('/api', progressRoutes);

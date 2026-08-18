@@ -22,6 +22,7 @@ import { TIER_REQUIREMENT, WEAK_SCORE, tierProgress } from '../services/curricul
 import { planSession, type SessionSnapshotTopic } from '../services/llm.service.js';
 import { nextIntent, peekUpNext, type SchedulerIntent } from '../services/scheduler.service.js';
 import { getAdaptiveProblem } from '../services/bank.service.js';
+import { errorBody } from '../services/explain.service.js';
 
 export const sessionRoutes = new Hono();
 
@@ -104,9 +105,11 @@ sessionRoutes.post('/session/start', async (c) => {
     };
     return c.json(payload);
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[session/start]', message);
-    return c.json({ error: message }, 500);
+    // Explained, not echoed: a cold generation that fails does so with an
+    // internal sentence about canonicalization, max_tokens or raw docker
+    // output, and this route is the one a player is staring at when it happens.
+    // Full detail still reaches the journal and rides along as `detail`.
+    return c.json(errorBody('session/start', err), 500);
   }
 });
 
@@ -138,9 +141,11 @@ sessionRoutes.post('/session/:id/next', async (c) => {
     };
     return c.json(payload);
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[session/next]', message);
-    return c.json({ error: message }, 500);
+    // Explained, not echoed: a cold generation that fails does so with an
+    // internal sentence about canonicalization, max_tokens or raw docker
+    // output, and this route is the one a player is staring at when it happens.
+    // Full detail still reaches the journal and rides along as `detail`.
+    return c.json(errorBody('session/next', err), 500);
   }
 });
 

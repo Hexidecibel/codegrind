@@ -4,6 +4,7 @@ import type { Language } from '../../shared/languages.js';
 import { generateProblem, type GeneratedProblem, type GenerateProblemOpts } from './llm.service.js';
 import type { SchedulerIntent } from './scheduler.service.js';
 import { runTests } from './sandbox.service.js';
+import { recordGeneration } from './pace.service.js';
 import {
   insertProblem,
   findUnusedProblem,
@@ -106,6 +107,7 @@ export async function generateAndStore(
   difficulty: Difficulty,
   opts?: GenerateProblemOpts
 ): Promise<ProblemRecord> {
+  const startedAt = Date.now();
   let gen: GeneratedProblem | null = null;
   let lastRaw: GeneratedProblem | null = null;
   // Only true when every stored `expected` came out of a real sandbox run of
@@ -186,6 +188,12 @@ export async function generateAndStore(
 
   const record = toRecord(language, topic, difficulty, gen, canonicalized);
   insertProblem(record);
+  // What this actually cost in wall-clock, folded into the running estimate the
+  // UI quotes. THIS call — retries, canonicalization runs and all — is what a
+  // player waits through when a slot is empty, so it is the honest sample; the
+  // provider probe's single-shot estimate is only the fallback for an install
+  // that has never generated anything. See pace.service.ts.
+  recordGeneration(Date.now() - startedAt);
   return record;
 }
 

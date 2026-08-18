@@ -23,12 +23,26 @@ export function EditorSettings({
   settings,
   onChange,
   size = 'sm',
+  planGate,
+  onPlanGateChange,
   iconOnly = false,
 }: {
   settings: AssistanceSettings;
   onChange: (next: AssistanceSettings) => void;
   /** Trigger size — phones pass 'touch' for a 44px target. */
   size?: 'sm' | 'touch';
+  /**
+   * The predict-before-solve gate's persisted preference, when the host has one.
+   *
+   * It lives HERE because this popover is the app's one place for local,
+   * per-browser practice preferences (it already owns the assistance ladder),
+   * and because it is the only control present in both the desktop toolbar and
+   * the phone action bar — so the "Don't ask again" button inside the gate has
+   * somewhere to point that exists on every layout. Omit both props and the row
+   * is not rendered at all.
+   */
+  planGate?: boolean;
+  onPlanGateChange?: (next: boolean) => void;
   /**
    * Compact trigger for the phone action bar: just the sliders glyph plus a
    * tiny level marker, so Run/Submit get the width. The current preset stays
@@ -114,6 +128,23 @@ export function EditorSettings({
               ? 'Custom — individual overrides applied.'
               : LEVEL_META[level].blurb}
           </p>
+
+          {planGate !== undefined && onPlanGateChange && (
+            <label className="flex cursor-pointer items-start justify-between gap-3 border-t border-border py-2 pt-3 text-sm">
+              <span>
+                Plan before solving
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Predict your approach and complexity before the editor opens.
+                  Takes effect on the next problem.
+                </span>
+              </span>
+              <Switch
+                checked={planGate}
+                onCheckedChange={onPlanGateChange}
+                className="mt-0.5 shrink-0"
+              />
+            </label>
+          )}
 
           {/* Individual override toggles */}
           <div className="space-y-2.5 border-t border-border pt-3">
