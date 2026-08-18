@@ -41,6 +41,7 @@ import { dayLabel, pct } from '@/client/components/reflect/chart';
 import { humanize, mistakeLabel, shortDate } from '@/client/lib/format';
 import { reflectEmptiness } from '@/client/lib/reflect-empty';
 import { Card } from '@/client/components/ui/card';
+import { HelpHint } from '@/client/components/HelpHint';
 
 export function ProgressPage() {
   const [data, setData] = useState<ReflectResponse | null>(null);
@@ -146,6 +147,11 @@ export function ProgressPage() {
         <Section
           title="Skill tree"
           description="Each topic opens once a prerequisite completes its easy tier — 3 distinct problems solved with no hints."
+          // The description states the rule; the hint says what a tier is and
+          // which topics need no prerequisite at all. `aside` is the slot the
+          // Section already reserves for exactly this — a control that belongs
+          // to the heading rather than to the chart.
+          aside={<HelpHint id="skill-tree" align="end" />}
           table={
             <DataTable
               head={[
@@ -210,6 +216,10 @@ export function ProgressPage() {
         <Section
           title="Tier ladder"
           description="Each quarter of a bar is one completed tier. The marker is the easy tier, which is what opens a topic's dependents."
+          // Where "mastery" is actually drawn, so this is where the word gets
+          // explained — including the part the bar cannot show, that nothing in
+          // the app gates on the percentage.
+          aside={<HelpHint id="mastery" align="end" />}
           table={
             <DataTable head={['Topic', 'Tier', 'To next tier', 'Progress', 'Solved', 'Attempts']}>
               {[...tree]

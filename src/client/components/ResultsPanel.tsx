@@ -5,6 +5,7 @@ import {
   suiteFor,
   type SuiteKind,
 } from '@/client/lib/test-visibility';
+import { HelpHint } from '@/client/components/HelpHint';
 import { cn } from '@/lib/utils';
 
 /**
@@ -149,6 +150,12 @@ export function ResultsPanel({
         <div className="flex items-center gap-2">
           <Icon className="h-5 w-5" />
           <span className="font-semibold">{meta.label}</span>
+          {/* Six verdicts, three of which ("Compile Error", "Execution Error",
+              "Time Limit Exceeded") are only distinguishable if you know the
+              app draws a distinction. The hint carries the whole set rather
+              than this one, because the useful fact is what the OTHER five
+              would have meant. */}
+          <HelpHint id="verdict" />
         </div>
         <span className="text-sm font-medium">
           {result.passed}/{result.total} {mode === 'run' ? 'sample' : 'hidden'} tests

@@ -6,6 +6,7 @@ import {
 } from '@/client/components/ui/popover';
 import { Button } from '@/client/components/ui/button';
 import { Switch } from '@/client/components/ui/switch';
+import { HelpHint } from '@/client/components/HelpHint';
 import {
   LEVEL_META,
   OVERRIDE_META,
@@ -97,7 +98,17 @@ export function EditorSettings({
       <PopoverContent align="end" className="w-80">
         <div className="space-y-4">
           <div className="space-y-1">
-            <p className="text-sm font-semibold">Editor assistance</p>
+            {/* The hint lives INSIDE this popover rather than beside the
+                trigger, for two reasons: the trigger is in a toolbar that
+                collapses to a single icon on a phone and has no pixels to
+                spare, and this line is the only place the control introduces
+                itself. What the blurb cannot say in one line is WHY a dial
+                exists at all — that interview conditions run the whole range —
+                and that is what the hint carries. */}
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-semibold">Editor assistance</p>
+              <HelpHint id="assistance-level" className="ml-auto" align="end" />
+            </div>
             <p className="text-xs text-muted-foreground">
               Practice anywhere from a blank whiteboard to a full IDE.
             </p>
