@@ -81,14 +81,29 @@ export function summariseRoles(llm: LlmStatus): RoleSummary {
 }
 
 /**
+ * Where the sentence is being shown. The facts are identical in both places;
+ * only the closing pointer differs, because "change it in Settings" is useful
+ * on the wizard's Ready screen and absurd on the Settings page itself, where
+ * the control sits directly beneath the sentence.
+ */
+export type RoleSummaryContext = 'wizard' | 'settings';
+
+/**
  * One sentence naming both models by the job they do.
  *
  * Built here rather than in JSX so the wizard's Ready screen and the Settings
  * page cannot drift into saying two different things about the same routing.
  * Returns null when there is nothing worth a sentence — one model doing both
  * jobs is the unremarkable case and does not need narrating.
+ *
+ * `where` varies ONLY the trailing call to action. Keeping the facts in one
+ * place is the whole point of this function, so the split is deliberately as
+ * small as it can be.
  */
-export function coachCostSentence(s: RoleSummary): string | null {
+export function coachCostSentence(
+  s: RoleSummary,
+  where: RoleSummaryContext = 'wizard',
+): string | null {
   if (!s.coachCostsExtra) return null;
   // Two genuinely different situations, and one sentence cannot serve both. When
   // the problems are written locally, the coach is not "bigger" — it is the only
@@ -97,12 +112,16 @@ export function coachCostSentence(s: RoleSummary): string | null {
     return (
       `Coach chat runs on ${s.coachModel} at Anthropic, while your problems are written ` +
       `on your own hardware by ${s.writerModel}. The coach is the only part of this ` +
-      `install that costs money. Change it in Settings.`
+      `install that costs money.` + (where === 'wizard' ? ` Change it in Settings.` : ``)
     );
   }
+  const pointer =
+    where === 'wizard'
+      ? ` — but you can point it at ${s.writerModel} in Settings.`
+      : ` — but you can point it at ${s.writerModel} below.`;
   return (
     `Coach chat runs on ${s.coachModel}, a larger and more expensive model than the ` +
     `${s.writerModel} writing your problems. That is on purpose — it is one call per ` +
-    `question you actually ask — but you can point it at ${s.writerModel} in Settings.`
+    `question you actually ask` + pointer
   );
 }

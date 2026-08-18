@@ -162,3 +162,36 @@ describe('the mixed install: local problems, Claude coach', () => {
     expect(summariseRoles(mixed()).canChooseCoachModel).toBe(false);
   });
 });
+
+describe('where the sentence is shown', () => {
+  // The sentence is shared between the wizard's Ready screen and the Settings
+  // page precisely so the two cannot drift. That sharing leaked a wizard-only
+  // call to action onto Settings, where it told the reader to go to Settings
+  // while they were already looking at the control it names.
+  it('points the wizard reader at Settings and the Settings reader downward', () => {
+    const s = summariseRoles(CLAUDE());
+    expect(coachCostSentence(s, 'wizard')).toMatch(/in Settings\.$/);
+
+    const onSettings = coachCostSentence(s, 'settings')!;
+    expect(onSettings).not.toMatch(/Settings/);
+    expect(onSettings).toMatch(/below\.$/);
+    // Only the pointer may differ: the facts either side of it stay identical.
+    expect(onSettings).toContain('opus-ish');
+    expect(onSettings).toContain('sonnet-ish');
+    expect(onSettings).toMatch(/expensive/);
+  });
+
+  it('drops the pointer from the local-writer sentence too', () => {
+    const localWriter = () => {
+      const llm = LOCAL();
+      return { ...llm, tutor: role({ model: 'opus-ish', defaultModel: 'opus-ish' }) };
+    };
+    const s = summariseRoles(localWriter());
+    expect(s.coachCostsExtra).toBe(true);
+    expect(coachCostSentence(s, 'wizard')).toMatch(/Change it in Settings\.$/);
+
+    const onSettings = coachCostSentence(s, 'settings')!;
+    expect(onSettings).not.toMatch(/Settings/);
+    expect(onSettings).toMatch(/costs money\.$/);
+  });
+});
