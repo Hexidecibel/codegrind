@@ -22,6 +22,9 @@ import {
   generateLessonBody,
 } from '../src/server/services/llm.service.js';
 import { primerToLesson } from '../src/server/services/study.service.js';
+import { hydrate, isConfigured } from '../src/server/services/apikey.service.js';
+import { hydrateProviderConfig } from '../src/server/services/provider.service.js';
+import { describeRouting, needsAnthropicKey } from '../src/server/services/llm.client.js';
 // This script WRITES the shared corpus, so every read below asks for the
 // corpus language rather than the active one — an overlay read here would
 // derive lesson 0 from a translated skeleton and store it as the original.
@@ -202,12 +205,32 @@ async function warmTopic(topic: Topic, args: Args): Promise<void> {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
+  // Which model answers, as the app has it configured, before anything asks
+  // whether a key is needed. Reading the environment alone would send a fully
+  // local install's warm run to Anthropic — at the default --lessons 3 that is
+  // 18 primers, 18 outlines and 54 lesson bodies billed against a key the user
+  // only ever pasted to prove they had one.
+  // The environment still wins field by field, so a systemd deploy is unaffected.
+  hydrateProviderConfig();
+  // A key stored by the first-run wizard lives in the settings table, not in
+  // .env. hydrate() publishes it into the environment for the SDK, and does
+  // nothing at all when the environment already has one.
+  hydrate();
+
   console.log(
     `Warming ${args.topics.length} track(s), ${args.lessons} lesson(s) each` +
       (args.dryRun ? ' — DRY RUN, no API calls, no writes' : '')
   );
-  if (!args.dryRun && !process.env.ANTHROPIC_API_KEY) {
-    console.error('ANTHROPIC_API_KEY not set — provision it via bin/inject.');
+  console.log(`Routing: ${describeRouting()}`);
+  // Only when a role actually routes to Anthropic. A fully local install (see
+  // CODEGRIND_PROVIDER) has no key, needs none, and must not be turned away —
+  // this check used to read process.env directly, which refused BOTH a keyless
+  // local install and a perfectly good wizard-configured one.
+  if (!args.dryRun && needsAnthropicKey() && !isConfigured()) {
+    console.error(
+      'No Anthropic API key is configured. Set ANTHROPIC_API_KEY, or start the app\n' +
+        '(bin/setup) and paste one into the setup screen.'
+    );
     process.exit(1);
   }
 

@@ -141,16 +141,21 @@ ok "docker $(docker version -f '{{.Server.Version}}' 2>/dev/null || echo '(versi
 # =============================================================================
 # 3. Disk
 # =============================================================================
-# The three sandbox images are ~1.2 GB together (Go's toolchain is most of it),
-# plus layer scratch during the build. Running out mid-build leaves a half-built
-# image and an error about a tar stream, which explains nothing.
+# The three sandbox images are ~654 MB together, measured with `docker images`:
+# go 308 MB (the toolchain plus the 42 MB baked build cache), javascript 227 MB,
+# python 119 MB. The thresholds below are deliberately several times that: the
+# build needs layer scratch and an unpacked context on top of the finished
+# images, and running out mid-build leaves a half-built image and an error about
+# a tar stream, which explains nothing. Do not "correct" 3072/6144 down to the
+# image total — they are the headroom, not the size.
 DOCKER_ROOT="$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)"
 DISK_TARGET="${DOCKER_ROOT}"
 [ -d "${DISK_TARGET}" ] || DISK_TARGET="/"
 FREE_MB="$(df -Pm "${DISK_TARGET}" 2>/dev/null | awk 'NR==2 {print $4}')"
 if [ -n "${FREE_MB}" ] && [ "${FREE_MB}" -lt 3072 ]; then
   die "only ${FREE_MB} MB free on ${DISK_TARGET}" \
-    "The three sandbox images need about 3 GB, plus scratch space while they build." \
+    "The three sandbox images are about 650 MB, but the build needs several times" \
+    "that in layer scratch and unpacked context before it collapses to that." \
     "Free some space (docker system prune -a reclaims unused images) and re-run."
 fi
 if [ -n "${FREE_MB}" ] && [ "${FREE_MB}" -lt 6144 ]; then

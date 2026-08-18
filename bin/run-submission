@@ -16,12 +16,20 @@
 # on timeout/failure this script still exits 0-or-nonzero with whatever the
 # container produced — the Node caller (sandbox.service.ts) handles both.
 #
-# hexi IS in the docker group, so `docker run` needs no sudo.
+# THE INVOKING USER MUST REACH THE DOCKER DAEMON WITHOUT SUDO. Nothing here
+# prefixes `sudo`, and nothing can: the normal caller is sandbox.service.ts,
+# which spawns this script from the server process with no TTY, so a password
+# prompt has no one to answer it — the submission would hang until the outer
+# 45s timeout and report as a sandbox failure. Add the account the server runs
+# as to the `docker` group (bin/setup checks this and says so) rather than
+# wrapping the call.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/languages.sh
 source "${REPO_DIR}/bin/lib/languages.sh"
+# shellcheck source=lib/scratch.sh
+source "${REPO_DIR}/bin/lib/scratch.sh"
 
 LANGUAGE="${1:?usage: run-submission <language> <solution-file> <tests.json>}"
 SOLUTION_SRC="${2:?usage: run-submission <language> <solution-file> <tests.json>}"
@@ -53,7 +61,12 @@ read -r -a RUN_CMD <<< "${CG_CMD[$LANGUAGE]}"
 #
 # With this in place, containerizing is two environment variables and a shared
 # volume.
-CG_SCRATCH_DIR="${CG_SCRATCH_DIR:-${DATA_DIR:-${REPO_DIR}/data}/tmp}"
+#
+# The CG_SCRATCH_DIR rule itself is bin/lib/scratch.sh, because bin/reap-runners
+# and sandbox.service.ts have to land on the SAME directory or the reaper sweeps
+# a place nobody writes to. CG_HOST_SCRATCH_DIR stays here: it is meaningless to
+# anything that does not invoke docker.
+CG_SCRATCH_DIR="$(cg_scratch_dir "${REPO_DIR}/data")"
 CG_HOST_SCRATCH_DIR="${CG_HOST_SCRATCH_DIR:-${CG_SCRATCH_DIR}}"   # identical today
 
 mkdir -p "${CG_SCRATCH_DIR}"

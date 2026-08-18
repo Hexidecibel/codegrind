@@ -37,8 +37,11 @@ COPY conformance/ /app/conformance/
 # GOCACHE=/gocache is the load-bearing one. Go 1.20 stopped shipping the
 # standard library as prebuilt archives, so a cold `go build` of a program that
 # imports encoding/json + reflect + os/exec compiles the whole dependency
-# closure: ~3s, against ~0.1s warm. The cache built by the RUN below is 38MB and
-# ships inside the image.
+# closure: ~3s, against ~0.1s warm. The cache built by the RUN below is 42MB
+# (42 230 429 bytes, 655 files — `du -sb /gocache` inside the built image) and
+# ships inside the image. The same 42MB is what the read-only discussion below
+# is about; if you change the Go version or the harness's imports, re-measure
+# and update BOTH places.
 #
 # IT STAYS READ-ONLY AT RUN TIME, AND THAT IS TRUE OF EXACTLY ONE HALF OF WHAT
 # GO DOES TO ITS CACHE.

@@ -13,8 +13,35 @@ const execFileAsync = promisify(execFile);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
 const RUN_SCRIPT = path.join(REPO_ROOT, 'bin', 'run-submission');
-const DATA_DIR = process.env.DATA_DIR || './data';
-const SCRATCH_DIR = path.resolve(DATA_DIR, 'tmp');
+/**
+ * Where per-run scratch lives — the SAME rule bin/run-submission and
+ * bin/reap-runners apply, and the reason this function is exported and takes an
+ * env rather than being three lines inlined below.
+ *
+ * The staging files written here (`<id>.solution.<ext>`, `<id>.tests.json`) are
+ * removed in a `finally`, but a SIGKILLed server leaves them behind — which is
+ * precisely what bin/reap-runners' age sweep exists to clean up. That sweep
+ * resolves CG_SCRATCH_DIR; this used to ignore it and hardcode DATA_DIR/tmp. On
+ * the author's box the two are the same path and nothing was ever wrong. On a
+ * box that sets CG_SCRATCH_DIR they are not, and every orphaned staging file
+ * lands outside the only thing that would ever delete it — a leak that is
+ * invisible until somebody's DATA_DIR fills up.
+ *
+ * `||` and not `??`: an exported-but-empty CG_SCRATCH_DIR must fall through,
+ * matching `${CG_SCRATCH_DIR:-…}` in bin/lib/scratch.sh. The two definitions are
+ * pinned to each other by scratch.test.ts, which runs the shell one.
+ *
+ * The DATA_DIR fallback stays cwd-relative (`./data`) rather than anchoring on
+ * REPO_ROOT, because that is what db.ts does and the database and the scratch
+ * dir must not disagree about which `data/` they mean. bin/start and the systemd
+ * unit both export an absolute DATA_DIR, so the shell side's REPO_DIR anchor and
+ * this one only differ in a case neither ever runs in.
+ */
+export function resolveScratchDir(env: NodeJS.ProcessEnv = process.env): string {
+  return path.resolve(env.CG_SCRATCH_DIR || path.join(env.DATA_DIR || './data', 'tmp'));
+}
+
+const SCRATCH_DIR = resolveScratchDir();
 
 interface HarnessOutput {
   results?: Array<{
