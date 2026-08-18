@@ -8,8 +8,9 @@ import {
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
+  Sparkles,
 } from 'lucide-react';
-import type { SubmitResponse, Topic, Primer } from '@/shared/types';
+import type { SubmitResult, Topic, Primer } from '@/shared/types';
 import {
   startSession,
   nextInSession,
@@ -17,7 +18,9 @@ import {
   getProgress,
   getPrimer,
   getSettings,
+  getBankStatus,
 } from '@/client/lib/api';
+import { describeWait } from '@/client/lib/wait-copy';
 import { useLocalStorage } from '@/client/hooks/useLocalStorage';
 import { staleForLanguage, type GrindSnapshot } from '@/client/lib/grind-snapshot';
 import { useControlSize, useIsDesktop } from '@/client/hooks/useMediaQuery';
@@ -45,6 +48,14 @@ export function GrindPage() {
   const [reviewDue, setReviewDue] = useState(0);
   const [primer, setPrimer] = useState<Primer | null>(null);
   const [primerLoading, setPrimerLoading] = useState(false);
+  /**
+   * How long one generation takes on this install, measured — see
+   * pace.service.ts. Null means nothing has ever been measured, and the wait
+   * copy says so in shape rather than inventing a number.
+   */
+  const [generationSeconds, setGenerationSeconds] = useState<number | null>(null);
+  /** Milliseconds the in-flight "Next problem" request has been running. */
+  const [waitMs, setWaitMs] = useState(0);
   const validated = useRef(false);
   const isDesktop = useIsDesktop();
   const controlSize = useControlSize();
@@ -62,6 +73,39 @@ export function GrindPage() {
   useEffect(() => {
     void refreshReviewDue();
   }, [refreshReviewDue]);
+
+  // Free (three indexed counts, no LLM), and re-read after every advance because
+  // a generation that just happened updates the estimate.
+  const refreshPace = useCallback(async () => {
+    try {
+      const status = await getBankStatus();
+      setGenerationSeconds(status.generationSeconds);
+    } catch {
+      /* non-critical — the wait copy falls back to its shape-only wording */
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshPace();
+  }, [refreshPace]);
+
+  /**
+   * Tick while a "Next problem" request is in flight.
+   *
+   * This clock is what distinguishes the two things the button used to render
+   * identically: a banked problem comes back in tens of milliseconds, and a
+   * generated one never comes back in under ten seconds. See wait-copy.ts for
+   * why elapsed time is the honest signal here rather than a server-side peek.
+   */
+  useEffect(() => {
+    if (!advancing) {
+      setWaitMs(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const id = setInterval(() => setWaitMs(Date.now() - startedAt), 250);
+    return () => clearInterval(id);
+  }, [advancing]);
 
   // Fetch a pattern primer whenever the scheduler fires a fresh new-pattern intent.
   const whyKind = snapshot?.why.kind;
@@ -179,12 +223,15 @@ export function GrindPage() {
       setError(err instanceof Error ? err.message : 'Failed to load next problem');
     } finally {
       setAdvancing(false);
+      void refreshPace();
     }
-  }, [snapshot, advancing, setSnapshot]);
+  }, [snapshot, advancing, setSnapshot, refreshPace]);
 
+  // Fires with the VERDICT, which now arrives minutes before the coaching does.
+  // Only the counters this page owns belong here.
   const onSubmitted = useCallback(
-    (res: SubmitResponse) => {
-      const accepted = res.result.verdict === 'accepted';
+    (result: SubmitResult) => {
+      const accepted = result.verdict === 'accepted';
       setSnapshot((prev) =>
         prev
           ? {
@@ -194,10 +241,16 @@ export function GrindPage() {
             }
           : prev,
       );
-      void refreshReviewDue();
     },
-    [setSnapshot, refreshReviewDue],
+    [setSnapshot],
   );
+
+  // The review count is SERVER-derived and the review-queue move happens after
+  // the coaching call, so refreshing it on the verdict would read the count from
+  // before this submit. It waits for the stream to end instead.
+  const onSubmitRecorded = useCallback(() => {
+    void refreshReviewDue();
+  }, [refreshReviewDue]);
 
   // ---- Resuming a persisted session (brief liveness check) ------------------
   if (snapshot && resuming) {
@@ -249,30 +302,53 @@ export function GrindPage() {
       </div>
     );
 
+    // The scheduler ALWAYS generates fresh for variation / level-up /
+    // new-pattern intents, so roughly half of these clicks are a model writing a
+    // whole problem — 15-30s on Claude, 95s+ on a local model, up to 3x that
+    // when canonicalization retries. "Loading next…" covered both that and a
+    // 50ms database read.
+    const wait = describeWait({
+      intent: 'bank-first',
+      elapsedMs: waitMs,
+      estimateSeconds: generationSeconds,
+      subject: 'next problem',
+    });
+
     const footer = (
-      <div className="flex items-center gap-3">
-        {error && (
-          <span className="flex items-center gap-1.5 text-xs text-destructive-foreground">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            {error}
-          </span>
+      <div className="space-y-1.5">
+        {advancing && wait.note && (
+          <p
+            aria-live="polite"
+            className="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground"
+          >
+            <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+            {wait.note}
+          </p>
         )}
-        <Button
-          onClick={next}
-          disabled={advancing}
-          className="ml-auto gap-1.5"
-          size={controlSize}
-        >
-          {advancing ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading next…
-            </>
-          ) : (
-            <>
-              Next problem <ArrowRight className="h-4 w-4" />
-            </>
+        <div className="flex items-center gap-3">
+          {error && (
+            <span className="flex items-center gap-1.5 text-xs text-destructive-foreground">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              {error}
+            </span>
           )}
-        </Button>
+          <Button
+            onClick={next}
+            disabled={advancing}
+            className="ml-auto gap-1.5"
+            size={controlSize}
+          >
+            {advancing ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" /> {wait.label}
+              </>
+            ) : (
+              <>
+                Next problem <ArrowRight className="h-4 w-4" />
+              </>
+            )}
+          </Button>
+        </div>
       </div>
     );
 
@@ -309,6 +385,7 @@ export function GrindPage() {
         toolbarExtrasKind="context"
         footer={footer}
         onSubmitted={onSubmitted}
+        onSubmitRecorded={onSubmitRecorded}
       />
     );
   }

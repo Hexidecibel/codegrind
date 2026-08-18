@@ -20,6 +20,7 @@ import {
   FileText,
   Code2,
   ChevronRight,
+  EyeOff,
   IndentIncrease,
   IndentDecrease,
   BookOpen,
@@ -30,7 +31,6 @@ import type {
   Problem,
   RunResult,
   SubmitResult,
-  SubmitResponse,
   CoachingBrief,
   Hint,
   ChatTurn,
@@ -38,6 +38,7 @@ import type {
   TestResult,
 } from '@/shared/types';
 import {
+  ApiError,
   runCode,
   submitCode,
   getHint,
@@ -84,8 +85,24 @@ export interface SolveSurfaceProps {
   toolbarExtrasKind?: 'controls' | 'context';
   /** Rendered full-width above the problem/editor columns (e.g. the coach banner). */
   banner?: ReactNode;
-  /** Fired after every submit (accepted or not) so hosts can update session state. */
-  onSubmitted?: (res: SubmitResponse) => void;
+  /**
+   * Fired as soon as the hidden tests finish (accepted or not) so hosts can
+   * update session state. It carries the RESULT rather than the whole submit
+   * response because it now fires before the coaching exists — the point of the
+   * split is that nothing waits on that call.
+   */
+  onSubmitted?: (result: SubmitResult) => void;
+  /**
+   * Fired when the submit stream ENDS, i.e. once the server has finished
+   * writing the attempt, the skill bump and the review-queue move.
+   *
+   * Separate from `onSubmitted` because those two moments are now minutes apart:
+   * the verdict arrives with the tests, but the attempt row is written after the
+   * coaching call (it stores the brief's mistakeTags). Anything reading
+   * server-side derived state — the "N due for review" pill — has to wait for
+   * this one or it reads the count from before the submit.
+   */
+  onSubmitRecorded?: () => void;
   /** Rendered as a sticky bar at the bottom of the workspace column (e.g. Next). */
   footer?: ReactNode;
   /**
@@ -117,6 +134,7 @@ export function SolveSurface({
   toolbarExtrasKind = 'controls',
   banner,
   onSubmitted,
+  onSubmitRecorded,
   footer,
   reviewMode = false,
 }: SolveSurfaceProps) {
@@ -143,6 +161,18 @@ export function SolveSurface({
   const [runResult, setRunResult] = useState<RunResult | null>(null);
   const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null);
   const [coaching, setCoaching] = useState<CoachingBrief | null>(null);
+  /**
+   * Where the coaching half of a submit has got to.
+   *
+   * Its own state because it is now its own arrival: `pending` is a labelled
+   * placeholder inside the results pane (never a whole-screen spinner — the
+   * verdict is already on screen and must stay readable), and `lost` covers the
+   * stream ending without a coaching line at all, which would otherwise leave a
+   * spinner turning forever.
+   */
+  const [coachPhase, setCoachPhase] = useState<
+    'idle' | 'pending' | 'done' | 'lost'
+  >('idle');
   const [running, setRunning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -161,12 +191,42 @@ export function SolveSurface({
   // it. Nobody should give up a clean solve to a mis-tap next to Hint.
   const [confirmReveal, setConfirmReveal] = useState(false);
 
-  const [error, setError] = useState<string | null>(null);
+  // `detail` is the server's raw internal message, kept behind a disclosure —
+  // see explain.service.ts: the sentence is for reading, the detail is for
+  // debugging, and deleting the second to get the first was never the deal.
+  const [error, setError] = useState<{
+    message: string;
+    detail?: string;
+  } | null>(null);
+  const showError = useCallback((err: unknown, fallback: string) => {
+    if (err instanceof ApiError) {
+      setError({ message: err.message, detail: err.detail });
+    } else {
+      setError({ message: err instanceof Error ? err.message : fallback });
+    }
+  }, []);
   // Phone only: the results pane collapses to its summary strip.
   const [resultsOpen, setResultsOpen] = useState(true);
 
   // Predict-before-solve (retrieval loop): a low-friction gate over the editor.
-  const [predictOpen, setPredictOpen] = useState(true);
+  //
+  // Whether it opens AT ALL is a persisted local preference, following the same
+  // convention as the assistance ladder (`codegrind.assistance`) and study's dim
+  // mode (`codegrind.study.dim`). It used to open on every single problem with
+  // only "Start solving" and "Skip" — a modal over the editor with no way to
+  // stop it. Turning it off is reversible from the Assist popover, because a
+  // preference you cannot undo is worse than the nag it removed.
+  const [planGate, setPlanGate] = useLocalStorage<boolean>(
+    'codegrind.predict.gate',
+    true,
+  );
+  const [predictOpen, setPredictOpen] = useState(planGate);
+  // Read through a ref inside the problem-change effect: putting `planGate` in
+  // that effect's deps would make flipping the preference re-run it, and it
+  // resets `code` to the starter — one toggle would silently delete whatever
+  // you had typed.
+  const planGateRef = useRef(planGate);
+  planGateRef.current = planGate;
   const [prediction, setPrediction] = useState<Prediction>(emptyPrediction);
   const [submittedPrediction, setSubmittedPrediction] =
     useState<Prediction | null>(null);
@@ -206,7 +266,8 @@ export function SolveSurface({
     setAnswer(null);
     setConfirmReveal(false);
     setError(null);
-    setPredictOpen(true);
+    setCoachPhase('idle');
+    setPredictOpen(planGateRef.current);
     setPrediction(emptyPrediction());
     setSubmittedPrediction(null);
     setResultsOpen(true);
@@ -255,12 +316,25 @@ export function SolveSurface({
       const r = await runCode(problem.id, code);
       setRunResult(r);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Run failed');
+      showError(err, 'Run failed');
     } finally {
       setRunning(false);
     }
-  }, [problem.id, code, running, isDesktop]);
+  }, [problem.id, code, running, isDesktop, showError]);
 
+  /**
+   * Submit, and render each half the moment it lands.
+   *
+   * The response is an NDJSON stream: `result` as soon as the hidden tests
+   * finish, `coaching` whenever the model is done. Awaiting the whole thing —
+   * which is what this used to do — meant the verdict sat on the server for the
+   * length of an 8000-token adaptive-thinking call (180s budget on Anthropic,
+   * 300s on a local endpoint) behind one static line of copy.
+   *
+   * `submitting` stays true for the WHOLE stream on purpose: the attempt row is
+   * written server-side after coaching, so a second submit fired in the gap
+   * would record two attempts for one solve.
+   */
   const submit = useCallback(async () => {
     if (submitting) return;
     if (!isDesktop) (document.activeElement as HTMLElement | null)?.blur();
@@ -268,26 +342,43 @@ export function SolveSurface({
     setResultsOpen(true);
     setSubmitting(true);
     setRunResult(null);
+    setSubmitResult(null);
+    setCoaching(null);
+    setCoachPhase('pending');
     try {
-      const res = await submitCode(
+      await submitCode(
         problem.id,
         code,
         hints.length,
         submittedPrediction ?? undefined,
+        (event) => {
+          if (event.type === 'result') {
+            setSubmitResult(event.result);
+            // Solved it — the server hands back the reference solution with the
+            // verdict. No need to ask, and no assistance recorded: it was earned.
+            if (event.referenceSolution) {
+              const earned = event.referenceSolution;
+              setAnswer((prev) => prev ?? { code: earned, how: 'earned' });
+              setConfirmReveal(false);
+            }
+            // Fires here rather than at the end of the stream: the host's
+            // counters describe the verdict, and the verdict is in.
+            onSubmitted?.(event.result);
+          } else {
+            setCoaching(event.coaching);
+            setCoachPhase('done');
+          }
+        },
       );
-      setSubmitResult(res.result);
-      setCoaching(res.coaching);
-      // Solved it — the server hands back the reference solution with the
-      // verdict. No need to ask, and no assistance recorded: it was earned.
-      if (res.referenceSolution) {
-        setAnswer((prev) => prev ?? { code: res.referenceSolution!, how: 'earned' });
-        setConfirmReveal(false);
-      }
-      onSubmitted?.(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Submit failed');
+      showError(err, 'Submit failed');
+      setCoachPhase('idle');
     } finally {
       setSubmitting(false);
+      // The stream ended without a coaching line (a dropped socket, a server
+      // restart mid-call). Say so rather than spinning forever.
+      setCoachPhase((phase) => (phase === 'pending' ? 'lost' : phase));
+      onSubmitRecorded?.();
     }
   }, [
     problem.id,
@@ -295,8 +386,10 @@ export function SolveSurface({
     hints.length,
     submitting,
     onSubmitted,
+    onSubmitRecorded,
     submittedPrediction,
     isDesktop,
+    showError,
   ]);
 
   const requestHint = useCallback(async () => {
@@ -311,11 +404,11 @@ export function SolveSurface({
       const h = await getHint(problem.id, code, level);
       setHints((prev) => [...prev, h]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Hint failed');
+      showError(err, 'Hint failed');
     } finally {
       setHintLoading(false);
     }
-  }, [problem.id, code, hints.length, hintLoading, isDesktop]);
+  }, [problem.id, code, hints.length, hintLoading, isDesktop, showError]);
 
   const reveal = useCallback(async () => {
     if (answerLoading || answer) return;
@@ -333,11 +426,11 @@ export function SolveSurface({
       setAnswer({ code: res.referenceSolution, how: 'revealed' });
       setConfirmReveal(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Reveal failed');
+      showError(err, 'Reveal failed');
     } finally {
       setAnswerLoading(false);
     }
-  }, [problem.id, answer, answerLoading, confirmReveal, isDesktop]);
+  }, [problem.id, answer, answerLoading, confirmReveal, isDesktop, showError]);
 
   // Keyboard shortcuts baked into the editor's keymap — stable identities so a
   // re-render never re-registers them (refs avoid stale closures).
@@ -347,7 +440,13 @@ export function SolveSurface({
   const editorSubmit = useCallback(() => handlers.current.submit(), []);
 
   const hasResults =
-    !!runResult || !!submitResult || hints.length > 0 || !!coaching || !!answer;
+    !!runResult ||
+    !!submitResult ||
+    hints.length > 0 ||
+    !!coaching ||
+    coachPhase === 'pending' ||
+    coachPhase === 'lost' ||
+    !!answer;
   const canAsk = hasResults; // surface the coach chat once there's something to discuss
   // Whichever suite ran most recently (submit clears run and vice versa) — the
   // tutor needs the actual failures to answer "why did mine fail?".
@@ -359,7 +458,10 @@ export function SolveSurface({
    * word, test counts — legible even collapsed. Announced politely as a unit.
    */
   const strip = (() => {
-    if (submitting)
+    // Only while the VERDICT is unknown. Once the tests are back the strip shows
+    // them, even though `submitting` stays true through the coaching call — the
+    // whole point of the split is that the verdict stops waiting on the essay.
+    if (submitting && !submitResult)
       return {
         Icon: Loader2,
         spin: true,
@@ -376,7 +478,10 @@ export function SolveSurface({
         iconClass: meta.textClass,
         label: meta.label,
         labelClass: meta.textClass,
-        detail: `${submitResult.passed}/${submitResult.total} hidden`,
+        detail:
+          coachPhase === 'pending'
+            ? `${submitResult.passed}/${submitResult.total} hidden · coaching…`
+            : `${submitResult.passed}/${submitResult.total} hidden`,
       };
     }
     if (runResult) {
@@ -515,6 +620,8 @@ export function SolveSurface({
         settings={assistance}
         onChange={setAssistance}
         size={controlSize}
+        planGate={planGate}
+        onPlanGateChange={setPlanGate}
       />
       {hintButton()}
       {answerButton()}
@@ -530,17 +637,31 @@ export function SolveSurface({
   );
 
   const errorBar = error && (
-    <div className="flex shrink-0 items-start gap-2 border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive-foreground">
-      <span className="flex-1">{error}</span>
-      <button
-        onClick={() => setError(null)}
-        aria-label="Dismiss error"
-        // Negative margin keeps the 16px glyph looking the same while giving it
-        // a 32px hit area.
-        className="-m-2 shrink-0 p-2 opacity-70 hover:opacity-100"
-      >
-        <X className="h-4 w-4" />
-      </button>
+    <div className="shrink-0 border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive-foreground">
+      <div className="flex items-start gap-2">
+        <span className="flex-1">{error.message}</span>
+        <button
+          onClick={() => setError(null)}
+          aria-label="Dismiss error"
+          // Negative margin keeps the 16px glyph looking the same while giving it
+          // a 32px hit area.
+          className="-m-2 shrink-0 p-2 opacity-70 hover:opacity-100"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      {/* Secondary, never deleted: the sentence above says what to do, this says
+          exactly what happened for whoever is fixing their own install. */}
+      {error.detail && (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-xs opacity-70 hover:opacity-100">
+            Technical detail
+          </summary>
+          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-black/30 p-2 text-[11px] leading-relaxed">
+            {error.detail}
+          </pre>
+        </details>
+      )}
     </div>
   );
 
@@ -575,6 +696,10 @@ export function SolveSurface({
           onChange={setPrediction}
           onStart={startSolving}
           onSkip={skipPredict}
+          onNeverAsk={() => {
+            setPlanGate(false);
+            skipPredict();
+          }}
           controlSize={controlSize}
         />
       )}
@@ -610,7 +735,32 @@ export function SolveSurface({
       {submitting && !submitResult && (
         <div className="flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          Running hidden tests and coaching your solution…
+          Running the hidden tests…
+        </div>
+      )}
+
+      {/* Scoped to the coaching section, not the screen: the verdict above is
+          already final and readable while this fills in. */}
+      {coachPhase === 'pending' && submitResult && (
+        <div className="flex items-start gap-2 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm">
+          <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-primary" />
+          <div>
+            <span className="font-semibold text-foreground">
+              Coach is reading your solution…
+            </span>
+            <p className="mt-0.5 text-muted-foreground">
+              Your results are above — this part takes a while, and you can start
+              reading them now.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {coachPhase === 'lost' && !coaching && (
+        <div className="rounded-xl border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+          The coaching brief never arrived — your attempt was still recorded and
+          the results above are final. Ask the coach below if you want to talk it
+          through.
         </div>
       )}
 
@@ -866,6 +1016,8 @@ export function SolveSurface({
           settings={assistance}
           onChange={setAssistance}
           size={controlSize}
+          planGate={planGate}
+          onPlanGateChange={setPlanGate}
           iconOnly
         />
         {hintButton(true)}
@@ -1056,12 +1208,15 @@ function PlanPanel({
   onChange,
   onStart,
   onSkip,
+  onNeverAsk,
   controlSize,
 }: {
   prediction: Prediction;
   onChange: (p: Prediction) => void;
   onStart: () => void;
   onSkip: () => void;
+  /** Skip this one AND stop opening the gate; reversible from Assist. */
+  onNeverAsk: () => void;
   controlSize: 'sm' | 'touch';
 }) {
   const touch = controlSize === 'touch';
@@ -1175,6 +1330,19 @@ function PlanPanel({
             Skip
           </Button>
         </div>
+
+        {/* The way out. Not a Button: "never show this again" is a decision, and
+            giving it the same weight as "Start solving" invites the mis-tap that
+            costs the feature. Says where to get it back in the same breath —
+            an opt-out you cannot reverse is worse than the prompt it removed. */}
+        <button
+          type="button"
+          onClick={onNeverAsk}
+          className="flex min-h-11 w-full items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <EyeOff className="h-3.5 w-3.5" />
+          Don&rsquo;t ask again — turn it back on under Assist
+        </button>
       </div>
     </div>
   );

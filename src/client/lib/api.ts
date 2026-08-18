@@ -5,7 +5,7 @@
 import type {
   Problem,
   RunResult,
-  SubmitResponse,
+  SubmitEvent,
   Hint,
   HintLevel,
   ProgressStats,
@@ -28,6 +28,7 @@ import type {
   SettingsResponse,
   SetupState,
   SeedEvent,
+  BankStatus,
   LlmStatus,
   LlmModelsResponse,
   LlmConfigRequest,
@@ -44,18 +45,81 @@ export interface SessionState {
   lastTopic: Topic | null;
 }
 
+/**
+ * A failed request, carrying the server's optional technical detail.
+ *
+ * The routes explain themselves now (see server/services/explain.service.ts):
+ * `error` is one plain sentence naming the next action, and `detail` is the raw
+ * internal message it was derived from. Keeping both is the point — the UI shows
+ * the sentence and tucks the detail behind a disclosure, so nobody has to read
+ * raw docker output to learn that the fix is `bin/build-runner-image`, and
+ * nobody debugging their own homelab loses the output either.
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly detail?: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+/** Turn a non-2xx response into an ApiError, reading `{ error, detail }`. */
+async function toApiError(res: Response, fallback: string): Promise<ApiError> {
+  const body = await res.json().catch(() => null);
+  const message =
+    (body && (body.error || body.message)) || res.statusText || fallback;
+  const detail =
+    body && typeof body.detail === 'string' ? body.detail : undefined;
+  return new ApiError(message, detail);
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     ...options,
   });
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    const message =
-      (body && (body.error || body.message)) || res.statusText || 'Request failed';
-    throw new Error(message);
-  }
+  if (!res.ok) throw await toApiError(res, 'Request failed');
   return res.json() as Promise<T>;
+}
+
+/**
+ * Read an NDJSON body, handing each parsed line to `onEvent`.
+ *
+ * Shared by the app's two streaming POSTs (/api/setup/seed and /api/submit) so
+ * the chunk-boundary handling below exists once. Both are POSTs that spend money
+ * or time, which is why neither can be an EventSource.
+ */
+async function readNdjson<T>(
+  res: Response,
+  onEvent: (event: T) => void,
+): Promise<void> {
+  if (!res.body) return;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  // Chunk boundaries fall wherever TCP wants them, so a line can arrive in two
+  // pieces. Everything before the last newline is complete; the remainder is
+  // carried forward.
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) buffer += decoder.decode(value, { stream: true });
+    let nl = buffer.indexOf('\n');
+    while (nl >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (line) {
+        try {
+          onEvent(JSON.parse(line) as T);
+        } catch {
+          /* a truncated line is not worth failing the whole run over */
+        }
+      }
+      nl = buffer.indexOf('\n');
+    }
+    if (done) break;
+  }
 }
 
 /** GET /api/problems/next — pull an unused problem from the bank (fast, no LLM). */
@@ -75,6 +139,18 @@ export function generateProblem(
   });
 }
 
+/**
+ * GET /api/bank — which slots can be served right now, and what a miss costs.
+ *
+ * Free (three indexed counts, no LLM). Two callers: /manual opens on `suggested`
+ * so a fresh install's first click is a database read rather than a 15-95 second
+ * cold generation, and the "please wait" copy quotes `generationSeconds` — a
+ * measured number or nothing at all, never a guess.
+ */
+export function getBankStatus(): Promise<BankStatus> {
+  return request<BankStatus>('/api/bank');
+}
+
 /** POST /api/run — run visible sample tests only (sandbox, no AI). */
 export function runCode(problemId: string, code: string): Promise<RunResult> {
   return request<RunResult>('/api/run', {
@@ -83,17 +159,34 @@ export function runCode(problemId: string, code: string): Promise<RunResult> {
   });
 }
 
-/** POST /api/submit — run all hidden tests + get the coaching brief. */
-export function submitCode(
+/**
+ * POST /api/submit — hidden tests first, coaching after.
+ *
+ * NDJSON, one `SubmitEvent` per line, and the reason is the whole feature: the
+ * verdict is computed in a couple of seconds and the coaching call after it can
+ * take minutes (workhorse role, 8000 tokens, adaptive thinking, a 180-300s
+ * budget). Awaiting the whole body held the test results hostage behind the
+ * essay. `onEvent` fires with `result` as soon as the sandbox is done, then with
+ * `coaching`; the returned promise resolves when the stream ends.
+ *
+ * Failures BEFORE the stream starts (problem not found, sandbox unavailable)
+ * still arrive as an ordinary HTTP error and are thrown as ApiError, so callers
+ * keep exactly one error path.
+ */
+export async function submitCode(
   problemId: string,
   code: string,
   hintsUsed = 0,
-  prediction?: Prediction,
-): Promise<SubmitResponse> {
-  return request<SubmitResponse>('/api/submit', {
+  prediction: Prediction | undefined,
+  onEvent: (event: SubmitEvent) => void,
+): Promise<void> {
+  const res = await fetch('/api/submit', {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ problemId, code, hintsUsed, prediction }),
   });
+  if (!res.ok) throw await toApiError(res, 'Submit failed');
+  await readNdjson<SubmitEvent>(res, onEvent);
 }
 
 /** POST /api/hint — progressive, level-scoped nudge (1|2|3). */
@@ -272,34 +365,9 @@ export async function seedBank(
     signal,
   });
   if (!res.ok || !res.body) {
-    const err = await res.json().catch(() => null);
-    throw new Error((err && err.error) || res.statusText || 'Seeding failed to start');
+    throw await toApiError(res, 'Seeding failed to start');
   }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  // Chunk boundaries fall wherever TCP wants them, so a line can arrive in two
-  // pieces. Everything before the last newline is complete; the remainder is
-  // carried forward.
-  let buffer = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (value) buffer += decoder.decode(value, { stream: true });
-    let nl = buffer.indexOf('\n');
-    while (nl >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (line) {
-        try {
-          onEvent(JSON.parse(line) as SeedEvent);
-        } catch {
-          /* a truncated line is not worth failing the whole run over */
-        }
-      }
-      nl = buffer.indexOf('\n');
-    }
-    if (done) break;
-  }
+  await readNdjson<SeedEvent>(res, onEvent);
 }
 
 /** GET /api/progress — per-pattern mastery. */
