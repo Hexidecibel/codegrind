@@ -228,7 +228,7 @@ function CoachModelControl({
   busy: boolean;
   error: string | null;
 }) {
-  const cost = coachCostSentence(summary);
+  const cost = coachCostSentence(summary, 'settings');
   if (!cost && !summary.canChooseCoachModel) return null;
 
   const matched = summary.sameModel;

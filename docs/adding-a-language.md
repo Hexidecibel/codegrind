@@ -7,8 +7,10 @@ what you have forgotten.
 **Java is the known next one, and it is deliberately unfinished.** `LANGUAGE_PROFILES.java`
 in `llm.language.ts` is authored — because `Record<Language, LanguageProfile>` is
 exhaustive and a missing key is a compile error, which is precisely what stops a language
-from being half-added — but **its type allowlist and its `class Solution` authoring
-contract are not written.** Its rows in `bin/lib/languages.sh` are real, measured-shaped
+from being half-added — but **its parameter and return type allowlist is not
+written**, and the `class Solution` contract is only half-stated — the signature and
+reference rules name it, and the one line in `authoringRules` says out loud that the rest
+lands with the harness. Its rows in `bin/lib/languages.sh` are real, measured-shaped
 values rather than placeholders, and `test-harness/java/` does not exist, so nothing can
 build or run it. Read [What Java still owes](#what-java-still-owes) before starting on it.
 
@@ -101,9 +103,14 @@ The Dockerfile must:
 The runner must:
 
 1. **Accept `--selftest [path]`** and check its own `deepEqual` + serializer against
-   `/app/conformance/equality-cases.json`, exiting non-zero on any disagreement. This is a
-   post-build gate: an image that fails it is **deleted rather than published**, so it can
-   never grade a submission. Do not try to share equality code across runtimes — three
+   `/app/conformance/equality-cases.json`, exiting non-zero on any disagreement. This is
+   the gate: `bin/build-runner-image` runs it immediately after the build, **with the same
+   sandbox flags a real submission gets** (`cg_selftest_image` in `bin/lib/languages.sh`),
+   and an image that fails is **deleted rather than published**, so it can never grade a
+   submission. The same gate is what `bin/setup` and `bin/deploy` run against images that
+   already exist — present is not the same as good — so put anything else your image must
+   prove about itself in here too, the way Go's `--selftest` also forces a 24-hour-stale
+   build-cache stamp and compiles for real. Do not try to share equality code across runtimes — three
    hand-written comparators checked against one fixture is the design, and the fixture is
    the reason it is safe.
 2. Read `/work/tests.json` (`{functionName, tests: [{name, args, expected}]}`), load
@@ -266,10 +273,39 @@ traverse it, and every Python submission failed with "could not read solution" �
 language looking permanently broken, from a mode bit. `bin/run-submission` now chmods
 0711/0644 and any new language inherits the fix. Verify it rather than assuming it.
 
-**A read-only compiler cache works.** Go's 38MB `GOCACHE` is baked into the image and
-stays read-only at run time: Go treats an unwritable cache as one it cannot add to, so a
-never-before-seen `solution.go` still builds in 0.11s against 3s cold — with no tmpfs
-copy and no writable rootfs. The full sandbox hardening is kept.
+**A read-only compiler cache works — for writes. Not for the trim.** Go's 42MB `GOCACHE`
+is baked into the image and stays read-only at run time. Cache *writes* really are
+best-effort: a submission's own package fails to be stored, every stdlib package is still
+a hit, and nothing complains. Measured inside the sandbox (`--read-only`, `--cpus=1`,
+`USER nobody`), a never-before-seen `solution.go` builds in **0.32–0.36s** against the
+baked cache, and **10.05s** with `GOCACHE` pointed at an empty tmpfs — which is not
+"slow", it is over the harness's own 10s compile budget, i.e. failing rather than merely
+late. So the warm read-only cache is what makes a compiled language fit in the sandbox at
+all, with no tmpfs copy, no writable rootfs and none of the hardening given up.
+
+**The cache TRIM is not best-effort, and it cost a day of the Go rollout.** Once every 24
+hours `go build` calls `Trim()` on the way out, which rewrites `$GOCACHE/trim.txt`, and
+the only caller does `base.Fatalf` when that write fails. The stamp was baked root-owned
+into an image that runs as `nobody` on a read-only rootfs, so **every image worked for
+exactly 24 hours and then failed every submission that COMPILES** with `go: failed to trim
+cache: permission denied`. Submissions with compile *errors* kept working, because go
+prints its diagnostics before it dies — so the symptom read as "only correct Go is
+broken", which sounds like the model's fault rather than the sandbox's.
+
+The fix is one symlink: `trim.txt` points at `/tmp`, the tmpfs every runner already has,
+writable and fresh per container. The trim then succeeds at any image age (0.34s against
+0.32s for one that skips it) while the cache entries stay exactly as read-only as before.
+Two things that look like fixes and are not are documented in `test-harness/go/Dockerfile`
+— a far-future stamp (go reads a stamp more than an hour ahead as corruption and trims
+anyway) and a tmpfs `GOCACHE` (the 10.05s above).
+
+**Whatever your language bakes into its image, assume it will be run when the image is
+old.** Go's `--selftest` gate forces a 24h-stale stamp and compiles for real, and
+`bin/setup` and `bin/deploy` re-gate images that already exist rather than accepting any
+image whose tag is present — which is what lets a fix reach a box whose image predates it.
+The unit suite said nothing about any of it, because none of its tests start a
+container — which is the general lesson for a new language: the things that will bite you
+live in the image, and only the gate and `bin/smoke-<lang>` go there.
 
 **Watch the stack limit against the memory cap.** Go's default 1GB max stack is *above*
 `--memory=512m`, so runaway recursion got OOM-killed ("signal: killed") instead of

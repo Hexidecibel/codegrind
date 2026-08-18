@@ -5,6 +5,12 @@ everything that needs judgement — Claude, or any OpenAI-compatible endpoint yo
 yourself; see [Who answers](#who-answers--the-llm-seam). No queues, no workers, no
 second service.
 
+**This file is the code map: which module owns what, and the invariants that hold
+between them.** For what the system actually *does* — how a problem is generated and
+verified, how the scheduler picks, what the sandbox enforces, what forks per language —
+read [how-it-works.md](how-it-works.md) first. The two are written not to repeat each
+other.
+
 ```
 src/
   shared/       types + the language registry, imported by BOTH sides
@@ -28,7 +34,7 @@ deploy/         systemd units
 ```
 POST /api/session/start
   └─ getActiveLanguage()            the language for the whole sitting, read ONCE
-  └─ planSession()                  Claude, best-effort — falls back to DEFAULT_PLAN
+  └─ planSession()                  one model call, best-effort — falls back to DEFAULT_PLAN
   └─ nextIntent({language, plan})   scheduler.service — free, deterministic, no LLM
   └─ getAdaptiveProblem(intent)     bank.service
        ├─ findUnusedProblem(language, topic, difficulty)   a banked problem: instant
@@ -36,17 +42,14 @@ POST /api/session/start
   └─ createSession(language, …)     the language is stored ON the session row
 ```
 
-Two deliberate choices here.
+`planSession` is the only model call on this path, it runs once per sitting, and it is
+best-effort — a failure logs and falls back to `DEFAULT_PLAN` (`routes/session.ts`).
+`nextIntent` makes no model call at all; what it decides and why is in
+[how-it-works.md](how-it-works.md#the-scheduler-free-and-deterministic).
 
-**The scheduler is free.** `scheduler.service` runs on every problem and makes no LLM
-call at all: it reads per-topic skill state and derived mastery and emits a
-`SchedulerIntent` — `{kind, language, topic, difficulty, rationale}` where `kind` is
-one of `warm-up`, `reinforce`, `variation`, `level-up`, `new-pattern`, `review`. The
-Claude session planner only nudges it through `plan.focus`. This is why the app can be
-adaptive per problem without being expensive per problem.
-
-**The language rides on the intent**, not alongside it, so `getAdaptiveProblem(intent)`
-cannot be handed a language that disagrees with the state the intent was computed from.
+The structural choice worth knowing here: **the language rides on the intent**, not
+alongside it, so `getAdaptiveProblem(intent)` cannot be handed a language that disagrees
+with the state the intent was computed from.
 `POST /api/session/:id/next` reads the language back off the session row rather than
 re-reading the setting, so flipping the picker mid-sitting cannot serve a problem the
 plan was never built for.
@@ -55,7 +58,7 @@ plan was never built for.
 
 ```
 generateAndStore(language, topic, difficulty)
-  └─ generateProblem(...)           Claude, forced tool use → emit_problem
+  └─ generateProblem(...)           forced tool use → emit_problem
   └─ canonicalize()
        ├─ runTests(reference, sampleTests)  ─┐ the reference solution, in the sandbox
        └─ runTests(reference, hiddenTests)  ─┘
@@ -63,27 +66,26 @@ generateAndStore(language, topic, difficulty)
   └─ insertProblem({…, canonicalized})
 ```
 
-The model does not get to decide what the right answer is. Every stored `expected` is
-the output of really running the reference. That closes the most common generation
-failure — a correct reference paired with a hand-authored `expected` that disagrees with
-it, or one of several valid answers for an ambiguous case — and makes the problem
-self-consistent by construction.
+The model does not get to decide what the right answer is: every stored `expected` is
+the output of really running the reference, `args` and `name` are kept verbatim, and a
+test the reference errors on is dropped. Too few survivors (fewer than
+`MIN_SAMPLE_TESTS = 1` or `MIN_HIDDEN_TESTS = 4`) throws the whole problem away and
+regenerates, up to `MAX_GEN_ATTEMPTS = 3`. Why that step exists, and why the two
+languages part ways when the sandbox itself cannot run, is in
+[how-it-works.md](how-it-works.md#where-a-problem-comes-from).
 
-If too few tests survive (fewer than 1 sample or 4 hidden), it regenerates, up to
-`MAX_GEN_ATTEMPTS = 3`.
-
-**When the sandbox itself fails, the languages part ways.** JavaScript keeps a lenient
-path: the problem is stored with the model's own `expected` values and stamped
-`canonicalized = 0`, which keeps it out of every future bank read. Every other language
-**throws**. The reasoning is in `bank.service.ts`: a missing runner image would otherwise
-mint problems whose `expected` no real run can ever reproduce — unsolvable, served
-silently, and the failure looks exactly like the player being wrong.
+The seam worth naming here is `canonicalize`, which is **exported**: it is the only
+objective judge of a model in this codebase, so `bin/dry-run-generate` reuses it rather
+than reimplementing a bar that would then drift from the one the app applies.
 
 ### Running a submission
 
 ```
 POST /api/run     {problemId, code}    sample tests, no AI, records nothing
-POST /api/submit  {problemId, code}    hidden tests + coaching + records an attempt
+POST /api/submit  {problemId, code}    hidden tests + coaching + records an attempt.
+                                       Answers NDJSON: a `result` line, then a `coaching`
+                                       line. The sandbox run happens BEFORE the stream
+                                       opens, so a sandbox failure is still a 500.
   └─ getProblem(problemId)             ← the language comes from HERE
   └─ runTests({language, functionName, userCode, tests})
        └─ sandbox.service writes  <id>.solution.<ext>  and  <id>.tests.json  into $DATA_DIR/tmp
@@ -97,43 +99,35 @@ POST /api/submit  {problemId, code}    hidden tests + coaching + records an atte
                  <CG_IMAGE> <CG_CMD> /work/<CG_SRCNAME> /work/tests.json
        └─ harness prints ONE JSON object to stdout
   └─ toRunResult()                     the seam: pure JSON → typed RunResult
-  └─ coach()                           Claude, best-effort — a failure degrades, never loses the run
+  └─ coach()                           best-effort — a failure degrades, never loses the run
   └─ insertAttempt / updateSkillOnAttempt / review-queue bookkeeping
 ```
 
 Neither request body carries a language. That is the whole design in one line.
 
-**The harness contract.** Input is `{functionName, tests}`; output is one JSON object:
+**The harness contract** — input `{functionName, tests}`, output one JSON object with
+`results`, `passed`, `total` and an optional `phase` — and the conformance fixture that
+keeps three hand-written comparators in agreement are described in
+[how-it-works.md](how-it-works.md#the-harness-contract). What belongs here is the seam:
+`toRunResult` is **pure translation**, and the only thing it is allowed to know is the
+shape of that JSON. Nothing language-specific may enter it; `phase` is what exists
+instead.
+
+**Budgets are not uniform across languages.** The interpreted runners enforce nothing
+internally — a synchronous infinite loop cannot be interrupted
+from inside a single-threaded JS or CPython process, so the outer `timeout` around
+`docker run` owns wall-clock enforcement (`runner.mjs`, `runner.py`):
 
 ```
-{ results: [{name, passed, expected, actual, stderr, stdout, timeMs}],
-  passed, total,
-  phase?: "compile" | "load" | "run",
-  error?, stdout? }
+javascript / python   CG_TIMEOUT 12s  →  sandbox.service execFile 45s
+go                    per-test 2s → suite 10s → compile 10s → CG_TIMEOUT 30s → 45s
 ```
 
-`phase` is how a compiled language reports that nothing ever ran — it is what turns a JS
-`SyntaxError`, a Python `IndentationError` and a Go build diagnostic into one
-`compile_error` verdict, instead of the actively misleading "0 of 8 tests passed".
-Verdicts: `accepted`, `wrong_answer`, `runtime_error`, `compile_error`, `timeout`,
-`error`.
-
-**Every runner hand-writes its own `deepEqual` and its own canonical JSON serializer**,
-because the alternative is embedding a JS engine in the Python image. Hand-written
-comparators drift, so `test-harness/conformance/equality-cases.json` is the single
-fixture all of them are checked against by `<runner> --selftest`, which
-`bin/build-runner-image` runs as a post-build gate. **An image that disagrees with the
-fixture is deleted, not published.** The fixture also pins the things comparators
-reliably get wrong: `{"$cg":"nan"|"inf"|"-inf"|"-zero"}` sentinels, a float tolerance of
-`abs(a-b) <= max(1e-9, 1e-9*max(|a|,|b|))` that never applies to two integers and never
-to a non-finite value, and sorted-key serialization so identical values render
-identically.
-
-**Budgets nest, and each one is strictly inside the next:** per-test (~2s) → run (~10s)
-→ compile (~10s, compiled languages) → the container's `timeout` (`CG_TIMEOUT`: 12s
-interpreted, 30s compiled) → `sandbox.service`'s own 45s `execFile` cap. If an outer one
-fired first you would lose the structured partial results and see an opaque kill instead
-of "3 of 8 passed, then this one hung."
+Go's three inner budgets are `cgPerTestBudget`, `cgRunBudget` and `cgCompileBudget` in
+`test-harness/go/runner.go`. Each must stay strictly inside the next: if an outer one
+fires first the container dies before printing its structured partial results and the
+caller sees an opaque kill instead of "3 of 8 passed, then this one hung".
+`languages.test.ts` asserts `CG_TIMEOUT[go] > 23` (compile + run + grace).
 
 ---
 
@@ -154,29 +148,34 @@ llm.service.ts     WHAT: "structured, this schema, this budget, role=workhorse"
 
 The word "provider" does not appear in `llm.service.ts`, and that is the design, not a
 coincidence: a second implementation was added by adding **one branch to `clientFor`**,
-and no call site changed or could tell. (The counter-example is one directory over in
-soulseek-helper, where an `if` per function went out of step function by function.)
+and no call site changed or could tell. (The counter-example is another local-LLM
+consumer on the same box, where an `if (isLocal)` per function went out of step function
+by function.)
 
 **Three call roles, two routes.** `CallRole` is `workhorse | small | tutor`.
 
-| role | what it is | routed as |
+| role | the call sites | routed as |
 |---|---|---|
-| `workhorse` | generation, hints, session plans, primers, lessons, coaching | its own configuration |
-| `small` | the cheap structured calls — classification, tagging, short rewrites | **the workhorse's client**, with a tighter timeout |
-| `tutor` | the chat behind `POST /api/ask`, one call per question actually asked | its own configuration |
+| `workhorse` | `generateProblem` (16000 output tokens), `coach` (8000), `translateSnippets` (8000) | its own configuration |
+| `small` | `hint` (1000), `planSession` (800), `generatePrimer` (2500), `generateTrackOutline` (2500), the three lesson writers (3000 each) | **the workhorse's client**, with a tighter timeout |
+| `tutor` | `askFollowup` — the chat behind `POST /api/ask`, and the only `text` call in the app | its own configuration |
 
-`small` deliberately has no configuration of its own. It exists so
-`DEFAULT_TIMEOUT_MS` can give a 3-second classification a different budget from a
-30-second generation without inventing a second model to configure;
-`clientFor('small') === clientFor('workhorse')` and there is a test that says so.
+`small` deliberately has no configuration of its own. It exists so `DEFAULT_TIMEOUT_MS`
+can give an 800-token session plan a different budget from a 16000-token generation
+without inventing a second model to configure; `clientFor('small') === clientFor('workhorse')`
+and there is a test that says so. The budgets by provider are
+`{workhorse 180s, small 60s, tutor 180s}` on Anthropic and double that on an
+OpenAI-compatible endpoint — measured, not cautious: a forced-tool-use probe against a
+local model took 28.9s for 387 completion tokens, and a model swap can stall a first
+request for much longer.
 
 **Resolution is two layers, and the environment wins field by field** — not wholesale,
 so a deploy that pins only the model still lets the wizard choose an endpoint. The
 environment is read **once at module load** (a misspelt provider is a boot error, not a
 3am one); the stored layer is two rows in `settings`, `llm.workhorse` and `llm.tutor`,
 written by the wizard and by Settings. `llm.client` does **not** import `db.ts` — it
-would open a SQLite file at import time, and its own test re-imports the module
-seventeen times under different environments. `provider.service.ts` pushes a reader in
+would open a SQLite file at import time, and its own test re-imports the module once per
+test case under a different environment each time. `provider.service.ts` pushes a reader in
 through `useStoredProviderConfig` instead. Until something does, the stored layer is
 simply empty, which is exactly right for a process that never opened a database.
 
@@ -189,9 +188,9 @@ has.** A local install must stay local: no key, no signup, no spend, so an uncon
 tutor inherits the workhorse's provider *and* model. On the Anthropic path the defaults
 are `claude-sonnet-5` for the workhorse and `claude-opus-5` for the tutor, which is a
 deliberate quality choice — but `storeProviderConfig` writes both rows from one
-configuration, so nobody chose it and nothing said so. `roleDefaultModel()` now reports
-each role's default through `GET /api/providers`, the wizard's Ready screen and Settings
-name both models by the job they do, and Settings can pin the coach to the workhorse's
+configuration, so nobody chose it and nothing said so. `roleDefaultModel()` reports each
+role's default through `GET /api/providers`, the wizard's Ready screen and Settings name
+both models by the job they do, and Settings can pin the coach to the workhorse's
 model (`chatModel` on `PUT /api/providers`; `null` restores the default). An absent
 `chatModel` deliberately leaves an existing pin alone, because ProviderPicker's key form
 posts `{provider:'anthropic'}` on every key save. `client/lib/role-summary.ts` is the
@@ -300,10 +299,16 @@ Two sources, and the ordering is a compatibility guarantee, not a preference:
 2. Otherwise, a row in `settings`, written by the first-run wizard.
 
 `hydrate()` copies a stored key into `process.env.ANTHROPIC_API_KEY` at boot **only**
-when the environment has none, so every existing consumer (`llm.service`, `bin/seed-bank`,
-`bin/warm-lessons`, `bin/translate-corpus`) keeps reading the variable it always read.
-`llm.service` re-creates its cached client when the value changes, so a key pasted into
-the wizard is live without a restart.
+when the environment has none, so the one consumer that reads it — `llm.anthropic.ts`,
+which builds the SDK client — keeps reading the variable it always read. `reloadRouting()`
+drops the cached client when the configuration changes, so a key pasted into the wizard is
+live without a restart.
+
+The CLI entry points have to hydrate for themselves, because they never boot the server.
+`bin/seed-bank` and `bin/dry-run-generate` call `hydrateProviderConfig()` then `hydrate()`
+and only demand a key when `needsAnthropicKey()` says a role really routes to Anthropic.
+`bin/warm-lessons` and `bin/translate-corpus` do neither — see
+[operations.md](operations.md#spending-money).
 
 Secrecy is enforced in `apikey.service.ts`, not by convention:
 
@@ -336,8 +341,11 @@ help when they genuinely need it, and any user whose flag is somehow cleared get
 wizard in front of a working app. So `readSetupState()` just asks the two questions the
 wizard exists to answer:
 
-- no usable key → `reason: 'no-api-key'` (never suppressible — there is nothing to skip
-  to), else
+- no usable key **and the resolved routing actually needs one** (`needsAnthropicKey()`,
+  which reads the stored `llm.*` rows as well as the environment) →
+  `reason: 'no-api-key'`, never suppressible, because there is nothing to skip to. A
+  fully local install never sees it — gating the app on a key there would lock a working
+  install behind a signup it does not need. Otherwise:
 - the active language has zero **servable** problems (`used = 0 AND canonicalized = 1`)
   and `setup.dismissed` is not set → `reason: 'empty-bank'`.
 
@@ -361,12 +369,14 @@ during a 15–30s generate and is telling the truth when it does. A failed gener
 
 Client: `App.tsx` asks `/api/setup/state` on mount, before the router renders. **A failed
 request renders the app** — help that appears when the server is merely unreachable would
-lock a working install behind a form nobody can submit. `SetupWizard.tsx` is four screens
-(provider → language → seed → ready — a PROVIDER step, not a key step, because an
-install pointed at a local endpoint needs no key and must not open by demanding one);
-the last one calls `POST /api/session/start` and writes
-the same `codegrind.grind` localStorage snapshot GrindPage persists for itself, so you
-land inside a live session rather than at a menu.
+lock a working install behind a form nobody can submit. `SetupWizard.tsx` is three steps and a
+Ready screen: **provider** → language → seed → ready. It is a *provider* step, not a key
+step, because an install pointed at a local endpoint needs no key and must not open by
+demanding one; it is skipped entirely when the install is already usable (a key is
+configured, or nothing routes to Anthropic). The Ready screen names both models by the
+job they do, calls `POST /api/session/start`, and writes the same `codegrind.grind`
+localStorage snapshot GrindPage persists for itself — so you land inside a live session
+rather than at a menu.
 
 ---
 
@@ -378,11 +388,12 @@ siblings — Monaco is bundled locally rather than CDN-loaded and its chunks are
 
 ```
 src/App.tsx                      the first-run gate, then the router
-  client/components/Layout.tsx   4 tabs: Grind · Manual · Reflect · Study
+  client/components/Layout.tsx   5 tabs: Grind · Manual · Reflect · Study · Settings
   client/pages/GrindPage.tsx     the adaptive loop
   client/pages/WorkspacePage.tsx "Manual" — pick topic/difficulty; hosts LanguagePicker
   client/pages/ProgressPage.tsx  "Reflect"
   client/pages/StudyPage.tsx     the reading feed
+  client/pages/SettingsPage.tsx  routing, the provider form, the language picker
   client/components/SolveSurface.tsx   editor + problem + results + coach
   client/components/CodeEditor.tsx     → MonacoEditor (desktop) | CodeMirrorEditor (mobile)
   client/lib/api.ts              every fetch in one place

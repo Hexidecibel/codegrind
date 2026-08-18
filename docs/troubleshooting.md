@@ -60,10 +60,11 @@ sudo usermod -aG docker $USER    # not in the group — then log out and back in
 
 ### Not enough disk
 
-The three sandbox images are ~3 GB together (Go's toolchain is most of it), plus layer
-scratch while they build. Below 3 GB free on Docker's root directory, `bin/setup` stops;
-below 6 GB it warns. Running out mid-build leaves a half-built image and an error about a
-tar stream, which explains nothing.
+Built here, the three finished images measured **654 MB** together (Go 308 MB,
+JavaScript 227 MB, Python 119 MB — Go's toolchain is most of it). The build needs layer
+scratch on top of that, so `bin/setup` stops below **3 GB** free on Docker's root
+directory and warns below 6 GB. Running out mid-build leaves a half-built image and an
+error about a tar stream, which explains nothing.
 
 ```bash
 docker system prune -a
@@ -135,10 +136,13 @@ clone elsewhere on the same box is fine — the guard compares the unit's
 
 ### The API key vanished from `.env`
 
-**It must never be in `.env`.** `bin/inject` (the author's secret tooling) rewrites that
-file with `O_TRUNC` from `.cush-secrets` on **every deploy and every `cd` into the
-directory** (direnv), so a hand-added key there is destroyed silently and at an
-unpredictable moment. The app simply stops working, with no edit to blame.
+**It must never be in `.env`.** The reason is mechanical rather than stylistic: secret
+tooling of the kind that materializes a `.env` rewrites the whole file with `O_TRUNC`,
+often on every deploy *and* on every `cd` into the directory (direnv). A hand-added key
+there is destroyed silently and at an unpredictable moment, and the app simply stops
+working with no edit to blame. This repo's `bin/setup` and `bin/deploy` are both built
+around that: `bin/setup` never touches an existing `.env`, and `bin/deploy`'s optional
+`CG_INJECT` hook is exactly such a rewriter.
 
 The key lives in the `settings` table, written by the first-run wizard and validated
 against Anthropic before it is stored. Paste it into the setup screen.
@@ -149,15 +153,16 @@ that is the compatibility guarantee for an existing deploy whose key arrives fro
 manager via systemd's `EnvironmentFile`. `hydrate()` only publishes a stored key when the
 environment has none.
 
-This is also why the same file loses `PORT`/`HOST`/`DATA_DIR` on a box running
-`bin/inject`: it writes *only* the manifest's secrets. Non-secret config belongs in code
-defaults (which cover all three) or in the systemd unit.
+It is also why non-secret config must not depend on `.env` surviving: such a tool writes
+*only* the secrets it manages, so `PORT`/`HOST`/`DATA_DIR` would vanish with everything
+else. All three have code defaults, and a service can pin them in its unit.
 
 ### The setup wizard appears in front of a working app
 
 It should not — `needed` is derived on every request, never stored as an "onboarded"
-flag. It appears when either (a) there is no usable key, or (b) the **active** language has
-zero servable problems, where servable means `used = 0 AND canonicalized = 1`. Note that a
+flag. It appears when either (a) there is no usable key **and the resolved routing
+actually needs one** (a fully local install never sees this), or (b) the **active**
+language has zero servable problems, where servable means `used = 0 AND canonicalized = 1`. Note that a
 bank full of already-solved problems is a non-zero bank with nothing to hand out. Check:
 
 ```bash
@@ -183,6 +188,48 @@ advice:
 | no status at all | this machine cannot reach the API |
 
 Nothing is stored unless it validated.
+
+### My own model is refused by the setup screen
+
+A local endpoint gets a harder check than a key does, and deliberately: the wizard makes a
+real **forced tool call** against the model you picked. Ten of this app's eleven model
+calls are forced tool calls, so a model that cannot make one is not degraded, it is
+unusable — and finding that out at setup costs 90 seconds, while finding it out later
+costs a broken install discovered mid-session. Nothing is stored when the check fails.
+
+The message names the likely fix, because the causes need different ones:
+
+| what you see | what it means |
+|---|---|
+| "returned prose instead of calling the tool" | The commonest one by far, and usually not the model: **llama.cpp serves tool calls only when started with `--jinja`.** Without it a perfectly capable model returns prose forever. |
+| "ran out of output tokens before it produced a tool call" | A reasoning model thinking out loud instead of answering. Use a non-reasoning model, or one whose template honours `enable_thinking:false`. |
+| "did not answer within N seconds" | Often just a model being loaded — the second attempt is usually much faster. If it keeps timing out, that model is too slow to use interactively. |
+| "does not serve a model called X. It offers: …" | The id must be exactly what `GET /v1/models` advertises. |
+| "called the tool, but …" | It made the call and got the shape wrong. codegrind's real generation schema is stricter than the probe's, so this would fail worse later. |
+
+Two things that are warnings rather than refusals: an estimate of how long one problem
+will take to write (measured from that very call, and persisted so the rest of the app can
+quote it), and a note when a router in front of the endpoint served a different model than
+the one you asked for.
+
+`bin/dry-run-generate` is the fuller version of the same question — one real generation
+attempt, scored by the stage that failed, storing nothing.
+
+### The coach is on a different model than the one writing problems
+
+On the Anthropic path, on purpose. The workhorse defaults to `claude-sonnet-5` and the
+tutor to `claude-opus-5`, because the tutor is one call per question you actually ask and
+it is the conversation you judge the app by. Choosing Claude in the wizard wrote the same
+configuration to both roles, and nothing said the defaults differed — so the coach quietly
+cost more than the thing it was coaching.
+
+Both models are now named and priced on the wizard's Ready screen and in Settings, and
+Settings can pin the coach to the writer's model. Every id shown there comes from the
+resolved routing, so "back to the default" is true rather than assumed.
+
+On a local endpoint this cannot happen: an unset tutor inherits the workhorse's provider
+*and* model, so both roles are the same self-hosted model and the UI says nothing about
+cost at all.
 
 ### Seeding failed partway
 
@@ -303,12 +350,25 @@ If the timer is not running: `bin/install-units`, then check `bin/status` report
 
 ### A submission times out with no output at all
 
-The budgets nest, and each must stay strictly inside the next: per-test (~2s) → run (~10s)
-→ compile (~10s) → `CG_TIMEOUT` (12s interpreted, 30s compiled) → `sandbox.service`'s 45s
-`execFile` cap. If an outer one fires first, the container dies before printing its
-structured partial results and you get an opaque kill instead of "3 of 8 passed, then this
-one hung." If you change any budget, check `CG_TIMEOUT` still clears the sum — a test
-asserts this for Go.
+The budgets are not the same in every language, and each must stay strictly inside the
+next:
+
+```
+javascript / python   CG_TIMEOUT 12s  →  sandbox.service execFile 45s
+go                    per-test 2s → suite 10s → compile 10s → CG_TIMEOUT 30s → 45s
+```
+
+The interpreted runners enforce nothing internally — a synchronous infinite loop cannot be
+interrupted from inside a single-threaded JS or CPython process, so the outer `timeout`
+around `docker run` is the only thing that can stop one. Go, being compiled, has three
+inner budgets of its own (`cgPerTestBudget`, `cgRunBudget`, `cgCompileBudget` in
+`test-harness/go/runner.go`) so a wedged toolchain reports `phase: "compile"` rather than
+an opaque kill.
+
+If an outer budget fires first the container dies before printing its structured partial
+results, and you get that opaque kill instead of "3 of 8 passed, then this one hung". If
+you change any budget, check `CG_TIMEOUT` still clears the sum — `languages.test.ts`
+asserts `CG_TIMEOUT[go] > 23`.
 
 ### A correct answer is marked wrong
 
@@ -385,27 +445,16 @@ bin/fix-go-starters --apply    # write
 
 Yes, and yes — but not the same progress everywhere, on purpose.
 
-**Per language:** the problem bank, `skill_state`, tiers, unlocks, the skill tree,
-solved counts, hint-free rate and review queue.
-
-**Global:** your streak and your lessons-read count.
+**Per language:** the problem bank, `skill_state`, tiers, unlocks, the skill tree, solved
+counts, hint-free rate and the review queue. **Global:** your streak and your lessons-read
+count.
 
 Nothing is ever deleted by switching. Your JavaScript state sits exactly where you left it
-and is waiting when you switch back.
-
-**Why the skill state forks and starts cold.** A tier means "3 distinct problems solved at
-this difficulty with zero hints." You have not done that in Go. Transferring the unlock
-would serve a Go beginner expert-tier problems on day one. The cold-start path already
-exists and works, and because `attempts.language` is recorded, pooling remains available
-later as a query change rather than a migration — so this is reversible.
-
-**Why the streak is global.** It is a habit metric. Python yesterday plus Go today is a
-two-day streak.
-
-**Why lessons stay shared.** Lesson prose is language-free by construction — the prompt
-forbids fenced code in a body and puts code in a separate field — so only the snippet
-forks, through `code_translations`. You have already read the lesson; re-reading it is not
-the gap.
+and is waiting when you switch back. The reasoning behind each half of that split — and
+why the skill state starts cold rather than transferring — is in
+[how-it-works.md](how-it-works.md#what-forks-per-language-and-what-does-not). It is also
+reversible: `attempts.language` is recorded, so pooling later is a query change rather
+than a migration.
 
 ### My first problems in a new language are slow
 
