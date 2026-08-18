@@ -216,6 +216,99 @@ function coerceStrings(raw: unknown): string[] {
   return raw.filter((s): s is string => typeof s === 'string');
 }
 
+// ---------------------------------------------------------------------------
+// functionName is not data — it becomes SOURCE
+// ---------------------------------------------------------------------------
+// The model picks this name, and two of the three runners paste it verbatim
+// into generated code: the Go harness writes it into shim.go, and the
+// JavaScript harness interpolates it into a `new Function` body. (Python is the
+// exception — it looks the name up in a dict and never concatenates it.)
+//
+// This is NOT a sandbox escape and must not be sold as one: that `new Function`
+// already evaluates the whole of `userCode`, and every runner executes inside
+// the network-less throwaway container bin/run-submission starts. What a bad
+// name actually costs is a BAFFLING failure — a model that answers with
+// "two sum", `return`, or a name carrying a quote produces a syntax error in
+// machinery the player never wrote and cannot see, reported as a compile_error
+// against their own solution.
+//
+// So the check lives HERE, at the one point where the name is accepted, which
+// is what makes it apply to every language rather than to whichever runner
+// happened to be written most carefully. The Go runner keeps its own identical
+// check on purpose: it is the point of interpolation, and the tests JSON it
+// reads can be produced by more than this function.
+const FUNCTION_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Reserved words, per language, because they are not the same list and a shared
+ * union would reject legitimate names.
+ *
+ * `map`, `range` and `type` are Go keywords and perfectly ordinary JavaScript
+ * function names; `pass` and `is` are Python keywords and fine in Go. Rejecting
+ * a valid `map(...)` JavaScript problem to save one Set would trade a real,
+ * frequent generation failure for a hypothetical one.
+ */
+const RESERVED_FUNCTION_NAMES: Record<Language, ReadonlySet<string>> = {
+  // Reserved words + the future-reserved and strict-mode words, since a `new
+  // Function` body is parsed in sloppy mode but the generated solutions are not
+  // guaranteed to be.
+  javascript: new Set([
+    'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
+    'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false',
+    'finally', 'for', 'function', 'if', 'implements', 'import', 'in',
+    'instanceof', 'interface', 'let', 'new', 'null', 'package', 'private',
+    'protected', 'public', 'return', 'static', 'super', 'switch', 'this',
+    'throw', 'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield',
+  ]),
+  python: new Set([
+    'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
+    'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally',
+    'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal',
+    'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield',
+  ]),
+  // The same 25 words test-harness/go/runner.go rejects. Kept in step with it
+  // deliberately: two copies of one list is the price of defence in depth.
+  go: new Set([
+    'break', 'case', 'chan', 'const', 'continue', 'default', 'defer', 'else',
+    'fallthrough', 'for', 'func', 'go', 'goto', 'if', 'import', 'interface',
+    'map', 'package', 'range', 'return', 'select', 'struct', 'switch', 'type',
+    'var',
+  ]),
+  java: new Set([
+    'abstract', 'assert', 'boolean', 'break', 'byte', 'case', 'catch', 'char',
+    'class', 'const', 'continue', 'default', 'do', 'double', 'else', 'enum',
+    'extends', 'final', 'finally', 'float', 'for', 'goto', 'if', 'implements',
+    'import', 'instanceof', 'int', 'interface', 'long', 'native', 'new',
+    'package', 'private', 'protected', 'public', 'return', 'short', 'static',
+    'strictfp', 'super', 'switch', 'synchronized', 'this', 'throw', 'throws',
+    'transient', 'try', 'void', 'volatile', 'while',
+  ]),
+};
+
+/**
+ * The accepted name, or a thrown Error naming the field and saying why.
+ *
+ * Exported for the tests, and because anything else that ever accepts a
+ * model-authored function name should call this rather than write the regex
+ * out a third time.
+ */
+export function validateFunctionName(name: string, language: Language): string {
+  if (!FUNCTION_NAME_PATTERN.test(name)) {
+    throw new Error(
+      `Generated problem has an unusable functionName ${JSON.stringify(name)}: ` +
+        'it must be a plain identifier — a letter or underscore followed by ' +
+        'letters, digits or underscores.'
+    );
+  }
+  if (RESERVED_FUNCTION_NAMES[language].has(name)) {
+    throw new Error(
+      `Generated problem has an unusable functionName ${JSON.stringify(name)}: ` +
+        `it is a reserved word in ${profileFor(language).displayName}.`
+    );
+  }
+  return name;
+}
+
 export interface GeneratedProblem {
   title: string;
   prompt: string;
@@ -395,10 +488,16 @@ export async function generateProblem(
   }
 
   const title = typeof input.title === 'string' && input.title.trim() ? input.title.trim() : 'Untitled Problem';
-  const functionName =
+  // `solve` when the model omitted the field entirely — an omission is a shape
+  // the fallback can honestly cover. A name that is PRESENT and unusable is
+  // not: silently renaming it to `solve` would leave starterCode, the reference
+  // solution and the prompt all calling something that no longer exists.
+  const functionName = validateFunctionName(
     typeof input.functionName === 'string' && input.functionName.trim()
       ? input.functionName.trim()
-      : 'solve';
+      : 'solve',
+    language
+  );
   const starterCode =
     typeof input.starterCode === 'string' && input.starterCode.trim()
       ? input.starterCode
