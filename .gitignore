@@ -28,3 +28,8 @@ npm-debug.log*
 data/
 # The scratch instance's own database — a second, disposable install (bin/scratch)
 data-scratch/
+
+# Author secret-management manifest. Local tooling only; a fresh clone neither
+# needs nor uses it, and it must never be tracked again (it named an internal
+# vault path and revealed which projects share one key).
+.cush-secrets
