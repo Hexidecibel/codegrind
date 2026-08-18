@@ -11,17 +11,15 @@ already run yourself — in which case there is no API key anywhere in the syste
 
 MIT licence · Node 20 or 22 · Docker · SQLite · JavaScript, Python and Go
 
-<!-- SCREENSHOT SLOT — replace with a GIF of one full grind loop:
-     the served problem and its intent line ("reinforce: sliding-window,
-     medium"), typing a solution, Run going green on the samples, Submit, and
-     the coaching brief arriving underneath the results. ~15s, no audio.
-     Drop the file at docs/images/grind-loop.gif, then delete the two comment
-     markers below to publish it. It stays commented out until the file exists,
-     because a broken image is worse than no image on a public front page. -->
+<!-- One full grind loop, recorded against a real instance: the banked problem,
+     the plan-your-attack gate, the solution typed in, Run going green on the
+     samples, Submit, and the coaching brief arriving underneath the results.
+     ~15s, no audio. The still underneath it is the frame that matters — the
+     pattern the coach names and how to recognise it next time. -->
 
-<!--
-![The grind loop: a generated problem, a submission, and the coaching brief that follows](docs/images/grind-loop.gif)
--->
+![The grind loop: a problem, a submission, and the coaching brief that follows](docs/images/grind-loop.gif)
+
+![The coaching brief after an accepted submit: the pattern named, how to recognise it next time, and your complexity next to the optimal](docs/images/grind-loop.png)
 
 ---
 
@@ -185,6 +183,8 @@ Lesson prose is shared across languages; only the code snippets are translated.
 
 **Reflect** — what you have actually done. Skill tree, tier ladder, mistake ledger, an
 84-day activity heatmap and trend charts.
+
+![Reflect: the curriculum bar, the prerequisite skill tree with locked and reached topics, and the counters underneath](docs/images/reflect.png)
 
 (**Manual** lets you pick a topic and difficulty yourself. **Settings** shows how you are
 currently routed and lets you change it. **Help** is the in-app manual.)
