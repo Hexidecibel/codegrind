@@ -223,8 +223,8 @@ export const DEFAULT_TIMEOUT_MS: Record<ProviderId, Record<CallRole, number>> = 
  * problem worth having. That number stays, uncapped, exactly as it is written at
  * the call site.
  *
- * On the local path 16000 buys nothing and costs five minutes. Measured, on
- * `Qwen3-local-q8` at ~55 output tokens/sec:
+ * On the local path 16000 buys nothing and costs five minutes. Measured against a
+ * local 35B-class model at ~55 output tokens/sec:
  *
  *   - a legitimate `easy` problem is 976–1320 output tokens (17–23s)
  *   - a legitimate `expert` problem is 1345–5337 output tokens (24–95s)

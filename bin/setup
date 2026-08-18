@@ -320,9 +320,17 @@ ok "database ready — ${DB_REPORT}"
 # =============================================================================
 # shellcheck source=lib/languages.sh
 source "${REPO_DIR}/bin/lib/languages.sh"
+# An image that EXISTS is not necessarily an image that works, and re-running
+# setup has to be able to notice. The Go image spent 24 hours correct and then
+# failed every compiling submission for good (`go: failed to trim cache` — the
+# story is in test-harness/go/Dockerfile); because this loop only asked whether
+# the tag existed, running setup again changed nothing. Each existing image is
+# now put through its own gate under the production sandbox flags, and a failure
+# puts it back in the build list.
 have=(); missing=()
 while read -r lang; do
-  if docker image inspect "${CG_IMAGE[$lang]}" >/dev/null 2>&1; then have+=("${lang}")
+  if ! docker image inspect "${CG_IMAGE[$lang]}" >/dev/null 2>&1; then missing+=("${lang}")
+  elif cg_selftest_image "${lang}" >/dev/null 2>&1; then have+=("${lang}")
   else missing+=("${lang}"); fi
 done < <(cg_buildable_languages "${REPO_DIR}")
 
@@ -372,7 +380,7 @@ STATE="$(curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/api/setup/state" 2>/de
 printf '\n'
 if printf '%s' "${STATE}" | grep -q '"needed":true'; then
   printf '  %s→ open http://localhost:%s to finish setup%s\n' "${C_B}" "${PORT}" "${C_0}"
-  printf '    %sIt will ask for an Anthropic API key, then stock your problem bank.%s\n' \
+  printf '    %sIt will ask which model should write your problems, then stock the bank.%s\n' \
     "${C_DIM}" "${C_0}"
 else
   printf '  %s→ open http://localhost:%s and start grinding%s\n' "${C_B}" "${PORT}" "${C_0}"

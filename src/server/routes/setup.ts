@@ -27,9 +27,6 @@
 // wizard needs, with no reconnection semantics to reason about: when the socket
 // dies the run is over, which is exactly true.
 
-import { existsSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import type { SetupState, SetupLanguageState, Difficulty, Topic } from '../../shared/types.js';
@@ -46,6 +43,7 @@ import {
 import * as apikey from '../services/apikey.service.js';
 import { describeProviders } from '../services/provider.service.js';
 import { needsAnthropicKey } from '../services/llm.client.js';
+import { harnessExists, unsupportedLanguageMessage } from '../services/harness.service.js';
 import {
   runSeed,
   DEFAULT_SEED_TOPICS,
@@ -66,27 +64,6 @@ export const SETUP_DISMISSED_SETTING = 'setup.dismissed';
  * first run can cost, which is roughly a coffee.
  */
 const MAX_PER_SLOT = 3;
-
-/**
- * The repo root, resolved from this module rather than from `process.cwd()`.
- *
- * The service is started by systemd with a WorkingDirectory, by `bin/start`
- * from the repo, and by a developer from wherever they happen to be standing.
- * Only one of those three is guaranteed.
- */
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-
-/**
- * Does a sandbox harness exist for this language?
- *
- * Deliberately the same question `cg_buildable_languages` asks in
- * bin/lib/languages.sh, and deliberately asked of the same directory: a
- * hardcoded list here would be a second source of truth that goes stale the
- * moment `test-harness/java/` lands.
- */
-function harnessExists(language: string): boolean {
-  return existsSync(path.join(REPO_ROOT, 'test-harness', language, 'Dockerfile'));
-}
 
 function languageStates(): SetupLanguageState[] {
   return LANGUAGES.map((language) => ({
@@ -191,12 +168,7 @@ setupRoutes.post('/setup/seed', async (c) => {
   // problem and then fail every canonicalization — the most expensive possible
   // way to learn that Java is not finished.
   if (!harnessExists(language)) {
-    return c.json(
-      {
-        error: `${LANGUAGE_META[language].displayName} has no sandbox harness in this build yet — pick another language.`,
-      },
-      400
-    );
+    return c.json({ error: unsupportedLanguageMessage(language) }, 400);
   }
 
   const perSlotRaw = body.perSlot === undefined ? 2 : Number(body.perSlot);

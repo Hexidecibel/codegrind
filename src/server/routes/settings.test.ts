@@ -94,7 +94,7 @@ describe('PUT /api/settings', () => {
   });
 
   it('round-trips back to javascript', async () => {
-    await put({ language: 'java' });
+    await put({ language: 'go' });
     const res = await put({ language: 'javascript' });
     expect(await res.json()).toEqual({ language: 'javascript', apiKey: NO_KEY });
     expect(db.getActiveLanguage()).toBe('javascript');
@@ -105,6 +105,34 @@ describe('PUT /api/settings', () => {
     expect(res.status).toBe(400);
     expect((await res.json()).error).toContain('language must be one of');
     expect(db.getActiveLanguage()).toBe('javascript');
+  });
+
+  it('rejects a language this build has no sandbox harness for', async () => {
+    // The regression this route was missing. Java is a real member of LANGUAGES
+    // — `isLanguage('java')` is true and always will be — but there is no
+    // `test-harness/java/`, so storing it hands the user an app where every
+    // problem load spends MAX_GEN_ATTEMPTS generation calls and then fails with
+    // a message blaming the model for erroring on its own tests.
+    const res = await put({ language: 'java' });
+    expect(res.status).toBe(400);
+    const { error } = (await res.json()) as { error: string };
+    expect(error).toContain('Java');
+    expect(error).toContain('no sandbox harness');
+    // Not "must be one of" — Java IS one of them. The message has to say the
+    // real reason or the user goes looking for a typo.
+    expect(error).not.toContain('must be one of');
+    expect(db.getActiveLanguage()).toBe('javascript');
+  });
+
+  it('accepts every language that does have a harness on disk', async () => {
+    // The gate must be the filesystem, not a hardcoded denylist: when
+    // test-harness/java/Dockerfile lands this route starts accepting it with no
+    // edit here, and until then nothing else is collateral damage.
+    for (const language of ['javascript', 'python', 'go']) {
+      const res = await put({ language });
+      expect(res.status, language).toBe(200);
+      expect(db.getActiveLanguage()).toBe(language);
+    }
   });
 
   it('rejects casing variants rather than papering over them', async () => {
@@ -128,7 +156,7 @@ describe('PUT /api/settings', () => {
 
   it('commits nothing when one field of several is invalid', async () => {
     db.setActiveLanguage('python');
-    const res = await put({ language: 'java', favouriteColour: 'blue' });
+    const res = await put({ language: 'go', favouriteColour: 'blue' });
     expect(res.status).toBe(400);
     // The valid half must not have landed — a half-applied settings write is how
     // you end up serving a language whose bank is empty.

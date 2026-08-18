@@ -28,6 +28,7 @@ import { Hono } from 'hono';
 import type { SettingsResponse } from '../../shared/types.js';
 import { LANGUAGES, isLanguage } from '../../shared/languages.js';
 import { getActiveLanguage, setActiveLanguage } from '../services/db.js';
+import { harnessExists, unsupportedLanguageMessage } from '../services/harness.service.js';
 import * as apikey from '../services/apikey.service.js';
 
 export const settingsRoutes = new Hono();
@@ -54,10 +55,21 @@ interface SettingWriter {
 
 const WRITERS: Record<string, SettingWriter> = {
   language: {
-    validate: (value) =>
-      isLanguage(value) ? null : `language must be one of: ${LANGUAGES.join(', ')}`,
+    // TWO checks, not one, because `isLanguage` and "this build can run it" are
+    // different questions and only the second one costs money to get wrong.
+    // Java is a real member of LANGUAGES and has no `test-harness/java/`, so a
+    // PUT that stopped at `isLanguage` would 200, store it, and hand the user an
+    // app where every problem load burns MAX_GEN_ATTEMPTS generation calls and
+    // then fails with a message blaming the model. Same gate, same sentence, as
+    // POST /api/setup/seed — see harness.service.ts.
+    validate: (value) => {
+      if (!isLanguage(value)) return `language must be one of: ${LANGUAGES.join(', ')}`;
+      if (!harnessExists(value)) return unsupportedLanguageMessage(value);
+      return null;
+    },
     commit: (value) => {
-      // Safe: validate() ran first and is the type guard.
+      // Safe: validate() ran first, is the type guard, and has already refused
+      // any language this build has no harness for.
       if (isLanguage(value)) setActiveLanguage(value);
     },
   },

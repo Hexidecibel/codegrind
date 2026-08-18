@@ -12,7 +12,13 @@ scoreboard. You do not pick topics or difficulty — the scheduler does, from wh
 have actually solved.
 
 **Languages:** JavaScript, Python and Go are wired up end to end. Java is deliberately
-half-finished (see [docs/adding-a-language.md](docs/adding-a-language.md)).
+half-finished and this build does not offer it anywhere — the wizard, the language
+picker and `PUT /api/settings` all derive that from `test-harness/java/` not existing
+(see [docs/adding-a-language.md](docs/adding-a-language.md)).
+
+**Models:** Claude, or any OpenAI-compatible endpoint you already run — llama.cpp,
+llama-swap, vLLM, Ollama, LM Studio — including with no API key at all. You choose in
+the browser on first run; see [Which model writes your problems](#which-model-writes-your-problems).
 
 ---
 
@@ -46,7 +52,7 @@ codegrind setup  /home/you/src/codegrind
   ✓ listening on http://localhost:9416
 
   → open http://localhost:9416 to finish setup
-    It will ask for an Anthropic API key, then stock your problem bank.
+    It will ask which model should write your problems, then stock the bank.
 
     bin/status  how it is doing      bin/stop   stop the server
     bin/logs    tail the log         bin/setup  safe to run again
@@ -58,9 +64,51 @@ minutes)…` and takes a few minutes and ~3 GB of disk. A re-run of `bin/setup` 
 that skips everything unchanged and finishes in about half a second — it is meant to be
 re-run.
 
-The browser then walks you through four screens: paste an Anthropic key (checked against
-Anthropic before it is stored), pick a language, optionally stock the bank with 8
-starter problems, and start your first session.
+The browser then walks you through four screens: **pick who writes the problems**
+(Claude, or a model you already run yourself), pick a language, optionally stock the
+bank with 8 starter problems, and start your first session.
+
+### Which model writes your problems
+
+codegrind is provider-agnostic, and this is the part worth knowing before you start.
+The first wizard screen offers two paths, and neither of them is a text box you can
+get subtly wrong:
+
+- **Claude.** Paste an Anthropic key. It is checked against Anthropic before it is
+  stored — a `models.list` call, which costs nothing — and then kept in this machine's
+  SQLite database, never in `.env`. Best quality; a few cents an hour.
+- **Your own model — any OpenAI-compatible endpoint.** llama.cpp, llama-swap, vLLM,
+  Ollama, LM Studio, or anything else speaking `/v1/chat/completions`. Type the base
+  URL including the `/v1` segment, press Models, and choose from what that server
+  actually advertises in `GET /v1/models`. **No API key at all** is the normal case
+  here; there is a collapsed field for the rare endpoint behind a gateway that wants a
+  bearer token. Slower than Claude, and free.
+
+Either way the choice is *proved before it is stored*, and the two paths prove
+different things because different things go wrong. A key is checked with a real
+`models.list` call against Anthropic — the only thing that tells a typo from a revoked
+key. A local endpoint gets the harder test: a genuine **forced tool call** against the
+model you picked, timed, so the screen can tell you roughly how long one generated
+problem will take on it. Ten of this app's eleven LLM calls are forced tool calls, so a
+model that answers with prose instead is refused right there, with a message naming the
+likely fix (usually llama.cpp started without `--jinja`) rather than failing three
+screens later inside a 30-second generate. Nothing is stored when the check fails.
+
+A local install is never asked for an Anthropic key — not by the wizard, not by the
+seed step, not by `bin/seed-bank`. Two roles are routed independently: the
+**workhorse** (generation, hints, session plans, primers, lessons, coaching) and the
+**tutor** (the chat behind `POST /api/ask`). The tutor defaults to matching the
+workhorse's **provider**, so local stays local and no bill appears that nobody agreed
+to; pointing one of them at Claude while the other runs locally is supported and opt-in.
+On the Claude path the two **models** differ on purpose — the coach runs on the larger,
+dearer one, because it is one call per question you actually ask. The wizard's last
+screen and the Settings page both name the two models by the job they do, and Settings
+can pin the coach to the same model that writes your problems. There is no failover — if your endpoint is down, calls fail
+loudly and name the endpoint and the model rather than quietly becoming Claude calls.
+
+All of it is changeable later from the **Settings** tab, which hosts the same control.
+A deploy can pin any of it from the environment, which then wins over anything saved
+in the browser — see [docs/operations.md](docs/operations.md#configuration).
 
 ### What you need first
 
@@ -70,7 +118,7 @@ starter problems, and start your first session.
 | **Docker** | Daemon reachable, and you in the `docker` group. Every submission runs in a `--network none --read-only --cap-drop=ALL` container. There is no fallback that runs your code in-process. |
 | **~3 GB free disk** | Where Docker stores images. `bin/setup` hard-stops below 3 GB and warns below 6. |
 | **A free port** | 9416 by default. `bin/setup --port 9500` moves it and writes it to `.env`. |
-| **An Anthropic API key** | Asked for **in the browser**, not before `bin/setup`. It is stored in the database, never in `.env`. |
+| **Something to write the problems** | Either an **Anthropic API key** *or* an **OpenAI-compatible endpoint** you already run (llama.cpp, llama-swap, vLLM, Ollama, LM Studio). Asked for **in the browser**, not before `bin/setup`. A key is stored in the database, never in `.env`; a local endpoint usually needs no key at all. |
 
 Nothing else. No secret manager, no external services.
 
@@ -88,7 +136,7 @@ bin/setup --check         # preflight only: report, change nothing
 
 ## The daily loop
 
-Four tabs. Three of them are the loop.
+Five tabs. Three of them are the loop.
 
 **Grind** — the main event. Press start and the app plans a sitting, then serves one
 problem at a time. It picks each one itself from an intent: `warm-up`, `reinforce`,
@@ -108,7 +156,9 @@ ledger, an activity heatmap and trend charts. Per-language, except your streak a
 lessons-read count, which are global.
 
 (**Manual** is the fourth tab: pick a topic and difficulty yourself. It is also where
-the language picker lives.)
+the language picker lives. **Settings** is the fifth, and the only one that is not a
+place you practise: how you are currently routed, which model answers — the same
+control the wizard's first screen uses, key and all — and the same language picker.)
 
 Progression is a tier ladder per topic: **3 distinct problems solved at a difficulty
 with zero hints** completes that tier, and completing `easy` on a topic's prerequisites
@@ -159,7 +209,9 @@ browser (React + Vite, Monaco on desktop / CodeMirror on mobile)
 Hono server (single process, tsx)
    │
    ├── scheduler.service   free, deterministic: what to serve next
-   ├── llm.service         Claude: generate, coach, hint, plan, lessons
+   ├── llm.service         generate, coach, hint, plan, lessons — says WHAT it wants
+   │    └── llm.client     …and this is the only file that knows WHO answers:
+   │                       Anthropic, or an OpenAI-compatible endpoint
    ├── bank.service        generate → canonicalize → store
    ├── sandbox.service ──► bin/run-submission ──► docker run --network none --read-only
    └── db.ts               one SQLite file, WAL
@@ -188,7 +240,7 @@ Read next:
 
 ```
 export PATH="$HOME/.nvm/versions/node/v22.22.0/bin:$PATH"   # or nvm use 22
-npx vitest run       # 319 tests, no database, no network, no docker
+npx vitest run       # 448 tests, no database, no network, no docker
 npx tsc -b           # typecheck
 bin/build            # typecheck + bundle + precompress into dist/
 ```
