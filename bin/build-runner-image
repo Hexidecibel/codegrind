@@ -67,23 +67,15 @@ for lang in "${LANGS[@]}"; do
 
   if [ "${SELFTEST}" -eq 1 ]; then
     echo "==> Conformance gate: ${image} --selftest"
-    # Split the run command the same way bin/run-submission does. Same sandbox
-    # flags too — a selftest that passed with privileges the real thing does not
-    # have would be proving something else.
-    read -r -a cmd <<< "${CG_CMD[$lang]}"
-    if ! docker run --rm \
-        --network none \
-        --memory="${CG_MEMORY[$lang]}" \
-        --cpus="${CG_CPUS}" \
-        --pids-limit="${CG_PIDS[$lang]}" \
-        --read-only \
-        --tmpfs "${CG_TMPFS[$lang]}" \
-        --cap-drop=ALL \
-        --security-opt no-new-privileges \
-        --label "${CG_LABEL}" \
-        "${image}" "${cmd[@]}" --selftest; then
+    # cg_selftest_image runs it with the same sandbox flags bin/run-submission
+    # uses — a selftest that passed with privileges the real thing does not have
+    # would be proving something else, and the Go image's build-cache probe only
+    # fails under those flags. bin/deploy and bin/setup call the same helper on
+    # images that already exist.
+    if ! cg_selftest_image "${lang}"; then
       echo "" >&2
-      echo "FAIL: ${lang} runner disagrees with test-harness/conformance/equality-cases.json." >&2
+      echo "FAIL: the ${lang} runner failed its own gate (conformance fixture, or — for" >&2
+      echo "      go — the build-cache trim probe reported just above)." >&2
       echo "      The image is being removed so it cannot run a submission." >&2
       echo "      Fix the runner (or the fixture, if the SPEC is what changed) and rebuild." >&2
       docker rmi -f "${image}" >/dev/null 2>&1 || true

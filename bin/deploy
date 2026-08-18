@@ -53,12 +53,23 @@ echo "==> Ensuring sandbox runner images"
 # "ensuring" an image nothing runs.
 # shellcheck source=lib/languages.sh
 source "$REPO/bin/lib/languages.sh"
+#
+# PRESENT IS NOT THE SAME AS GOOD, and this loop learned that the hard way. It
+# used to accept any image whose tag existed, so when the Go image started
+# failing every compiling submission after 24 hours (`go: failed to trim cache`
+# — see test-harness/go/Dockerfile) no redeploy could fix it: the tag was there,
+# so the deploy called it present and moved on. Each image now has to pass its
+# own gate, run with the production sandbox flags, or it is rebuilt. Costs about
+# a second per language.
 missing=()
 while read -r lang; do
-  if docker image inspect "${CG_IMAGE[$lang]}" >/dev/null 2>&1; then
-    echo "    ${CG_IMAGE[$lang]} present"
-  else
+  if ! docker image inspect "${CG_IMAGE[$lang]}" >/dev/null 2>&1; then
     echo "    ${CG_IMAGE[$lang]} missing"
+    missing+=("$lang")
+  elif cg_selftest_image "$lang" >/dev/null 2>&1; then
+    echo "    ${CG_IMAGE[$lang]} present, gate passes"
+  else
+    echo "    ${CG_IMAGE[$lang]} present but FAILS its gate — rebuilding"
     missing+=("$lang")
   fi
 done < <(cg_buildable_languages "$REPO")

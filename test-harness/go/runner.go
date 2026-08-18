@@ -36,8 +36,8 @@
 //
 // THE SAME BINARY IS BOTH HALVES. /app/cgrun is built at IMAGE build time from
 // this file plus shim_stub.go (a cgEntry that returns nil), which is what lets
-// --selftest run with no compile step at all. At run time shim_stub.go is left
-// behind and the real shim takes its place.
+// --selftest check the comparator with no compile step at all. At run time
+// shim_stub.go is left behind and the real shim takes its place.
 //
 // ---------------------------------------------------------------------------
 // EVERY TOP-LEVEL NAME IN THIS FILE IS PREFIXED `cg`
@@ -1146,10 +1146,14 @@ func cgCleanDiagnostics(out, dir string) string {
 // =============================================================================
 // --selftest — the conformance gate
 // =============================================================================
-// Runs in the BAKED binary, with no compile step: the fixture exercises the
-// comparator and the serializer, neither of which needs the user's shim. That
-// keeps the post-build gate in bin/build-runner-image fast and keeps it honest
-// about testing the IMAGE rather than the working tree.
+// Runs in the BAKED binary. The fixture half needs no compile step at all — it
+// exercises the comparator and the serializer, neither of which needs the
+// user's shim — which keeps the post-build gate in bin/build-runner-image fast
+// and keeps it honest about testing the IMAGE rather than the working tree.
+//
+// The second half, cgSelftestCacheTrim below, DOES compile, because the thing
+// it proves (that a >24h-old image can still trim its build cache) has no
+// cheaper witness. It costs the gate about a third of a second.
 
 var cgSentinels = map[string]float64{
 	"nan":   math.NaN(),
@@ -1210,6 +1214,140 @@ type cgFixture struct {
 		Value any    `json:"value"`
 		JSON  string `json:"json"`
 	} `json:"serialization"`
+}
+
+// -----------------------------------------------------------------------------
+// The build-cache trim probe — the half of the gate that tests the IMAGE
+// -----------------------------------------------------------------------------
+// Everything above tests what the harness COMPUTES. This tests what the image
+// IS, and it exists because of a failure the fixture could never have caught:
+// `go build` rewrites $GOCACHE/trim.txt once every 24 hours and base.Fatalf()s
+// if it cannot, so a Go image was correct for exactly one day and then rejected
+// every COMPILING submission for the rest of its life. The whole incident, the
+// toolchain source it turns on, and the fix are written out in
+// test-harness/go/Dockerfile; this is the part that keeps it fixed.
+//
+// It has to FORCE the aged condition. Which branch Trim() takes is decided by
+// comparing the stamp against the clock, so a probe that just compiled would
+// pass on a fresh image and on a broken one alike — which is precisely how the
+// bug shipped. Writing a 2001 timestamp first is what makes the toolchain do
+// the thing that used to be fatal.
+//
+// bin/build-runner-image runs --selftest with the production sandbox flags
+// (--read-only, USER nobody, no network), so a Dockerfile edit that loses the
+// writable trim path fails the BUILD rather than the server, 24 hours later.
+
+// The stamp go compares against time.Now(): 2001-09-09, older than trimInterval
+// by two decades, so Trim() always takes the scan-and-rewrite branch.
+const cgStaleTrimStamp = 1000000000
+
+// cgCountCacheEntries counts the files in the 256 two-hex-digit subdirectories
+// of a GOCACHE. A trim that could reach the baked cache would change this.
+func cgCountCacheEntries(cacheDir string) (int, error) {
+	subdirs, err := os.ReadDir(cacheDir)
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	for _, sub := range subdirs {
+		if !sub.IsDir() || len(sub.Name()) != 2 {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(cacheDir, sub.Name()))
+		if err != nil {
+			return 0, err
+		}
+		total += len(entries)
+	}
+	return total, nil
+}
+
+func cgSelftestCacheTrim() (checks int, failures []string, note string) {
+	cacheDir := os.Getenv("GOCACHE")
+	if cacheDir == "" {
+		return 1, []string{"cachetrim: GOCACHE is unset, so this image has no baked build cache"}, ""
+	}
+	stamp := filepath.Join(cacheDir, "trim.txt")
+
+	before, err := cgCountCacheEntries(cacheDir)
+	if err != nil {
+		return 1, []string{fmt.Sprintf("cachetrim: could not read %s: %v", cacheDir, err)}, ""
+	}
+
+	// 1. The write that used to be impossible. This is the check that fails on
+	//    an image built before the fix, and it fails for the same reason and
+	//    through the same syscall the toolchain would have.
+	checks++
+	if err := os.WriteFile(stamp, []byte(strconv.Itoa(cgStaleTrimStamp)), 0o644); err != nil {
+		return checks, []string{fmt.Sprintf(
+			"cachetrim: %s is not writable as uid %d (%v)\n"+
+				"      `go build` rewrites that file once every 24h and dies if it cannot, so this\n"+
+				"      image would compile today and fail every compiling submission tomorrow.\n"+
+				"      Restore the `ln -s /tmp/... /gocache/trim.txt` line in test-harness/go/Dockerfile.",
+			stamp, os.Getuid(), err)}, ""
+	}
+
+	// 2. A real compile with the stamp a quarter-century stale, so Trim() runs.
+	//    go.mod is copied from the harness's own rather than written here: it
+	//    already declares a `go` directive this toolchain is known to accept.
+	dir, err := os.MkdirTemp("", "cgtrim")
+	if err != nil {
+		return checks, []string{fmt.Sprintf("cachetrim: could not create a build directory: %v", err)}, ""
+	}
+	defer os.RemoveAll(dir)
+	mod, err := os.ReadFile(filepath.Join(cgSrcDir(), "go.mod"))
+	if err != nil {
+		return checks, []string{fmt.Sprintf("cachetrim: harness go.mod is missing: %v", err)}, ""
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), mod, 0o644); err != nil {
+		return checks, []string{fmt.Sprintf("cachetrim: could not stage go.mod: %v", err)}, ""
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		return checks, []string{fmt.Sprintf("cachetrim: could not stage main.go: %v", err)}, ""
+	}
+	build := exec.Command("go", "build", "-o", filepath.Join(dir, "prog"), ".")
+	build.Dir = dir
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOPROXY=off", "GOFLAGS=-mod=mod", "GOTOOLCHAIN=local")
+	started := time.Now()
+	out, buildErr := build.CombinedOutput()
+	elapsed := time.Since(started)
+	checks++
+	if buildErr != nil {
+		return checks, []string{fmt.Sprintf(
+			"cachetrim: `go build` failed with a 24h-stale trim stamp (%v):\n      %s",
+			buildErr, strings.TrimSpace(string(out)))}, ""
+	}
+
+	// 3. The trim must actually have HAPPENED — a build that skipped it would
+	//    prove nothing, and the stamp is go's own record that it ran.
+	checks++
+	written, err := os.ReadFile(stamp)
+	if err != nil {
+		failures = append(failures, fmt.Sprintf("cachetrim: could not read back %s: %v", stamp, err))
+	} else if t, convErr := strconv.ParseInt(strings.TrimSpace(string(written)), 10, 64); convErr != nil {
+		failures = append(failures, fmt.Sprintf("cachetrim: %s is not a timestamp after the build: %q", stamp, written))
+	} else if t <= cgStaleTrimStamp {
+		failures = append(failures, fmt.Sprintf(
+			"cachetrim: the build did not rewrite %s (still %d) — the trim never ran, so this proves nothing", stamp, t))
+	}
+
+	// 4. And it must not have been able to EVICT anything. Every entry in the
+	//    baked cache is older than trimLimit on any image more than five days
+	//    old, so the only thing standing between the warm cache and the trim's
+	//    unlink() is the read-only rootfs. Assert it is still standing.
+	checks++
+	after, err := cgCountCacheEntries(cacheDir)
+	if err != nil {
+		failures = append(failures, fmt.Sprintf("cachetrim: could not re-read %s: %v", cacheDir, err))
+	} else if after != before {
+		failures = append(failures, fmt.Sprintf(
+			"cachetrim: the trim removed %d of %d cache entries — the warm cache is not read-only",
+			before-after, before))
+	}
+
+	note = fmt.Sprintf("a build with a 24h-stale trim stamp compiled in %dms and left all %d cache entries in place",
+		elapsed.Milliseconds(), before)
+	return checks, failures, note
 }
 
 func cgSelftest(path string) {
@@ -1288,9 +1426,18 @@ func cgSelftest(path string) {
 		}
 	}
 
+	// The image-level probe. It compiles, so it is deliberately LAST: a runner
+	// that disagrees with the fixture should say so without waiting on a build.
+	trimChecks, trimFailures, trimNote := cgSelftestCacheTrim()
+	checks += trimChecks
+	failures = append(failures, trimFailures...)
+
 	fmt.Fprintf(cgRealStdout, "selftest: go runner vs %s (fixture v%d)\n", path, spec.Version)
+	if trimNote != "" {
+		fmt.Fprintf(cgRealStdout, "  build cache: %s\n", trimNote)
+	}
 	if len(failures) == 0 {
-		fmt.Fprintf(cgRealStdout, "  PASS — %d checks over %d equality and %d serialization cases\n",
+		fmt.Fprintf(cgRealStdout, "  PASS — %d checks over %d equality and %d serialization cases, plus the build-cache trim\n",
 			checks, len(spec.Equality), len(spec.Serialization))
 		os.Exit(0)
 	}

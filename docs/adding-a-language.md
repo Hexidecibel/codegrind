@@ -246,8 +246,9 @@ keyword set, because the name is interpolated into generated source.
 `json.Unmarshal`, with no type metadata authored anywhere. Java's is
 `getGenericParameterTypes()` + `gson.fromJson(JsonElement, Type)`.
 
-**The three-mode single binary**: `--selftest` (no compile, so the post-build gate stays
-fast), DRIVER (compile, then exec), HARNESS (reflect and grade).
+**The three-mode single binary**: `--selftest` (the fixture half needs no compile, so the
+post-build gate stays fast; the build-cache probe after it does compile, once), DRIVER
+(compile, then exec), HARNESS (reflect and grade).
 
 **The payload goes to a FILE, not stdout.** Go needed this because package-level `var`
 initializers run before `main`, so no in-process capture can exist yet. Java's static
