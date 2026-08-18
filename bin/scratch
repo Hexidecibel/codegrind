@@ -93,8 +93,25 @@ cmd_env() {
   printf 'CODEGRIND_MODEL=%s\n' "${CODEGRIND_MODEL:-(unset)}"
   printf 'CODEGRIND_CHAT_MODEL=%s\n' "${CODEGRIND_CHAT_MODEL:-(unset -> matches workhorse)}"
   printf 'CODEGRIND_MODEL_DENY=%s\n' "${CODEGRIND_MODEL_DENY:-(unset)}"
-  # Presence only, never the value.
-  printf 'ANTHROPIC_API_KEY=%s\n' "${ANTHROPIC_API_KEY:+present}${ANTHROPIC_API_KEY:-absent}"
+  # PRESENCE ONLY, NEVER THE VALUE — and it has to be an `if`.
+  #
+  # This line used to be `"${ANTHROPIC_API_KEY:+present}${ANTHROPIC_API_KEY:-absent}"`,
+  # which reads like a ternary and is not one. The two expansions are not
+  # mutually exclusive: with the variable SET and non-empty, `:+` yields
+  # `present` AND `:-` yields the VALUE, so the output was `presentsk-ant-…` —
+  # the real key printed by `bin/scratch env`, by `bin/scratch status`, into
+  # shell scrollback, and into anything capturing that output. The failure is
+  # silent on the only machine where it matters: with no key set both halves
+  # collapse to `absent` and the line looks correct.
+  #
+  # Written out as a branch so there is exactly one expansion of the secret in
+  # the file and it is a test, not an interpolation. src/shared/no-secret-echo.test.ts
+  # runs this command with a sentinel key and fails if the sentinel appears.
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    printf 'ANTHROPIC_API_KEY=present\n'
+  else
+    printf 'ANTHROPIC_API_KEY=absent\n'
+  fi
 }
 
 cmd_start() {

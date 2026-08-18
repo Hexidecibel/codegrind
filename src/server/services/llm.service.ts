@@ -69,9 +69,17 @@ import { LlmToolCallError, type CallMeta, type LlmMessage, type ToolSpec } from 
  *
  * No adapter may reformat what it is handed here either — same reason.
  *
- * For `javascript` the assembled string is byte-identical to the constant this
- * replaced. That is the regression argument: JavaScript generation sends the
- * prompt it has always sent.
+ * For `javascript` the assembled string was byte-identical to the constant this
+ * replaced, which was the regression argument when the per-language assembly
+ * landed: JavaScript generation sent the prompt it had always sent.
+ *
+ * IT HAS MOVED ONCE SINCE, DELIBERATELY: the examples rule below. Problems came
+ * back with their examples written into the markdown statement AND into
+ * `examples[]`, and the pane rendered both, so every generated problem printed
+ * Example 1 twice. Changing this text costs one cold cache prefix per model, on
+ * one deploy, and llm.golden.test.ts's fixture had to be regenerated with
+ * `bin/capture-llm-bodies` to match — which is exactly the deliberate
+ * regeneration that comment describes, rather than a red test being made green.
  */
 export const GENERATE_SYSTEM_BY_LANGUAGE: Record<Language, string> = perLanguage(
   (p: LanguageProfile) =>
@@ -84,7 +92,8 @@ ${p.signatureRule}
 - Every test is { name, args, expected } where args is the ARGUMENT LIST (array) spread into the function, and expected is the exact return value (deep-equal compared). Inputs and outputs must be JSON-serializable (numbers, strings, booleans, null, arrays, plain objects).
 - Provide 2-3 visible sampleTests and 8-12 hiddenTests. Hidden tests MUST cover edge cases (empty input, single element, duplicates, negatives, boundaries, large-but-deterministic cases) beyond the samples.
 ${p.referenceRule}
-- The prompt is Markdown: a concise problem statement. examples[] are human-readable illustrations. constraints[] are short bullet strings.
+- The prompt is Markdown: a concise problem statement. It must NOT contain an examples section, worked examples, or sample input/output — those go in examples[] and ONLY there, because the app renders the statement and examples[] one after the other and anything in both is printed twice. constraints[] are short bullet strings.
+- examples[] are the human-readable illustrations: 2-3 of them, each with the input as it would be written, the returned output, and a short explanation.
 - pattern is the underlying algorithmic pattern tag (e.g. "two-pointer", "sliding-window", "hashing", "binary-search", "dynamic-programming").${
       p.authoringRules.length ? `\n${p.authoringRules.join('\n')}` : ''
     }
@@ -107,7 +116,16 @@ export const EMIT_PROBLEM_TOOL_BY_LANGUAGE: Record<Language, ToolSpec> = perLang
     type: 'object',
     properties: {
       title: { type: 'string', description: 'Short problem title.' },
-      prompt: { type: 'string', description: 'Full problem statement in Markdown.' },
+      prompt: {
+        type: 'string',
+        // "Full problem statement" was read as "the whole page", examples
+        // included, and the UI then rendered those a second time from
+        // examples[]. The schema says what belongs here and what does not,
+        // because the system prompt saying it once was not enough.
+        description:
+          'Problem statement in Markdown: what to compute, and the rules. No examples ' +
+          'section and no sample input/output — those belong in examples[] only.',
+      },
       pattern: { type: 'string', description: 'Underlying algorithmic pattern tag.' },
       examples: {
         type: 'array',

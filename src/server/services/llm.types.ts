@@ -275,6 +275,148 @@ export class LlmToolCallError extends Error {
   }
 }
 
+// -----------------------------------------------------------------------------
+// A tool call that collapsed into one of its own string fields
+// -----------------------------------------------------------------------------
+// THIS IS A GUARD, AND IT IS LABELLED AS ONE. It does not fix a defect in this
+// codebase — there is no defect here to fix. Every path was checked: nothing in
+// this app parses tool calls out of text (no `<invoke>`/`<parameter>` reader
+// exists anywhere in src/), there is no streaming and therefore no partial-JSON
+// accumulation (see the note at the top of this file), the Anthropic adapter
+// takes `tool_use.input` already parsed by the SDK, and the OpenAI-compatible
+// adapter does exactly one `JSON.parse` of `function.arguments` and THROWS on
+// failure rather than falling back to raw text. No code path here can build the
+// broken shape.
+//
+// What was observed in production is the model emitting it. On the coaching
+// call — the app's headline feature — `patternRecognition` came back as:
+//
+//     …nested loops.</patternRecognition> <parameter name="complexity">{"yours": "O(n)…
+//
+// i.e. the model wrote a well-formed tool call for the first few fields and then
+// serialized the REMAINING fields as tool-call markup INSIDE the last string it
+// was writing. The transport is happy — it is a valid tool_use block with a
+// valid string in that slot — so the brief rendered that markup verbatim into
+// CoachPanel, and `complexity`, having never been emitted as a real field, was
+// coerced to the honest-but-useless "unknown"/"unknown". Seen on 4 of 6 submits
+// across two different models, which is what rules out one model misbehaving.
+//
+// So the app-side defect is the ABSENCE OF VALIDATION: `structured()` accepted
+// anything that had the right JSON *type* and never asked whether the content
+// was a tool call that had fallen apart. This closes that.
+//
+// IT DETECTS AND REJECTS A SHAPE — it does not strip tags out of prose. That
+// distinction is deliberate: this app teaches programming, and a perfectly
+// legitimate lesson about parsing XML would contain tags. What is matched is
+// TOOL-CALL FRAMING naming THIS tool's own schema — `<parameter name="X">` where
+// X is a sibling property of the field it was found in, or a `</X>` close tag
+// for one, or an `<invoke>`/`<function_calls>` wrapper. A brief that genuinely
+// discusses XML does not name this tool's field list in tool-call syntax.
+//
+// Rejecting rather than repairing is the same call the adapters already make for
+// malformed JSON: the leaked text COULD be re-parsed to recover the missing
+// fields, but that means writing a parser for a broken format nobody specifies,
+// and getting it subtly wrong stores a plausible-looking wrong answer instead of
+// an obvious failure. `LlmToolCallError` is the established channel — bank
+// generation retries it with a varied prompt, and routes/submit.ts falls back to
+// the "coaching is temporarily unavailable" brief, which is a far better thing
+// to show a player than markup and two "unknown"s.
+
+/** `<parameter name="x">`, `</parameter>`, `<invoke …>`, `<function_calls>` — closing forms too. */
+const FRAMING_TAG = /<\/?\s*(?:antml:)?(function_calls|invoke|parameter)\b([^>]*)>/gi;
+/** `name="x"` inside such a tag. */
+const TAG_NAME = /name\s*=\s*"([^"]*)"/i;
+/**
+ * Any tool-call element at all, named or not. Used only as corroboration for
+ * the unmatched-close-tag rule below — never on its own, because on its own it
+ * is exactly the "regex-strip tags out of prose" mistake this avoids.
+ */
+const FOLLOWING_FRAMING = /<\/?\s*(?:antml:)?(?:function_calls|invoke|parameter)\b/i;
+
+/** Where a leak was found, and what gave it away. Both go into the error message. */
+export interface ToolCallLeak {
+  /** Dotted path to the offending string, e.g. `patternRecognition` or `missed[1]`. */
+  field: string;
+  /** The literal marker matched, clipped — enough to recognize without dumping the brief. */
+  marker: string;
+}
+
+/**
+ * Find tool-call framing that leaked into a STRING of an otherwise-valid result.
+ *
+ * Walks the whole result, not just the top level, because `missed` is an array
+ * of strings and a collapse can land in any of them.
+ */
+export function findLeakedToolCallFraming(
+  input: Record<string, unknown>,
+  tool: ToolSpec
+): ToolCallLeak | null {
+  // The tool's own field names. A tag naming one of these is the signature: the
+  // model was writing THIS schema, in markup, inside a value of THIS schema.
+  const fields = new Set(Object.keys(tool.schema.properties ?? {}));
+
+  const leakIn = (s: string): string | null => {
+    for (const m of s.matchAll(FRAMING_TAG)) {
+      const kind = m[1].toLowerCase();
+      // `<function_calls>` and `<invoke>` are the wrapper elements of a tool
+      // call and have no other reading in a coaching brief or a problem
+      // statement — no sibling check needed, and demanding one would miss the
+      // wrapper-only variant.
+      if (kind === 'function_calls' || kind === 'invoke') return m[0].slice(0, 120);
+      const named = TAG_NAME.exec(m[2] ?? '');
+      // `<parameter name="complexity">` where `complexity` is a sibling. The
+      // sibling check is what keeps a lesson that merely mentions a
+      // `<parameter>` element from tripping this.
+      if (named && fields.has(named[1])) return m[0].slice(0, 120);
+    }
+    // The other half of the observed payload: the model closed the field it was
+    // writing with a tag named after the FIELD rather than after `parameter`
+    // (`…nested loops.</patternRecognition>`). Three conditions, all required,
+    // because this half is the one that can be confused with real content:
+    //
+    //   * the name is a field of THIS tool;
+    //   * nothing opened it — a matched `<x>…</x>` pair is ordinary markup,
+    //     while an unmatched close is the torn edge of a serialized call;
+    //   * more tool-call framing FOLLOWS it. This is what makes the rule safe.
+    //     Several schema fields are also real HTML elements (`title` in
+    //     emit_problem, `code` in emit_lesson), so a lesson about HTML could
+    //     legitimately end up holding a bare `</code>`. It cannot legitimately
+    //     hold one with the next tool parameter written out after it, which is
+    //     precisely what a collapse looks like: the remaining fields have to go
+    //     somewhere, and they go here.
+    for (const field of fields) {
+      const close = `</${field}>`;
+      const at = s.indexOf(close);
+      if (at < 0 || s.includes(`<${field}>`)) continue;
+      if (FOLLOWING_FRAMING.test(s.slice(at + close.length))) return close;
+    }
+    return null;
+  };
+
+  const walk = (value: unknown, path: string): ToolCallLeak | null => {
+    if (typeof value === 'string') {
+      const marker = leakIn(value);
+      return marker ? { field: path, marker } : null;
+    }
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) {
+        const hit = walk(value[i], `${path}[${i}]`);
+        if (hit) return hit;
+      }
+      return null;
+    }
+    if (value && typeof value === 'object') {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        const hit = walk(v, path ? `${path}.${k}` : k);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+
+  return walk(input, '');
+}
+
 /** The call did not finish inside its budget. Names the model and the endpoint. */
 export class LlmTimeoutError extends Error {
   constructor(
