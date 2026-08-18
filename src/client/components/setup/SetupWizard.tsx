@@ -46,6 +46,7 @@ import {
   Boxes,
   ShieldCheck,
   Cpu,
+  Coins,
   Info,
 } from 'lucide-react';
 import type {
@@ -68,6 +69,7 @@ import {
   ENV_PINNED_TITLE,
 } from '@/client/components/setup/ProviderPicker';
 import { humanize } from '@/client/lib/format';
+import { summariseRoles, coachCostSentence } from '@/client/lib/role-summary';
 import { cn } from '@/lib/utils';
 
 /** How many problems per topic+difficulty slot a first run stocks. */
@@ -124,6 +126,47 @@ function Shell({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The two roles on the Ready screen, named by what they do.
+ *
+ * Small, and deliberately not a Badge row: a badge is a fact you glance at, and
+ * "your follow-up questions run on a more expensive model than your problems" is
+ * a fact somebody has to actually read. On the local path — and any time both
+ * roles resolve to the same model — the cost line is absent, because there is no
+ * extra cost to warn about and a warning that does not apply is how you train
+ * someone to skip the next one.
+ */
+function RolesReady({ llm }: { llm: SetupState['llm'] }) {
+  const summary = summariseRoles(llm);
+  const cost = coachCostSentence(summary);
+  return (
+    <div className="space-y-2 rounded-xl border border-border bg-card/60 p-3">
+      <RoleLine job="Problems, hints and lessons" model={summary.writerModel} />
+      <RoleLine job="Coach chat" model={summary.coachModel} />
+      {cost && (
+        <p className="flex items-start gap-1.5 border-t border-border/60 pt-2 text-xs leading-relaxed text-muted-foreground">
+          <Coins className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{cost}</span>
+        </p>
+      )}
+      {!cost && summary.sameModel && (
+        <p className="border-t border-border/60 pt-2 text-xs leading-relaxed text-muted-foreground">
+          One model for both jobs. Change either in Settings.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function RoleLine({ job, model }: { job: string; model: string }) {
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs">
+      <span className="text-muted-foreground">{job}</span>
+      <span className="min-w-0 truncate font-mono">{model || '(not set)'}</span>
     </div>
   );
 }
@@ -601,6 +644,15 @@ export function SetupWizard({ state: initial, onDone }: { state: SetupState; onD
             )
           )}
         </div>
+
+        {/* WHICH MODEL DOES WHICH JOB, before the first call is made rather than
+            after the first invoice. The wizard writes one configuration and it
+            lands in both role rows, but llm.client's Anthropic defaults are not
+            the same for both — the coach gets the bigger model. Labelled by the
+            JOB, because "workhorse" and "tutor" are words from the source. Both
+            ids come from GET /api/setup/state's resolved routing; nothing here
+            knows a model name. */}
+        <RolesReady llm={state.llm} />
         <Button
           className="w-full gap-1.5"
           size={controlSize}

@@ -1,3 +1,33 @@
+## =============================================================================
+## TEMPLATE — not a unit you can install by hand.
+## =============================================================================
+## `bin/install-units` renders this file for the machine it runs on and installs
+## the RESULT into /etc/systemd/system. Lines starting with `##` are notes to
+## whoever edits this template and are stripped on the way out; ordinary `#`
+## comments are kept, because several of them record incidents.
+##
+## The three @PLACEHOLDERS@ below are the only machine-specific values in it,
+## and each is derived exactly the way the rest of bin/ already derives it:
+##
+##   @CODEGRIND_REPO@      the repo root, from the script's own location
+##                         (`cd "$(dirname "${BASH_SOURCE[0]}")/.."`), the same
+##                         line bin/setup uses.
+##   @CODEGRIND_USER@      whoever ran bin/install-units — NOT root. That user is
+##                         the one in the `docker` group, and running the app as
+##                         root to reach the docker socket would be a far larger
+##                         blast radius than the problem it solves.
+##   @CODEGRIND_NODE_BIN@  the bin/ directory of a Node this app can actually
+##                         load, resolved by bin/lib/node.sh. better-sqlite3 is
+##                         ABI-pinned: under the wrong Node the process does not
+##                         warn, it hard-crashes at module load (a segfault on
+##                         Node 24). Pinning it here is what makes the service
+##                         and the CLI load the same binary.
+##
+## This file used to carry the author's own absolute paths verbatim —
+## /home/hexi/local/src/codegrind and a pinned nvm path — and install-units
+## copied it with `sudo install`. On anybody else's machine that is three broken
+## units and a failing timer, which is the first thing someone following
+## docs/operations.md would hit.
 [Unit]
 Description=codegrind (AI-coached coding-problem trainer — React+Hono, Monaco, Docker sandbox, Claude coach)
 After=network-online.target docker.service
@@ -5,13 +35,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=hexi
-WorkingDirectory=/home/hexi/local/src/codegrind
-EnvironmentFile=/home/hexi/local/src/codegrind/.env
+User=@CODEGRIND_USER@
+WorkingDirectory=@CODEGRIND_REPO@
+EnvironmentFile=@CODEGRIND_REPO@/.env
 Environment=HOST=127.0.0.1
 Environment=NODE_ENV=production
-Environment=PATH=/home/hexi/.nvm/versions/node/v22.22.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/home/hexi/.nvm/versions/node/v22.22.0/bin/npx tsx src/server/index.ts
+Environment=PATH=@CODEGRIND_NODE_BIN@:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=@CODEGRIND_NODE_BIN@/npx tsx src/server/index.ts
 Restart=always
 RestartSec=5
 

@@ -8,6 +8,8 @@ function role(source: Partial<LlmRoleStatus['source']> = {}): LlmRoleStatus {
   return {
     provider: 'openai-compatible',
     model: 'a-model',
+    // A local endpoint deliberately has no default model, so this is '' here.
+    defaultModel: '',
     endpoint: 'http://127.0.0.1:9600/v1',
     source: {
       provider: 'settings',

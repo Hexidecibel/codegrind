@@ -380,6 +380,107 @@ describe('switching back to Claude', () => {
 });
 
 // =============================================================================
+// The coach's model — the cost nobody chose
+// =============================================================================
+// llm.client has never given the two Anthropic roles the same default: the
+// workhorse is `claude-sonnet-5` and the tutor is `claude-opus-5`, deliberately,
+// because the tutor is one call per question actually asked. But
+// storeProviderConfig wrote the SAME row to both roles, so the split was
+// invisible: every coach follow-up ran on the dearer model and nothing said so.
+//
+// The decision was to keep Opus and surface it, which needs the tutor's model to
+// be a thing Settings can actually change — and, just as importantly, a thing
+// that survives the next unrelated save. These tests are the three states of
+// `chatModel` (absent / null / a model id) and the one that used to be a bug.
+//
+// Nothing here asserts a model id that this file invents: every expectation is
+// read back off `describeProviders()`, whose `defaultModel` is what llm.client
+// says the default is.
+describe('PUT /api/providers — which model answers the coach', () => {
+  const KEY = 'sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaWXYZ';
+
+  it('defaults the coach to a BIGGER model than the workhorse, and reports both', async () => {
+    apikey.store(KEY);
+    const body = await (await put({ provider: 'anthropic' })).json();
+    expect(body.llm.workhorse.provider).toBe('anthropic');
+    expect(body.llm.tutor.provider).toBe('anthropic');
+    // The fact the UI exists to surface: same configuration, two models.
+    expect(body.llm.tutor.model).not.toBe(body.llm.workhorse.model);
+    // And each role reports its OWN default, which is what lets the browser
+    // offer "back to the default" without keeping a copy of these ids.
+    expect(body.llm.tutor.defaultModel).toBe(body.llm.tutor.model);
+    expect(body.llm.workhorse.defaultModel).toBe(body.llm.workhorse.model);
+    expect(body.llm.tutor.source.model).toBe('default');
+  });
+
+  it('pins the coach to the workhorse’s model when asked', async () => {
+    apikey.store(KEY);
+    const writer = (await (await put({ provider: 'anthropic' })).json()).llm.workhorse.model;
+    const res = await put({ provider: 'anthropic', chatModel: writer });
+    expect(res.status).toBe(200);
+    const llm = (await res.json()).llm;
+    expect(llm.tutor.model).toBe(writer);
+    expect(llm.tutor.source.model).toBe('settings');
+    // The workhorse is untouched — one row changed, not both.
+    expect(llm.workhorse.model).toBe(writer);
+    expect(llm.workhorse.source.model).toBe('default');
+  });
+
+  it('null puts the role default back', async () => {
+    apikey.store(KEY);
+    const first = (await (await put({ provider: 'anthropic' })).json()).llm;
+    await put({ provider: 'anthropic', chatModel: first.workhorse.model });
+    const llm = (await (await put({ provider: 'anthropic', chatModel: null })).json()).llm;
+    expect(llm.tutor.model).toBe(first.tutor.defaultModel);
+    expect(llm.tutor.source.model).toBe('default');
+  });
+
+  // THE BUG THIS GUARDS. ProviderPicker's Claude branch posts
+  // `{provider:'anthropic'}` with nothing else every time somebody saves an API
+  // key. If an absent chatModel meant "reset", pasting a replacement key would
+  // silently move the coach back onto the more expensive model — the exact
+  // surprise the whole change exists to remove.
+  it('an unrelated re-save leaves an existing pin alone', async () => {
+    apikey.store(KEY);
+    const writer = (await (await put({ provider: 'anthropic' })).json()).llm.workhorse.model;
+    await put({ provider: 'anthropic', chatModel: writer });
+    const llm = (await (await put({ provider: 'anthropic' })).json()).llm;
+    expect(llm.tutor.model).toBe(writer);
+    expect(llm.tutor.source.model).toBe('settings');
+  });
+
+  it('switching to a local endpoint drops the pin — a Claude id is not a local id', async () => {
+    apikey.store(KEY);
+    const writer = (await (await put({ provider: 'anthropic' })).json()).llm.workhorse.model;
+    await put({ provider: 'anthropic', chatModel: writer });
+    const llm = (await (await put({ provider: 'openai-compatible', endpoint: ENDPOINT, model: MODEL })).json())
+      .llm;
+    expect(llm.workhorse.model).toBe(MODEL);
+    // Local stays local, and both roles run the one model that was validated.
+    expect(llm.tutor.provider).toBe('openai-compatible');
+    expect(llm.tutor.model).toBe(MODEL);
+  });
+
+  it('changing the local model moves the coach with it, never stranding it', async () => {
+    fake.models = [MODEL, 'Qwen3-other'];
+    await put({ provider: 'openai-compatible', endpoint: ENDPOINT, model: MODEL });
+    fake.servedModel = 'Qwen3-other';
+    const llm = (await (
+      await put({ provider: 'openai-compatible', endpoint: ENDPOINT, model: 'Qwen3-other' })
+    ).json()).llm;
+    expect(llm.workhorse.model).toBe('Qwen3-other');
+    expect(llm.tutor.model).toBe('Qwen3-other');
+  });
+
+  it('refuses a chatModel that is not a model id', async () => {
+    apikey.store(KEY);
+    const res = await put({ provider: 'anthropic', chatModel: 42 });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/chatModel/);
+  });
+});
+
+// =============================================================================
 describe('the environment still wins', () => {
   it('ignores a stored model once the deploy pins one, and says so', async () => {
     await put({ provider: 'openai-compatible', endpoint: ENDPOINT, model: MODEL });

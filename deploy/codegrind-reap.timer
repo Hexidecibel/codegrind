@@ -1,3 +1,11 @@
+## =============================================================================
+## TEMPLATE — rendered and installed by bin/install-units. This one has no
+## @PLACEHOLDERS@ (a timer names a unit, not a path), but it still goes through
+## the renderer so /etc gets the same generated banner as its siblings and
+## `bin/install-units --status` can compare like with like. `##` lines are
+## stripped on render; the plain `#` comments below record why the timer exists
+## and what its interval is worth, and they are kept.
+## =============================================================================
 [Unit]
 Description=codegrind — reap orphaned sandbox runner containers every 5 minutes
 

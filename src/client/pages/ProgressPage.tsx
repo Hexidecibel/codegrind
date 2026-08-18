@@ -30,6 +30,7 @@ import { TierLadder } from '@/client/components/reflect/TierLadder';
 import { ActivityHeatmap } from '@/client/components/reflect/ActivityHeatmap';
 import { TrendChart } from '@/client/components/reflect/TrendChart';
 import { MistakeLedger } from '@/client/components/reflect/MistakeLedger';
+import { FirstRun } from '@/client/components/reflect/FirstRun';
 import { HistoryRow } from '@/client/components/reflect/HistoryRow';
 import {
   DataTable,
@@ -38,6 +39,7 @@ import {
 } from '@/client/components/reflect/primitives';
 import { dayLabel, pct } from '@/client/components/reflect/chart';
 import { humanize, mistakeLabel, shortDate } from '@/client/lib/format';
+import { reflectEmptiness } from '@/client/lib/reflect-empty';
 import { Card } from '@/client/components/ui/card';
 
 export function ProgressPage() {
@@ -112,6 +114,12 @@ export function ProgressPage() {
   const totalAttempts = activity.reduce((n, d) => n + d.attempts, 0);
   const activeDays = activity.filter((d) => d.attempts > 0).length;
 
+  // Has anything ever been submitted in this language? Everything below reads
+  // this rather than testing a number of its own, so no two sections can
+  // disagree about whether the page is empty. See reflect-empty.ts for why
+  // "empty" is not simply "every tile is zero".
+  const empty = reflectEmptiness({ tiles, tree });
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-5xl space-y-8 p-4 pb-24 sm:p-6">
@@ -122,6 +130,10 @@ export function ProgressPage() {
             grind is actually working.
           </p>
         </header>
+
+        {/* 0 — only on a fresh install: what this page will become, and why the
+            rest of it is worth looking at before there is any data in it. */}
+        {empty.fresh && <FirstRun emptiness={empty} />}
 
         {/* 1 — the one sentence worth acting on today. */}
         <UnlockCard
@@ -180,7 +192,19 @@ export function ProgressPage() {
         </Section>
 
         {/* 3 — the state of play. */}
-        <StatTiles tiles={tiles} />
+        <div className="space-y-2">
+          <StatTiles tiles={tiles} />
+          {/* Six zeros with no caption is the single thing that made this page
+              look broken on day one. Four of these are per-language and only a
+              submission moves them; two are not, so the note says which. */}
+          {empty.fresh && (
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Four of these are this language&rsquo;s own and start on your first
+              submission. Lessons read and your streak are not — Study and every other
+              language move those too.
+            </p>
+          )}
+        </div>
 
         {/* 4 — the evidence. */}
         <Section
@@ -315,7 +339,11 @@ export function ProgressPage() {
 
         <Section title="Recent attempts">
           {attempts.length === 0 ? (
-            <Empty>No attempts recorded yet.</Empty>
+            <Empty>
+              {empty.fresh
+                ? 'Every submission lands here — the problem, whether it passed, how long it took and what the coach flagged.'
+                : 'Nothing in the recent window. Older work still counts towards the tree and the tiers above.'}
+            </Empty>
           ) : (
             <Card className="px-4">
               {attempts.map((a) => (
