@@ -38,6 +38,26 @@ function hasHarness(language: Language): boolean {
   return fs.existsSync(path.join(REPO_ROOT, 'test-harness', language, 'Dockerfile'));
 }
 
+/**
+ * The languages this build deliberately cannot run yet.
+ *
+ * ASSERTED, not skipped. This list used to be a `continue` in the middle of one
+ * test, which made "Java has no harness" a thing the suite quietly tolerated
+ * rather than a thing it knew — and that is precisely why nothing caught the
+ * language picker offering Java anyway, at a cost of three generation calls and
+ * an error blaming the model. Naming it here turns the same fact into a claim,
+ * so the day `test-harness/java/` lands this file fails and points at every
+ * other surface that has to be told.
+ *
+ * When a language is finished: delete it from this array and the rest follows.
+ */
+const PENDING: readonly Language[] = ['java'];
+
+/** Read a source file from the repo, for the "is the gate wired up" checks. */
+function source(relative: string): string {
+  return fs.readFileSync(path.join(REPO_ROOT, relative), 'utf8');
+}
+
 describe('the language registry', () => {
   it('gives every language a meta entry keyed by itself', () => {
     expect(Object.keys(LANGUAGE_META).sort()).toEqual([...LANGUAGES].sort());
@@ -114,13 +134,19 @@ describe('agreement with bin/lib/languages.sh', () => {
 });
 
 describe('agreement with the harnesses and the editors', () => {
-  it('has a harness on disk for every language that is not still pending', () => {
-    // Java is the one language allowed to have no harness yet; anything else
-    // missing one means the app can serve a language nothing can run.
+  it('has a harness on disk for exactly the languages that are not still pending', () => {
+    // Both directions. A supported language that lost its harness means the app
+    // can serve a language nothing can run; a PENDING language that GAINED one
+    // means the rest of this file's claims are now stale and every gate built on
+    // "supported" is silently understating what the build can do.
     for (const l of LANGUAGES) {
-      if (l === 'java') continue;
-      expect(hasHarness(l), `test-harness/${l}/Dockerfile`).toBe(true);
+      expect(hasHarness(l), `test-harness/${l}/Dockerfile`).toBe(!PENDING.includes(l));
     }
+  });
+
+  it('keeps the default language out of the pending set', () => {
+    // A pending default would mean a fresh install cannot run anything at all.
+    expect(PENDING).not.toContain(DEFAULT_LANGUAGE);
   });
 
   it('has a CodeMirror grammar dependency for every buildable language', () => {
@@ -148,5 +174,93 @@ describe('agreement with the harnesses and the editors', () => {
     for (const l of LANGUAGES) {
       expect(entry, l).toContain(`languages/definitions/${LANGUAGE_META[l].monacoId}/register.js`);
     }
+  });
+});
+
+// =============================================================================
+describe('an unsupported language is not reachable', () => {
+  // The registry is a vocabulary, not a menu. Every surface that lets a
+  // language be CHOSEN — the wizard, the picker, the settings write — has to
+  // narrow it to what this build can run, and each of these is a place that
+  // previously did not, or still might stop.
+
+  it('answers "can this build run it" from the filesystem, for real', async () => {
+    const { harnessExists, isSupportedLanguage, supportedLanguages, unsupportedLanguageMessage } =
+      await import('../server/services/harness.service.js');
+
+    for (const l of LANGUAGES) expect(harnessExists(l), l).toBe(hasHarness(l));
+    expect(supportedLanguages()).toEqual(LANGUAGES.filter(hasHarness));
+
+    for (const l of PENDING) {
+      // `isLanguage` says yes — it is a real member of the registry. That is the
+      // whole trap, and why write paths need the stricter guard.
+      expect(isLanguage(l), l).toBe(true);
+      expect(isSupportedLanguage(l), l).toBe(false);
+      // And the sentence names the language and the real reason.
+      expect(unsupportedLanguageMessage(l)).toContain(LANGUAGE_META[l].displayName);
+      expect(unsupportedLanguageMessage(l)).toContain('no sandbox harness');
+    }
+    expect(isSupportedLanguage('kotlin')).toBe(false);
+  });
+
+  it('makes the settings write gate consult the harness, not just the registry', () => {
+    // PUT /api/settings is the only route that stores a language, and it used to
+    // stop at `isLanguage`. See settings.test.ts for the behavioural half; this
+    // is the seam that notices the import being dropped.
+    const route = source('src/server/routes/settings.ts');
+    expect(route).toContain('harness.service.js');
+    expect(route).toMatch(/harnessExists\(/);
+  });
+
+  it('makes the language picker offer the supported set rather than the registry', () => {
+    // LanguagePicker.tsx mapped `LANGUAGES` directly, which is how Java got into
+    // the Manual and Settings pickers while the wizard correctly hid it.
+    const picker = source('src/client/components/LanguagePicker.tsx');
+    expect(picker).toContain('supportedLanguageOptions');
+    expect(picker).not.toMatch(/LANGUAGES\.map\(/);
+  });
+
+  it('keeps the first-run wizard filtering on the same field', () => {
+    const wizard = source('src/client/components/setup/SetupWizard.tsx');
+    expect(wizard).toMatch(/state\.languages\.filter\(\(l\) => l\.supported\)/);
+  });
+});
+
+describe("the Go image's build cache", () => {
+  // The only language here with a cache to keep warm is the only one that can
+  // lose a day to it. `go build` rewrites $GOCACHE/trim.txt once every 24h and
+  // calls Fatalf if it cannot, so a Go image whose stamp was baked in
+  // root-owned compiled fine for one day and then failed every submission that
+  // COMPILES — with compile ERRORS still passing, because go prints its
+  // diagnostics before it dies.
+  //
+  // WHAT THIS TEST IS, AND WHAT IT IS NOT. Nothing in this suite starts docker,
+  // which is precisely why 448 passing tests said nothing while production was
+  // broken. So this asserts the LINE that keeps the trim stamp writable and
+  // claims nothing about behaviour. The behavioural proof forces the aged
+  // condition rather than trusting a fresh image, and lives in the two places
+  // that can actually run a container: the image's own --selftest probe
+  // (cgSelftestCacheTrim in test-harness/go/runner.go, which bin/build-runner-image
+  // runs under the production sandbox flags) and proof 6 of bin/smoke-go. This
+  // is the cheap seam that notices the Dockerfile line vanishing in an edit,
+  // one `npx vitest run` later instead of 24 hours later.
+  const DOCKERFILE = source('test-harness/go/Dockerfile');
+
+  it('points the cache trim stamp at a writable tmpfs path', () => {
+    // /tmp is the only writable surface a --read-only runner has, and it is
+    // fresh per container — so the trim succeeds no matter how old the image
+    // is, which is the whole requirement. Nothing self-heals otherwise:
+    // bin/deploy and bin/setup only BUILD an image that is missing.
+    expect(DOCKERFILE).toMatch(/ln -s\s+\/tmp\/\S+\s+\/gocache\/trim\.txt/);
+  });
+
+  it('leaves the baked cache itself read-only and in the image', () => {
+    // The fix has to stay a symlink for ONE file. Moving the whole GOCACHE onto
+    // a tmpfs, or copying 42MB into one per submission, would give up the warm
+    // cache — and a cold build measured inside this sandbox is 10.05s against a
+    // 10s compile budget, so that is not a slowdown, it is every submission
+    // failing.
+    expect(DOCKERFILE).toMatch(/GOCACHE=\/gocache/);
+    expect(DOCKERFILE).not.toMatch(/--tmpfs\s+\/gocache/);
   });
 });

@@ -36,19 +36,37 @@ export PATH="$HOME/.nvm/versions/node/v22.22.0/bin:$PATH"    # or: nvm use 22
 | `bin/restart` | `systemctl restart` + wait for health + `bin/status`. |
 
 Both wait for health on `$PORT` from `.env`, not a literal 9416.
-| `bin/install-units` | Install/refresh `deploy/*` into `/etc/systemd/system` and enable the reaper timer. `--status` shows what is installed and whether it has drifted from `deploy/`. Rewrites the unit but does **not** restart — a change to `codegrind.service` needs a `bin/restart` after. |
+| `bin/install-units` | **Render** `deploy/*` for this machine and install the result into `/etc/systemd/system`, then enable the reaper timer. `--status` shows what is installed, whether it has drifted, and which drop-ins are present. `--print [unit]` renders to stdout and changes nothing — no sudo, no `/etc`, which is how you check what it would write. Rewrites the unit but does **not** restart, so a change to `codegrind.service` needs a `bin/restart` after. |
 
 Three units live in `deploy/`:
 
-- **`codegrind.service`** — `Type=simple`, `User=hexi`, `EnvironmentFile=.env`,
-  `Restart=always`. Its `PATH` pins the same Node v22.22.0 the CLI scripts pick, so the
-  service and the build load the same `better-sqlite3` against the same ABI.
+They are **templates**, not units you can copy: `WorkingDirectory`, `User` and the
+pinned Node bin directory are `@CODEGRIND_REPO@`, `@CODEGRIND_USER@` and
+`@CODEGRIND_NODE_BIN@`, filled in by `bin/install-units` from the same three sources the
+rest of `bin/` uses — the script's own location, `${SUDO_USER:-$(id -un)}`, and
+`bin/lib/node.sh`. Lines beginning `##` are notes to whoever edits the template and are
+stripped on render; ordinary `#` comments are kept, because several of them are incident
+reports. `src/shared/deploy-units.test.ts` asserts both halves of that.
+
+- **`codegrind.service`** — `Type=simple`, the invoking (unprivileged) user,
+  `EnvironmentFile=.env`, `Restart=always`. Its `PATH` leads with the same Node bin
+  directory as its `ExecStart`, and both are the Node `bin/lib/node.sh` picks — so the
+  service and the CLI load the same `better-sqlite3` against the same ABI.
 - **`codegrind-reap.service`** — `Type=oneshot`, same unprivileged user, runs
   `bin/reap-runners`. `TimeoutStartSec=120` so a Docker hiccup cannot wedge the timer.
 - **`codegrind-reap.timer`** — every 5 minutes. It exists only for the case
   `bin/run-submission`'s `EXIT` trap cannot cover: the script itself SIGKILLed, leaving a
   container spinning a full core with nobody to remove it. Two of those once ran for 10
   days.
+
+**Host-local settings go in a drop-in, never in `deploy/`.** `bin/install-units` rewrites
+the unit on every deploy, so an edit in `/etc/systemd/system/codegrind.service` is lost;
+`/etc/systemd/system/codegrind.service.d/*.conf` is a separate file systemd merges over
+the unit, and the installer never reads, writes or removes one (`--status` lists them, so
+they are visible rather than invisible). This machine uses
+`codegrind.service.d/model-deny.conf` for `CODEGRIND_MODEL_DENY` — model ids that exist
+only on this box's LLM router, one of which starved the Plex transcoder. That list must
+not be in the repo, where it would be noise in everyone else's install.
 
 ## The sandbox
 
@@ -187,8 +205,40 @@ absent and **never touches an existing one**.
 | `ANTHROPIC_MODEL` | see `.env.example` | the workhorse: generation, hints, plans, primers, lessons, coaching |
 | `ANTHROPIC_CHAT_MODEL` | see `.env.example` | the tutor chat only (`POST /api/ask`) |
 | `ANTHROPIC_API_KEY` | unset | **optional.** If set, it wins over the stored key. If unset, the wizard's stored key is used. Do not hand-add it — see [troubleshooting.md](troubleshooting.md#the-api-key-vanished-from-env). |
+| `ANTHROPIC_BASE_URL` | Anthropic's own | where the Anthropic adapter points (`llm.anthropic.ts`). For a proxy or a gateway that speaks the Anthropic wire format. Unrelated to `CODEGRIND_ENDPOINT`, which is the OpenAI-compatible one. |
 | `CG_SCRATCH_DIR` | `$DATA_DIR/tmp` | where submissions are staged |
 | `CG_HOST_SCRATCH_DIR` | = `CG_SCRATCH_DIR` | the same directory's path **on the Docker host**. Identical today; the two exist so containerizing the app is two environment variables and a shared volume rather than a rewrite. |
+
+### Running on something other than Claude
+
+codegrind is provider-agnostic. Everything above keeps working unchanged; everything
+below is opt-in, and all of it can be set from the in-app wizard instead (Settings →
+which model answers) — **the environment wins, field by field**, and any field the
+environment pins is rendered read-only in the browser rather than offered as a write
+that would never take effect.
+
+Two roles are routed independently: the **workhorse** (generation, hints, plans,
+primers, lessons, coaching) and the **tutor** (`POST /api/ask` only). The tutor
+inherits the workhorse's provider *and* model unless told otherwise, which is what
+keeps a local install local — an unset tutor is never a silent Anthropic bill.
+
+Every one of these is read **once, at module load** (`llm.client.ts`), and a bad value
+throws at boot rather than at 3am on the first generate.
+
+| variable | default | |
+|---|---|---|
+| `CODEGRIND_PROVIDER` | `anthropic` | the workhorse's provider: `anthropic`, or `openai-compatible` for llama.cpp, llama-swap, vLLM, Ollama, LM Studio and anything else speaking `/v1/chat/completions`. Any other value is a boot error. |
+| `CODEGRIND_MODEL` | provider default | the workhorse model id, provider-neutral spelling. On the Anthropic path `ANTHROPIC_MODEL` is read first; on any other path the vendor-named variable is deliberately **not** consulted, so a leftover `ANTHROPIC_MODEL` cannot be sent to a local endpoint. There is no default for a local endpoint and never will be — picking one for you is how a router hands the job to whatever is cheapest to load, which on some fleets is a CPU. |
+| `CODEGRIND_CHAT_PROVIDER` | = workhorse's | the tutor's provider. Set it to keep the tutor on Claude while the rest runs locally, or the reverse. |
+| `CODEGRIND_CHAT_MODEL` | = workhorse's | the tutor model id. `ANTHROPIC_CHAT_MODEL` is read first on the Anthropic path, same rule as above. |
+| `CODEGRIND_ENDPOINT` | unset | the OpenAI-compatible base URL, **including the version segment** (`http://127.0.0.1:9600/v1`). Only meaningful for `openai-compatible`. |
+| `QWEN_URL` | unset | fallback for `CODEGRIND_ENDPOINT`, for boxes that already export one. Read only when `CODEGRIND_ENDPOINT` is empty. |
+| `CODEGRIND_API_KEY` | unset | bearer token for that endpoint, if it wants one. Most local fleets do not. Write-only: it reaches the adapter and no `GET` ever returns it. |
+| `CODEGRIND_MODEL_DENY` | empty | comma-separated model ids this install must **never** send work to. codegrind cannot know a router's topology — an id in `/v1/models` can be mapped onto a CPU on this very machine, where a big model will fight the rest of the box for cores. Denied ids are filtered out of the wizard's model list *and* refused at call time. |
+| `CODEGRIND_MAX_OUTPUT_TOKENS` | `8000` | the ceiling on what any single call may ask a local endpoint for. The default is a measurement, not a guess: a real generated problem is 976–5337 output tokens, while a generation that degenerates into repetition runs to whatever budget it is handed. Raise it if your model genuinely writes bigger problems and you see good ones cut off; `0` removes the ceiling and sends each call site's own number. Not an integer ≥ 0 is a boot error. |
+
+There is **no failover**. If the configured endpoint is down, calls fail loudly, naming
+the endpoint and the model; they never silently become Anthropic calls.
 
 `$DATA_DIR/.setup/` holds `bin/setup`'s idempotency stamps and its logs — `npm.log`,
 `build.log`, `db.log`, `images.log`. When a step fails, the error names the log.
@@ -200,10 +250,11 @@ script derives its repo root from its own location (`REPO="$(cd "$(dirname
 "${BASH_SOURCE[0]}")/.." && pwd)"`), picks its Node through `bin/lib/node.sh`, and reads
 `PORT`/`DATA_DIR` from `.env`. What is left, deliberately:
 
-- **`deploy/*.service` hardcodes absolute paths** — `WorkingDirectory`, `EnvironmentFile`
-  and the pinned Node on the unit's `PATH`. These are one machine's service install, not
-  the app; running codegrind as a service anywhere else means editing them. Nothing in the
-  first-run path (`setup` → `start`) touches systemd at all.
+- **`deploy/*` no longer hardcodes anything** — it did, and that was the hole in the
+  check above: `bin/install-units` copied one machine's `WorkingDirectory`, `User` and
+  pinned Node straight into `/etc`. The units are templates now and the installer renders
+  them. Nothing in the first-run path (`setup` → `start`) touches systemd at all, so
+  running codegrind as a service remains entirely optional.
 - **`bin/deploy` restarts the system unit and calls `sudo`.** It is the author's deploy,
   and it is the one script in `bin/` that assumes an installed service. On any other
   machine the equivalent is `bin/build && bin/stop && bin/start`.

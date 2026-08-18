@@ -341,6 +341,30 @@ Un-canonicalized problems are never served again (`findUnusedProblem` filters
 one at all — every other language throws at generation time rather than storing an
 unverified problem.
 
+### Every Go submission fails with `go: failed to trim cache`
+
+```
+go: failed to trim cache: open /gocache/trim.txt: permission denied
+```
+
+The image is older than 24 hours and predates the fix. `go build` trims its build cache
+once a day, which means rewriting `$GOCACHE/trim.txt`, and it calls `Fatalf` when it
+cannot — so an image whose trim stamp was baked in root-owned worked for exactly one day
+and then rejected every submission that COMPILES. Submissions with compile *errors* kept
+passing, because go prints its diagnostics before it dies, which is why this reads as "only
+correct Go is broken".
+
+```bash
+bin/build-runner-image go      # rebuilds, and the gate now proves the aged case
+bin/smoke-go                   # proof 6 forces a 24h-stale stamp against the image on disk
+```
+
+Current images point `trim.txt` at the runner's tmpfs, so the trim succeeds at any age.
+`bin/deploy` and `bin/setup` no longer treat "the tag exists" as "the image works" — each
+one is put through its own `--selftest` and rebuilt if it fails, which is what lets this
+fix reach a box whose image was built before it. The reasoning, the measurements and the
+two non-fixes are in `test-harness/go/Dockerfile`.
+
 ### A Go problem fails to compile the moment I open it
 
 Its `starterCode` predates the rule that a compiled language's starter must be a
@@ -410,7 +434,22 @@ cannot serve a problem the plan was never built for. A stale grind snapshot in
 
 ### Java is missing from the language picker
 
-It is not finished, and the app derives that from `test-harness/java/Dockerfile` not
-existing rather than from a list anybody maintains. The wizard says "Java is not wired up
-in this build yet"; `POST /api/setup/seed` refuses it with a 400 before spending anything.
-See [adding-a-language.md](adding-a-language.md#what-java-still-owes).
+**Java is not supported in this build, and that is the intended state.** It is the one
+language in the registry with no sandbox harness, so there is nothing that could run a
+Java submission — which is why it is not offered anywhere a language can be chosen: not
+in the first-run wizard, not in the Manual-tab or Settings language picker, and not by
+`PUT /api/settings` or `POST /api/setup/seed`, which both answer a 400 saying "Java has
+no sandbox harness in this build yet".
+
+Every one of those surfaces derives that from `test-harness/java/Dockerfile` not
+existing (`src/server/services/harness.service.ts`), rather than from a list anybody
+maintains — so the day that harness lands, all of them start offering Java with no
+further edit. Do not try to surface it before then: picking a language with no runner
+spends a generation call per attempt (three per problem), fails every canonicalization
+because the image does not exist, and then reports the failure as *"the reference
+solution errored on too many of its own test inputs"* — which blames the model for what
+is actually a missing build. `src/shared/languages.test.ts` asserts the split in both
+directions so a half-added language fails the suite rather than the user.
+
+See [adding-a-language.md](adding-a-language.md#what-java-still-owes) for what finishing
+it involves.

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import { LANGUAGES, LANGUAGE_META, type Language } from '@/shared/languages';
-import { getSettings, updateSettings } from '@/client/lib/api';
+import { type Language } from '@/shared/languages';
+import type { SetupLanguageState } from '@/shared/types';
+import { getSettings, getSetupState, updateSettings } from '@/client/lib/api';
+import { supportedLanguageOptions } from '@/client/lib/supported-languages';
 import {
   Select,
   SelectContent,
@@ -23,6 +25,14 @@ import {
  * problem's language is baked into its reference solution and every `expected`
  * value derived from it. That is why the solve surface shows a read-only badge
  * instead of this control.
+ *
+ * IT OFFERS WHAT THIS BUILD CAN RUN, NOT WHAT THE REGISTRY LISTS. It used to map
+ * `LANGUAGES`, which includes Java, which has no sandbox harness — picking it
+ * stored a language whose every problem load burned three generation calls and
+ * then failed with an error blaming the model. The supported set is a fact about
+ * the SERVER's disk, so it comes from `GET /api/setup/state` (`languages[]
+ * .supported`), the same field the first-run wizard has always filtered on.
+ * There is deliberately no second list here to keep in step with that one.
  */
 export function LanguagePicker({
   disabled,
@@ -34,6 +44,10 @@ export function LanguagePicker({
 }) {
   const [language, setLanguage] = useState<Language | null>(null);
   const [saving, setSaving] = useState(false);
+  // Null until the server has answered. `supportedLanguageOptions` treats null
+  // as "offer nothing new" rather than "offer everything", so a failed or
+  // in-flight request can never surface a language this build cannot run.
+  const [languages, setLanguages] = useState<SetupLanguageState[] | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -43,6 +57,13 @@ export function LanguagePicker({
       })
       .catch(() => {
         /* leave it unset; the trigger shows a placeholder rather than a lie */
+      });
+    void getSetupState()
+      .then((s) => {
+        if (live) setLanguages(s.languages);
+      })
+      .catch(() => {
+        /* same: an unanswered question stays unanswered, it does not become yes */
       });
     return () => {
       live = false;
@@ -78,9 +99,9 @@ export function LanguagePicker({
         <SelectValue placeholder="Language" />
       </SelectTrigger>
       <SelectContent>
-        {LANGUAGES.map((l) => (
-          <SelectItem key={l} value={l}>
-            {LANGUAGE_META[l].displayName}
+        {supportedLanguageOptions(languages, language).map((o) => (
+          <SelectItem key={o.language} value={o.language} disabled={!o.selectable}>
+            {o.displayName}
           </SelectItem>
         ))}
       </SelectContent>
