@@ -8,6 +8,7 @@ import type {
   RevealResponse,
   ChatTurn,
   CoachingBrief,
+  CoachFixResponse,
   Prediction,
   TestCase,
   TestResult,
@@ -25,6 +26,7 @@ import {
 } from '../services/db.js';
 import { runTests } from '../services/sandbox.service.js';
 import { coach, askFollowup } from '../services/llm.service.js';
+import { stashFix, getFix } from '../services/coachfix.service.js';
 import { errorBody } from '../services/explain.service.js';
 
 /** Validate/normalize a client-supplied prediction, or undefined if absent/invalid. */
@@ -163,7 +165,7 @@ function coachingUnavailable(problem: ProblemRecord): CoachingBrief {
 //
 // It used to be a single JSON body, which meant the verdict — already computed,
 // already sitting in a variable — was held behind the coaching call. That call
-// is `role: 'workhorse'`, `maxTokens: 8000`, `thinking: 'adaptive'`, with a
+// is `role: 'workhorse'`, `maxTokens: 10000`, `thinking: 'adaptive'`, with a
 // budget of 180s on Anthropic and 300s on a local endpoint, and the whole wait
 // was covered by one static line of UI: "Running hidden tests and coaching your
 // solution…". Two minutes of not knowing whether you passed.
@@ -265,7 +267,20 @@ submitRoutes.post('/submit', async (c) => {
     // coaching failure must not lose the run.
     let coaching: CoachingBrief;
     try {
-      coaching = await coach(problem, code, result.results, prediction);
+      // `coach` hands back the brief and a SIDECAR of corrected code keyed by
+      // its index in `missed`. The corrected code never touches this stream:
+      // it is stashed server-side and the brief carries only the opaque handle
+      // it was stashed under, which is what POST /api/coaching/fix trades for
+      // the text after writing the reveal to the ledger. The sidecar is a
+      // separate return value rather than a field to be deleted here, because
+      // a field to be deleted is one forgotten code path away from shipping
+      // the answer to devtools.
+      const { brief, fixes } = await coach(problem, code, result.results, prediction);
+      coaching = brief;
+      for (const [index, fix] of fixes) {
+        const item = coaching.missed[index];
+        if (item) item.fixId = stashFix(problem.id, fix);
+      }
     } catch (err) {
       console.error('[submit] coaching failed:', err instanceof Error ? err.message : err);
       coaching = coachingUnavailable(problem);
@@ -371,5 +386,50 @@ submitRoutes.post('/reveal', async (c) => {
     return c.json(payload);
   } catch (err) {
     return c.json(errorBody('reveal', err), 500);
+  }
+});
+
+// POST /api/coaching/fix { fixId } — "show me what that line should have been".
+//
+// A sibling of /api/reveal, not a variant of it: that one takes a problemId and
+// returns the whole reference solution, this one takes an opaque handle and
+// returns a few lines. Same ledger, though, and deliberately so — a fix is
+// CORRECTED CODE, which makes it a reveal rather than a hint, and the ledger is
+// server-side for the reason db.ts states at the reveal table: so that a
+// reload, a second tab, or a hand-rolled POST cannot launder a revealed problem
+// back into tier credit. Written BEFORE the body is returned, same as /reveal.
+//
+// It is not given its own ledger column. `markSolutionRevealed` is idempotent
+// and every consumer only ever asks `hintsUsed > 0` — `max(a, 1, 1)` is
+// `max(a, 1)` — so a `kind` column would be a distinction nothing reads.
+//
+// THE ONE ACCEPTED CONSEQUENCE. A coaching brief only exists AFTER the attempt
+// row for that submit is written, so peeking at a fix prices the NEXT submit of
+// this problem and never the one that produced the brief. If the player never
+// submits this problem again, the peek is free in practice; `countCleanSolves`
+// dedupes by problemId, so a tier credit already banked cannot be clawed back
+// either. That is exactly how the Answer button behaves today — reveal, then
+// look, then move on — and making the fix behave differently would mean
+// charging retroactively for something already recorded. Deliberately NOT
+// paired with an `enqueueReview(problem.id, 'hinted')` to make the price bite:
+// that would be a review-queue write happening outside a submit, which is a new
+// kind of surprise for three lines of gain.
+submitRoutes.post('/coaching/fix', async (c) => {
+  try {
+    const body = await c.req.json<{ fixId?: string }>();
+    const fixId = typeof body.fixId === 'string' ? body.fixId : '';
+    const fix = fixId ? getFix(fixId) : null;
+    // A 404 here is honest and expected, not an error condition: the fixes live
+    // in memory for the same reason the brief itself is never persisted, so a
+    // restart (or a very old tab) legitimately has nothing to hand back. The
+    // ledger is NOT written on this path — nothing was revealed.
+    if (!fix) return c.json({ error: 'that fix is no longer available' }, 404);
+
+    markSolutionRevealed(fix.problemId);
+
+    const payload: CoachFixResponse = { before: fix.before, after: fix.after, assisted: true };
+    return c.json(payload);
+  } catch (err) {
+    return c.json(errorBody('coaching fix', err), 500);
   }
 });

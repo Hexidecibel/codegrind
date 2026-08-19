@@ -18,6 +18,7 @@ import type {
   ChatTurn,
   AskResponse,
   RevealResponse,
+  CoachFixResponse,
   TestResult,
   Prediction,
   Primer,
@@ -253,6 +254,28 @@ export function revealSolution(problemId: string): Promise<RevealResponse> {
   return request<RevealResponse>('/api/reveal', {
     method: 'POST',
     body: JSON.stringify({ problemId }),
+  });
+}
+
+/**
+ * POST /api/coaching/fix — the corrected code behind one "what you missed"
+ * bullet, in exchange for a recorded reveal.
+ *
+ * The fix is NOT in the coaching brief. The brief carries an opaque `fixId` and
+ * nothing else, so the corrected code is not sitting in devtools waiting to be
+ * read without clicking — which is the only reason the reveal gate means
+ * anything. The server writes the ledger row before it answers, exactly as
+ * `revealSolution` does.
+ *
+ * A 404 is a normal outcome, not a bug: the fixes live in server memory for as
+ * long as the brief is plausibly on screen, and a restart or a very old tab
+ * legitimately has nothing to hand back. Callers should say so plainly rather
+ * than treating it as a failure.
+ */
+export function revealCoachFix(fixId: string): Promise<CoachFixResponse> {
+  return request<CoachFixResponse>('/api/coaching/fix', {
+    method: 'POST',
+    body: JSON.stringify({ fixId }),
   });
 }
 

@@ -41,7 +41,26 @@ const COACHING_TOOL: ToolSpec = {
     type: 'object',
     properties: {
       approach: { type: 'string' },
-      missed: { type: 'array', items: { type: 'string' } },
+      // Objects, not strings, since the coach started anchoring each item to a
+      // quoted line of the submission. Copied to stay a faithful duplicate of
+      // EMIT_COACHING_TOOL — the detector below is schema-AWARE, and a schema
+      // that has drifted from the real one proves nothing about the real one.
+      // (Only the top-level field NAMES feed findLeakedToolCallFraming, so this
+      // particular edit changes no assertion. That is the point: it is kept in
+      // sync while it is still free to keep in sync.)
+      missed: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            note: { type: 'string' },
+            quote: { type: 'string' },
+            line: { type: 'number' },
+            fix: { type: 'string' },
+          },
+          required: ['note'],
+        },
+      },
       pattern: { type: 'string' },
       patternRecognition: { type: 'string' },
       complexity: { type: 'object' },
@@ -122,8 +141,11 @@ describe('the observed malformed coaching payload is detected', () => {
   });
 
   it('catches a leak inside an ARRAY member, not just a top-level string', () => {
-    // `missed` is a string[]; a collapse can land in any element, and a check
-    // that only walked the top level would sail past it.
+    // A collapse can land in any element of any array, and a check that only
+    // walked the top level would sail past it. Kept as a string[] on purpose:
+    // it is the payload that was actually observed, and it is also what a weak
+    // model still returns for `missed` regardless of the object schema — which
+    // is the same reason coerceMissed has a string branch.
     const leak = findLeakedToolCallFraming(
       {
         ...CLEAN_COACHING,
@@ -298,7 +320,7 @@ describe('coach() rejects the collapsed brief instead of rendering it', () => {
 
   it('still returns the brief when the model answers properly', async () => {
     answerWith(CLEAN_COACHING);
-    const brief = await llm.coach(PROBLEM, 'function pairSum() {}', RESULTS);
+    const { brief } = await llm.coach(PROBLEM, 'function pairSum() {}', RESULTS);
     expect(brief.patternRecognition).toContain('two pointers');
     expect(brief.complexity.yours).toBe('O(n^2) time, O(1) space');
     expect(brief.complexity.optimal).toBe('O(n) time, O(1) space');

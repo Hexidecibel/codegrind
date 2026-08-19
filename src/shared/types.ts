@@ -216,11 +216,49 @@ export interface Complexity {
   optimal: string;
 }
 
+/**
+ * A range of the candidate's own submitted source. 1-based and inclusive — the
+ * convention both editors' gutters already use, so no ±1 lives at the boundary.
+ *
+ * Resolved SERVER-SIDE from a quoted snippet, never taken from the model's line
+ * number (see src/shared/code-lines.ts for why, and for the refuse-on-ambiguity
+ * rule). An item with no anchor is normal and expected: an anchor is a bonus on
+ * top of the note, never a precondition for showing it.
+ */
+export interface LineAnchor {
+  startLine: number;
+  endLine: number;
+}
+
+/**
+ * One "what you missed" bullet.
+ *
+ * `note` is the ONLY guaranteed field, and that is the whole shape of the
+ * degradation story: an item the coach could not tie to a line still reads
+ * exactly as it did before this feature existed, and an item whose corrected
+ * code we chose not to keep is still clickable-free plain prose.
+ *
+ * `fixId` is a HANDLE, not the fix. The corrected code is never serialized into
+ * a coaching brief — it is assistance, and assistance is fetched from
+ * POST /api/coaching/fix, which writes the reveal to the ledger first. Shipping
+ * the text here and hiding it in the UI would make the gate theatre: it would
+ * be sitting in devtools whether or not anyone clicked.
+ */
+export interface MissedItem {
+  /** The bullet's prose. Always present; everything else is optional. */
+  note: string;
+  /** Lines of the submission this bullet is about, when the quote resolved. */
+  anchor?: LineAnchor;
+  /** Handle for POST /api/coaching/fix. Present only when a fix was generated. */
+  fixId?: string;
+}
+
 export interface CoachingBrief {
   /** The user's approach, paraphrased back to them. */
   approach: string;
-  /** What they missed, tied to specific failing test cases. */
-  missed: string[];
+  /** What they missed, tied to specific failing test cases (and, when the coach
+   * quoted a resolvable line, to specific lines of their submission). */
+  missed: MissedItem[];
   /** The underlying pattern this problem tests. */
   pattern: string;
   /** How to recognize this pattern next time (interview-prep focus). */
@@ -614,6 +652,32 @@ export interface RevealResponse {
   /**
    * Always true: a reveal is recorded server-side and forces the attempt to be
    * counted as assisted, exactly like a hint. It can never earn tier credit.
+   */
+  assisted: true;
+}
+
+/**
+ * POST /api/coaching/fix — "show me what that line should have been".
+ *
+ * A sibling of /api/reveal rather than a variant of it: /api/reveal takes a
+ * `problemId` and hands back the whole reference solution, this takes an opaque
+ * `fixId` and hands back a few lines. Different payload, different price to the
+ * reader, same ledger (see RevealResponse.assisted).
+ */
+export interface CoachFixRequest {
+  fixId: string;
+}
+
+export interface CoachFixResponse {
+  /** The candidate's own lines, as submitted — the "before" half of the diff. */
+  before: string;
+  /** The coach's corrected version of those lines. Unverified model output:
+   * read-only, never spliced into the editor. */
+  after: string;
+  /**
+   * Always true, and true for the same reason it is on RevealResponse: this is
+   * corrected code, so it is a reveal. The row is written before the body is
+   * returned, so nothing the client does afterwards can un-charge it.
    */
   assisted: true;
 }

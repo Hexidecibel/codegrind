@@ -291,14 +291,14 @@
   },
   "coach": {
     "model": "claude-sonnet-5",
-    "max_tokens": 8000,
+    "max_tokens": 10000,
     "thinking": {
       "type": "adaptive"
     },
     "system": [
       {
         "type": "text",
-        "text": "You are a direct, encouraging technical interview coach. A candidate just submitted a JavaScript solution which was run against real hidden tests. You are given the problem, the reference solution, the candidate's code, and the ACTUAL per-test results.\n\nYour job: a structured coaching brief focused on INTERVIEW PATTERN MASTERY.\n- approach: paraphrase what the candidate's code actually does, in plain language. Be accurate about their real approach.\n- missed: concrete things they got wrong or overlooked. TIE each item to the specific failing test(s) and the root cause. If everything passed, note remaining risks or edge cases they handled implicitly. Empty array only if truly flawless.\n- pattern: name the underlying pattern this problem tests.\n- patternRecognition: how to RECOGNIZE this pattern in a future problem — the signals/cues an interviewer plants. This is the most valuable part.\n- complexity: the candidate's time & space complexity (\"yours\") vs the optimal (\"optimal\"), each as a short string like \"O(n^2) time, O(1) space\".\n- improvement: one short, direct nudge on how to get better at this pattern.\n- mistakeTags: choose ZERO OR MORE tags describing the recurring failure modes this submission shows, chosen ONLY from this fixed vocabulary: off-by-one, empty-input, single-element, duplicates, negative-or-overflow, wrong-data-structure, brute-force-only, complexity-misjudged, runtime-error, syntax-error, edge-case-missed. Return an EMPTY array if the solution was clean. Do NOT invent tags outside this list.\n- calibration: ONLY when the candidate provided a pre-solve prediction (given below). Write one short sentence comparing their PREDICTED approach/time/space against what their code ACTUALLY does — name the gap plainly (e.g. \"You predicted O(n) but your nested scan is O(n^2)\"). If they were right, affirm it briefly. If no prediction was provided, return an empty string.\n\nBe specific and honest. Reference the real test names and outcomes. Call emit_coaching exactly once.",
+        "text": "You are a direct, encouraging technical interview coach. A candidate just submitted a JavaScript solution which was run against real hidden tests. You are given the problem, the reference solution, the candidate's code, and the ACTUAL per-test results.\n\nYour job: a structured coaching brief focused on INTERVIEW PATTERN MASTERY.\n- approach: paraphrase what the candidate's code actually does, in plain language. Be accurate about their real approach.\n- missed: concrete things they got wrong or overlooked, as an array of OBJECTS. TIE each item to the specific failing test(s) and the root cause. If everything passed, note remaining risks or edge cases they handled implicitly. Empty array only if truly flawless. Each object has:\n  - note (REQUIRED): the bullet itself — exactly the sentence or two you would have written anyway.\n  - quote (optional): the line, or at most a few CONSECUTIVE lines, of THEIR submission that this item is about, copied CHARACTER FOR CHARACTER out of the CANDIDATE'S SUBMISSION block. It is used to find that line in their editor and light it up, so it must be a line they actually wrote — never a line you wish they had written, never a paraphrase, never your own corrected version. OMIT the field entirely when the item is about something ABSENT from their code (a missing guard, an unhandled empty case, a check they never made): there is no line to point at, and an invented one points at the wrong place.\n  - line (optional): the gutter number of the first quoted line. It is used ONLY to disambiguate when the quoted text appears more than once, so include it whenever you include a quote.\n  - fix (optional): what those exact quoted lines SHOULD have been — the replacement for them and nothing else, same indentation, no surrounding code, no commentary. Only when you gave a quote, and only when replacing those few lines genuinely fixes the item. Omit it when the fix is \"rewrite the approach\".\n- pattern: name the underlying pattern this problem tests.\n- patternRecognition: how to RECOGNIZE this pattern in a future problem — the signals/cues an interviewer plants. This is the most valuable part.\n- complexity: the candidate's time & space complexity (\"yours\") vs the optimal (\"optimal\"), each as a short string like \"O(n^2) time, O(1) space\".\n- improvement: one short, direct nudge on how to get better at this pattern.\n- mistakeTags: choose ZERO OR MORE tags describing the recurring failure modes this submission shows, chosen ONLY from this fixed vocabulary: off-by-one, empty-input, single-element, duplicates, negative-or-overflow, wrong-data-structure, brute-force-only, complexity-misjudged, runtime-error, syntax-error, edge-case-missed. Return an EMPTY array if the solution was clean. Do NOT invent tags outside this list.\n- calibration: ONLY when the candidate provided a pre-solve prediction (given below). Write one short sentence comparing their PREDICTED approach/time/space against what their code ACTUALLY does — name the gap plainly (e.g. \"You predicted O(n) but your nested scan is O(n^2)\"). If they were right, affirm it briefly. If no prediction was provided, return an empty string.\n\nThe CANDIDATE'S SUBMISSION is shown to you with a \"   7 | \" line-number gutter that the app added — it is NOT part of their code. Never copy the gutter into a quote or a fix; quote the code that follows it.\n\nBe specific and honest. Reference the real test names and outcomes. Call emit_coaching exactly once.",
         "cache_control": {
           "type": "ephemeral"
         }
@@ -317,7 +317,28 @@
             "missed": {
               "type": "array",
               "items": {
-                "type": "string"
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string",
+                    "description": "The bullet: what they got wrong or overlooked."
+                  },
+                  "quote": {
+                    "type": "string",
+                    "description": "The line(s) of THEIR submission this is about, copied verbatim without the line-number gutter. Omit when the item is about code that is ABSENT."
+                  },
+                  "line": {
+                    "type": "number",
+                    "description": "Gutter line number of the first quoted line (disambiguation only)."
+                  },
+                  "fix": {
+                    "type": "string",
+                    "description": "What those exact quoted lines should have been — the replacement and nothing else. Only alongside a quote."
+                  }
+                },
+                "required": [
+                  "note"
+                ]
               }
             },
             "pattern": {
@@ -387,7 +408,7 @@
     "messages": [
       {
         "role": "user",
-        "content": "PROBLEM: Pair Sum (pattern: two-pointer, difficulty: easy)\n\nStatement:\nFind the pair that sums to the target.\n\nFunction under test: pairSum\n\nREFERENCE SOLUTION:\n```javascript\nfunction pairSum(nums, target) { return []; }\n```\n\nCANDIDATE'S SUBMISSION:\n```javascript\nfunction pairSum(nums, target) { return null; }\n```\n\nTEST RESULTS (1/2 passed):\n- [PASS] s1 (3ms)\n- [FAIL] h1 (5ms)\n    expected: []\n    actual:   null\n    error:    TypeError: nope\n\nCANDIDATE'S PRE-SOLVE PREDICTION (compare against their actual code for the calibration field):\n- intended approach: two pointers from both ends\n- predicted time: O(n)\n- predicted space: O(1)\n- confidence: 4/5"
+        "content": "PROBLEM: Pair Sum (pattern: two-pointer, difficulty: easy)\n\nStatement:\nFind the pair that sums to the target.\n\nFunction under test: pairSum\n\nREFERENCE SOLUTION:\n```javascript\nfunction pairSum(nums, target) { return []; }\n```\n\nCANDIDATE'S SUBMISSION:\n```javascript\n   1 | function pairSum(nums, target) { return null; }\n```\n\nTEST RESULTS (1/2 passed):\n- [PASS] s1 (3ms)\n- [FAIL] h1 (5ms)\n    expected: []\n    actual:   null\n    error:    TypeError: nope\n\nCANDIDATE'S PRE-SOLVE PREDICTION (compare against their actual code for the calibration field):\n- intended approach: two pointers from both ends\n- predicted time: O(n)\n- predicted space: O(1)\n- confidence: 4/5"
       }
     ]
   },

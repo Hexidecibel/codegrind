@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
-import { EditorState, Prec, type Extension } from '@codemirror/state';
 import {
+  EditorState,
+  Prec,
+  StateEffect,
+  StateField,
+  type Extension,
+} from '@codemirror/state';
+import {
+  Decoration,
   EditorView,
   highlightActiveLine,
   highlightActiveLineGutter,
   keymap,
   lineNumbers,
+  type DecorationSet,
   type KeyBinding,
 } from '@codemirror/view';
 import {
@@ -84,6 +92,108 @@ const BASE_THEME = EditorView.theme(
   { dark: true },
 );
 
+// ---------------------------------------------------------------------------
+// The "what you missed" band
+// ---------------------------------------------------------------------------
+// Three pieces — an effect to set it, a field to hold it, a facet provider to
+// draw it — and every one of them is DEFINED AT MODULE SCOPE, on purpose.
+//
+// CM6 identifies a state field by the field OBJECT, not by a name. Build the
+// field inside the component (or inside `extensionsFor`) and every re-render
+// that recomputes the extension array produces a *different* field, which the
+// reconfigure below treats as a brand-new field with no prior value: the band
+// vanishes the next time the assistance settings or the problem language
+// change. Module scope makes the identity a property of the file.
+//
+// And they are pushed UNCONDITIONALLY into `extensionsFor`, never behind an
+// assistance toggle, for the mirror-image reason. A field that is absent from
+// the new configuration loses its value (and `state.field(f)` throws outright),
+// so gating the band on, say, `o.lineNumbers` would mean flipping the
+// assistance ladder mid-session silently drops the highlight — and at
+// assistance level 1 there is no gutter at all, which is precisely the case a
+// self-sufficient band exists to serve.
+
+/**
+ * Set (or, with `null`, clear) the band. Carries document positions.
+ *
+ * Exported, with BAND_EXTENSION, only so that CodeMirrorEditor.band.test.ts can
+ * drive them against a headless `EditorState` — CM6's state layer needs no DOM,
+ * which makes this the one part of either editor that this jsdom-less repo can
+ * actually assert. Nothing else imports them.
+ */
+export const setBandEffect = StateEffect.define<{
+  from: number;
+  to: number;
+} | null>();
+
+/**
+ * Where the band currently is, as document positions rather than line numbers.
+ *
+ * Positions are mapped through each transaction's changes so that typing above
+ * the band moves it with its lines, the same tracking Monaco gives us for free
+ * via decoration stickiness. `from` maps with assoc 1 and `to` with assoc -1,
+ * which is CM's spelling of Monaco's NeverGrowsWhenTypingAtEdges: text typed
+ * exactly at either edge lands outside the band instead of being swallowed by
+ * it.
+ *
+ * NOTE THAT THIS IS NOT A RangeSet. The obvious implementation — hold a
+ * `DecorationSet` and `.map(tr.changes)` it — is a trap for LINE decorations
+ * specifically. `Decoration.line` ranges must be zero-length and are only ever
+ * drawn when they sit exactly on a line start (`LineDecoration.range` throws
+ * outright on a non-empty range; the content builder simply ignores one that
+ * has drifted off a line start), and `LineDecoration`'s map mode is
+ * `TrackBefore`, so an edit at the start of the band deletes it. Mapping
+ * therefore fails SILENTLY — the band stops being painted and nothing says
+ * why. Storing two plain numbers and re-deriving the lines at draw time cannot
+ * land off a line start, because `doc.lineAt()` is what defines where a line
+ * starts.
+ */
+const bandField = StateField.define<{ from: number; to: number } | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setBandEffect)) value = effect.value;
+    }
+    if (!value) return null;
+    if (!tr.docChanged) return value;
+    const from = tr.changes.mapPos(value.from, 1);
+    const to = tr.changes.mapPos(value.to, -1);
+    return { from: Math.min(from, to), to: Math.max(from, to) };
+  },
+});
+
+const bandLine = Decoration.line({ class: 'coach-missed-line' });
+
+/**
+ * Draw the band from the field's value, every time the field changes.
+ *
+ * `EditorView.decorations.compute` (a facet provider derived from state) rather
+ * than a ViewPlugin: the value is pure state, and a plugin would add a second
+ * place for it to live plus a lifecycle to keep in step with reconfiguration.
+ */
+const bandDecorations = EditorView.decorations.compute([bandField], (state) => {
+  const band = state.field(bandField);
+  if (!band) return Decoration.none;
+  // Clamp into the document: `to` can survive a deletion that shortened the
+  // doc past it, and `lineAt` throws on an out-of-range position.
+  const end = state.doc.length;
+  const from = Math.max(0, Math.min(band.from, end));
+  const to = Math.max(from, Math.min(band.to, end));
+  const ranges = [];
+  let pos = from;
+  for (;;) {
+    const line = state.doc.lineAt(pos);
+    ranges.push(bandLine.range(line.from));
+    if (line.to >= to) break;
+    pos = line.to + 1;
+  }
+  // `true` = the ranges are already sorted, which they are (walking forwards).
+  return Decoration.set(ranges, true) as DecorationSet;
+});
+
+/** The band's three pieces as one extension, for `extensionsFor` to push. */
+export const BAND_EXTENSION: Extension = [bandField, bandDecorations];
+
 /**
  * The assistance ladder, translated from Monaco options to CM6 extensions.
  * Mirrors `overridesToOptions` in lib/assistance.ts dimension for dimension:
@@ -123,6 +233,11 @@ function extensionsFor(
     oneDark,
     BASE_THEME,
     keymap.of([...defaultKeymap, ...historyKeymap]),
+    // Unconditional — see the comment above BAND_EXTENSION. It costs one state
+    // field holding `null` when nothing is highlighted, and being here rather
+    // than in one of the `if (o.…)` blocks below is what makes the band survive
+    // a change of assistance level.
+    BAND_EXTENSION,
   ];
 
   if (o.syntaxHighlighting) {
@@ -228,6 +343,48 @@ export function CodeMirrorEditor({
             scrollIntoView: true,
           });
           view.focus();
+        },
+        highlightLines: (startLine, endLine) => {
+          const doc = view.state.doc;
+          if (startLine > doc.lines) {
+            // Out of the document entirely — clear rather than clamp onto the
+            // last line, which would confidently point at code the coach never
+            // mentioned. Same rule as the Monaco side.
+            view.dispatch({ effects: setBandEffect.of(null) });
+            return;
+          }
+          const start = doc.line(Math.max(1, Math.min(startLine, doc.lines)));
+          const end = doc.line(
+            Math.max(start.number, Math.min(endLine, doc.lines)),
+          );
+          // Monaco has `revealLineInCenterIfOutsideViewport`; CM has `center`
+          // (always jumps) and `nearest` (no-op when already visible) and no
+          // combination of the two, so spell it out. Deciding here keeps the
+          // two editors behaving the same way: if you can already see the
+          // lines, the view does not move under you.
+          const visible = view.visibleRanges.some(
+            (r) => r.from <= start.from && r.to >= end.to,
+          );
+          view.dispatch({
+            effects: [
+              setBandEffect.of({ from: start.from, to: end.to }),
+              // scrollIntoView is the one call here that moves the viewport,
+              // and it does NOT move focus — which is the whole requirement
+              // (see CodeEditorHandle.highlightLines).
+              EditorView.scrollIntoView(start.from, {
+                y: visible ? 'nearest' : 'center',
+              }),
+            ],
+          });
+          // Deliberately no view.focus().
+        },
+        clearHighlight: () => {
+          // Guarded: this is called on every deselect, including ones that
+          // happen while nothing is painted, and an empty dispatch still costs
+          // a full state update and a re-measure on a phone.
+          if (view.state.field(bandField)) {
+            view.dispatch({ effects: setBandEffect.of(null) });
+          }
         },
       });
     },

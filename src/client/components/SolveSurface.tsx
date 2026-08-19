@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -68,6 +69,12 @@ import { EditorSettings } from '@/client/components/EditorSettings';
 import { ResultsPanel, VERDICT_META } from '@/client/components/ResultsPanel';
 import { HelpHint } from '@/client/components/HelpHint';
 import { CoachPanel } from '@/client/components/CoachPanel';
+import { MissedList } from '@/client/components/MissedList';
+import {
+  resolveMissedRange,
+  toMissedViews,
+  type MissedFix,
+} from '@/client/lib/missed-fix';
 
 /** localStorage-safe re-derivation of the active level from stored overrides. */
 function normalizeAssistance(s: AssistanceSettings): AssistanceSettings {
@@ -158,6 +165,17 @@ export function SolveSurface({
   const [typing, setTyping] = useState(false);
 
   const [code, setCode] = useState(problem.starterCode);
+  /**
+   * The buffer as it was at the instant `submit()` fired.
+   *
+   * `code` is live: the coaching brief lands seconds to minutes after the
+   * verdict, and nothing stops the user typing in the meantime. Every line
+   * number in the brief is an index into what was SENT, so keeping the sent
+   * copy is what stops a bullet about line 7 pointing at line 7 of a document
+   * it was never written about. Also read through a ref by the highlight effect
+   * below — see `codeRef`.
+   */
+  const [submitted, setSubmitted] = useState<string | null>(null);
 
   const [runResult, setRunResult] = useState<RunResult | null>(null);
   const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null);
@@ -233,6 +251,65 @@ export function SolveSurface({
     useState<Prediction | null>(null);
   const editorRef = useRef<CodeEditorHandle | null>(null);
 
+  // ---- "What you missed", made clickable -----------------------------------
+  /**
+   * Which coaching bullet owns the BAND — the lit-up lines in the editor — as
+   * an index into `missedViews` (NOT into `coaching.missed`: the normalizer
+   * drops blank items, and indexing the two differently is how every bullet
+   * ends up highlighting its neighbour's lines).
+   *
+   * SEPARATE FROM `missedOpen` ON PURPOSE, and this pair used to be one piece
+   * of state. The natural next action after reading a bullet is to click into
+   * the editor and fix the line it is about — and that click is an
+   * outside-click, which Radix answers by closing the popover. While the two
+   * were the same state, that click also erased the band: the marker died at
+   * the exact instant it became useful, and both `CodeEditor.highlightLines`'
+   * never-takes-focus rationale and the "after it, both editors track the
+   * lines through edits themselves" note below were written assuming it would
+   * not. The band now ends only when something genuinely ends its meaning: a
+   * different bullet takes it, a run/submit/problem change makes the brief it
+   * came from obsolete, or the user dismisses it.
+   */
+  const [missedIndex, setMissedIndex] = useState<number | null>(null);
+  /** Which bullet's popover is showing. Transient; the band is not. */
+  const [missedOpen, setMissedOpen] = useState<number | null>(null);
+  /**
+   * Fixes the user has already paid for, keyed by `fixId`.
+   *
+   * HERE RATHER THAN INSIDE `MissedList` because this component returns
+   * structurally different JSX above and below `lg` (see the early return for
+   * the desktop split): dragging a window across that breakpoint remounts the
+   * list and everything it was holding. A user who revealed a fix at 700px and
+   * then widened to 1440px was shown "Show me the fix" again and asked to
+   * re-confirm a price they had already paid. `markSolutionRevealed` is
+   * idempotent so the ledger was never double-charged — but nothing on screen
+   * said so, which is its own defect.
+   *
+   * This is a CACHE OF ALREADY-FETCHED TEXT, never a prefetch: it starts empty,
+   * and the only thing that ever writes to it is a 200 from
+   * `POST /api/coaching/fix`, at which point the reveal is already in the
+   * ledger. Lifting it changes where paid-for text is remembered, not when it
+   * arrives.
+   */
+  const [missedFixes, setMissedFixes] = useState<Record<string, MissedFix>>({});
+  /** The open bullet's lines are no longer findable in the live buffer. */
+  const [missedDrift, setMissedDrift] = useState(false);
+  const missedViews = useMemo(
+    () => toMissedViews(coaching?.missed),
+    [coaching],
+  );
+  /**
+   * The live buffer, for the highlight effect to read WITHOUT depending on it.
+   *
+   * Putting `code` in that effect's dependency list would re-run it on every
+   * keystroke, which means re-dispatching the decoration and re-scrolling the
+   * editor while the user types — the band would drag the viewport around under
+   * the caret. The re-anchoring is a one-shot decision made at click time; after
+   * it, both editors track the lines through edits themselves.
+   */
+  const codeRef = useRef(code);
+  codeRef.current = code;
+
   // The inactive pane is display:none, so the editor measures 0×0 while it's
   // away — hand it back a size the frame after it becomes visible again.
   useEffect(() => {
@@ -240,6 +317,127 @@ export function SolveSurface({
     const id = requestAnimationFrame(() => editorRef.current?.relayout());
     return () => cancelAnimationFrame(id);
   }, [pane, isDesktop]);
+
+  /**
+   * Paint (or clear) the band for the selected bullet.
+   *
+   * DECLARED IMMEDIATELY AFTER THE RELAYOUT EFFECT, and that ordering is
+   * load-bearing rather than tidy. On a phone, clicking a bullet flips to the
+   * code pane, and the editor has been sitting in a `display:none` box
+   * measuring 0×0; if it is told to reveal a line before it has been told to
+   * re-measure, it scrolls a stale layout and the band lands off screen. React
+   * runs effects in declaration order, so the two `requestAnimationFrame`
+   * callbacks queue in that same order: relayout first, then reveal.
+   *
+   * Driven by state rather than done inside the click handler for the mount
+   * race: the first time the code pane is shown, the editor is still a
+   * `lazy()` chunk in flight and there is no handle to call. As state, the
+   * paint re-runs when the pane changes; and `CodeEditor`'s delegator also
+   * remembers the last range and replays it on `onReady`, which covers the
+   * remaining gap (and the Monaco↔CodeMirror swap on rotation).
+   */
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      const editor = editorRef.current;
+      if (!editor) return;
+      const anchor =
+        missedIndex === null ? undefined : missedViews[missedIndex]?.anchor;
+      if (!anchor || submitted === null) {
+        editor.clearHighlight();
+        setMissedDrift(false);
+        return;
+      }
+      const range = resolveMissedRange(submitted, codeRef.current, anchor);
+      if (!range) {
+        // Refuse rather than guess: the popover says "you've edited since you
+        // submitted" and shows no band at all. A band on the wrong lines is
+        // worse than no band, because nothing on screen says it is wrong.
+        editor.clearHighlight();
+        setMissedDrift(true);
+        return;
+      }
+      editor.highlightLines(range.startLine, range.endLine);
+      setMissedDrift(false);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [missedIndex, missedViews, submitted, pane, isDesktop]);
+
+  /**
+   * Open a bullet: its popover, and its band (replacing whatever band was up —
+   * there is only ever one).
+   *
+   * On a phone this also brings the code pane forward, because the point of the
+   * click is to see the lines and they are in the other tab. It is safe for the
+   * popover: `{phoneResults}` is rendered OUTSIDE both tabpanels, so switching
+   * panes does not unmount the trigger the popover is anchored to.
+   */
+  const openMissed = useCallback(
+    (index: number) => {
+      setMissedIndex(index);
+      setMissedOpen(index);
+      // Unconditional, and the phone-only `setPane` below is not. On a phone
+      // this is load-bearing: the popover's trigger lives inside the
+      // `{resultsOpen && …}` body of the strip, so opening a bullet while the
+      // strip is collapsed would anchor a popover to nothing. On desktop the
+      // results pane ignores `resultsOpen` entirely, so this is inert there —
+      // but `resultsOpen` is still live state on desktop (the `typing` effect
+      // flips it), and keeping the call unconditional means nothing here
+      // depends on the `isDesktop` gate on the effect below being right.
+      setResultsOpen(true);
+      if (isDesktop) return;
+      setPane('code');
+    },
+    [isDesktop],
+  );
+
+  /** Radix closed the popover — a click into the editor, Escape, focus moving.
+   *  The band is not affected; that is the entire point of rule 5. */
+  const closeMissedPopover = useCallback(() => setMissedOpen(null), []);
+
+  /** The user is done with these lines: band down, popover down. */
+  const dismissMissed = useCallback(() => {
+    setMissedOpen(null);
+    setMissedIndex(null);
+  }, []);
+
+  /** A fix came back 200, i.e. the reveal is already written server-side. */
+  const rememberMissedFix = useCallback((fixId: string, fix: MissedFix) => {
+    setMissedFixes((prev) => ({ ...prev, [fixId]: fix }));
+  }, []);
+
+  /**
+   * Close the popover when the thing it is anchored to goes away.
+   *
+   * THE POPOVER, NOT THE BAND — these three used to take the band down with it,
+   * and getting that wrong is what made the feature feel broken. Two of them
+   * (`typing`, `!resultsOpen`) fire on precisely the action the band exists to
+   * support: the user going to the editor to fix the lines. The old
+   * justification was "a highlight on screen with nothing left to explain why
+   * it is there", and that argument no longer picks these three out — an
+   * ordinary click into the editor closes the popover on every viewport now, so
+   * a band with no popover is the normal state rather than a stranded one. The
+   * bullet's left-border marker is the standing explanation, and it comes back
+   * with the list the moment the strip is re-expanded or the phone turned back
+   * upright. So: rotate a phone, collapse the strip, start typing — none of
+   * those are a decision to stop working on the lines you just asked about.
+   *
+   * Phone only — on desktop none of the three unmounts the trigger:
+   *
+   *   `typing`      — focus back in the editor auto-collapses the results pane
+   *                   (the effect below), taking the popover's trigger with it.
+   *   `!resultsOpen` — the same collapse, done deliberately by tapping the strip.
+   *   `isShort`     — a short landscape viewport unmounts the results pane
+   *                   outright.
+   *
+   * The `isDesktop` gate stays, and still for its original reason: `typing`
+   * flips `resultsOpen` false on EVERY viewport, while the desktop results pane
+   * ignores `resultsOpen` and keeps the trigger mounted. Ungated, a desktop
+   * user who had touched the editor could never keep a bullet open.
+   */
+  useEffect(() => {
+    if (isDesktop) return;
+    if (typing || isShort || !resultsOpen) setMissedOpen(null);
+  }, [typing, isShort, resultsOpen, isDesktop]);
 
   // Neither editor scrolls when it is merely resized, so the caret can end up
   // under the soft keyboard until the next keystroke. Re-reveal it whenever the
@@ -263,6 +461,14 @@ export function SolveSurface({
     setRunResult(null);
     setSubmitResult(null);
     setCoaching(null);
+    // The snapshot, the band and the paid-for fixes all belong to the brief for
+    // the PREVIOUS problem; keeping any of them would leave a band anchored to
+    // line numbers from someone else's code, and a cache keyed by fixIds the
+    // server has no record of.
+    setSubmitted(null);
+    setMissedIndex(null);
+    setMissedOpen(null);
+    setMissedFixes({});
     setHints([]);
     setAnswer(null);
     setConfirmReveal(false);
@@ -313,6 +519,13 @@ export function SolveSurface({
     setRunning(true);
     setSubmitResult(null);
     setCoaching(null);
+    // Run clears the brief, so the bullets it belonged to are gone too — and
+    // with them any reason for a band to still be painted, or for a fix keyed
+    // by one of its fixIds to still be held.
+    setSubmitted(null);
+    setMissedIndex(null);
+    setMissedOpen(null);
+    setMissedFixes({});
     try {
       const r = await runCode(problem.id, code);
       setRunResult(r);
@@ -346,6 +559,12 @@ export function SolveSurface({
     setSubmitResult(null);
     setCoaching(null);
     setCoachPhase('pending');
+    // Freeze what is being sent. Every anchor in the brief that comes back is
+    // an index into THIS text, and `code` keeps moving.
+    setSubmitted(code);
+    setMissedIndex(null);
+    setMissedOpen(null);
+    setMissedFixes({});
     try {
       await submitCode(
         problem.id,
@@ -769,7 +988,30 @@ export function SolveSurface({
         </div>
       )}
 
-      {coaching && <CoachPanel brief={coaching} />}
+      {coaching && (
+        <CoachPanel
+          brief={coaching}
+          missed={
+            <MissedList
+              items={missedViews}
+              selected={missedIndex}
+              open={missedOpen}
+              onOpen={openMissed}
+              onClose={closeMissedPopover}
+              onDismiss={dismissMissed}
+              // Held here rather than in the list so that crossing `lg` — which
+              // remounts the list, because the two layouts are different JSX —
+              // does not make the user re-buy a fix they already paid for.
+              fixes={missedFixes}
+              onFixRevealed={rememberMissedFix}
+              drifted={missedDrift}
+              // The whole reference solution is already on screen, so a fix —
+              // a few lines out of it — is not new information to charge for.
+              answerVisible={!!answer}
+            />
+          }
+        />
+      )}
 
       {canAsk && (
         <CoachChat

@@ -30,7 +30,24 @@ function Section({
   );
 }
 
-export function CoachPanel({ brief }: { brief: CoachingBrief }) {
+export interface CoachPanelProps {
+  brief: CoachingBrief;
+  /**
+   * A richer rendering of the "What you missed" list — in practice
+   * `<MissedList>`, which makes each bullet a button that lights up the lines it
+   * is about and can trade a recorded reveal for the corrected code.
+   *
+   * A NODE RATHER THAN THE DATA, so that this panel stays a pure presenter. The
+   * clickable version needs the live editor buffer, an imperative handle on the
+   * editor, and the ability to fetch assistance — none of which a panel that
+   * merely renders a brief should know about, and all of which its one host
+   * already has. Omit it and the section renders the plain `<ul>` below,
+   * unchanged, which is what every other caller (and the tests) get.
+   */
+  missed?: React.ReactNode;
+}
+
+export function CoachPanel({ brief, missed }: CoachPanelProps) {
   return (
     <div className="space-y-5 rounded-xl border border-primary/20 bg-gradient-to-b from-primary/[0.06] to-transparent p-5">
       <div className="flex items-center gap-2">
@@ -61,14 +78,16 @@ export function CoachPanel({ brief }: { brief: CoachingBrief }) {
 
       {brief.missed.length > 0 && (
         <Section icon={<Target className="h-3.5 w-3.5" />} title="What you missed">
-          <ul className="space-y-1.5">
-            {brief.missed.map((m, i) => (
-              <li key={i} className="flex gap-2">
-                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-rose-400/80" />
-                <span>{m}</span>
-              </li>
-            ))}
-          </ul>
+          {missed ?? (
+            <ul className="space-y-1.5">
+              {brief.missed.map((m, i) => (
+                <li key={i} className="flex gap-2">
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-rose-400/80" />
+                  <span>{m.note}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </Section>
       )}
 

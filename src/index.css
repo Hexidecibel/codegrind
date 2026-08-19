@@ -282,3 +282,28 @@
 .study-dim .study-accent {
   filter: saturate(0.55) brightness(0.9);
 }
+
+/* ---- The coach's "what you missed" band -----------------------------
+   ONE rule, deliberately, serving BOTH editors: Monaco applies it via a
+   whole-line decoration `className` and CodeMirror via a line decoration
+   `class`, so the two cannot drift into looking like different features on
+   a phone and a laptop. (The class name is referenced from
+   MonacoEditor.tsx and CodeMirrorEditor.tsx — it is not dead CSS, and
+   Tailwind never sees it, which is exactly why it lives here as plain CSS
+   rather than as utility classes.)
+
+   Rose, matching the bullet dots in CoachPanel's "What you missed" list and
+   the failure colour ResultsPanel already uses — the band and the bullet
+   that summoned it are the same colour on purpose, because "why is that
+   line pink" has to have an answer on screen.
+
+   `inset` box-shadow rather than a border-left: a border would shift the
+   text of the highlighted lines two pixels to the right relative to every
+   other line, which in a code editor reads as broken indentation.
+
+   No animation. This appears under a caret the user may be typing at, and a
+   pulsing background there is the kind of thing you disable an app over. */
+.coach-missed-line {
+  background-color: rgba(251, 113, 133, 0.13);
+  box-shadow: inset 2px 0 0 0 rgba(251, 113, 133, 0.7);
+}

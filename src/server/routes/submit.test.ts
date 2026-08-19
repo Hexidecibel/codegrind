@@ -23,6 +23,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { CoachingBrief, RunResult, TestResult } from '../../shared/types.js';
+import type { CoachFix } from '../services/coachfix.service.js';
 
 // Neither the sandbox nor the model may actually run in a unit test: one needs
 // Docker, the other spends money. Both are the seam this route is built around,
@@ -46,6 +47,7 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 
 const { submitRoutes, redactHiddenExpected, rehydrateExpected } = await import('./submit.js');
 const db = await import('../services/db.js');
+const { clearFixes } = await import('../services/coachfix.service.js');
 
 const app = new Hono();
 app.route('/api', submitRoutes);
@@ -97,13 +99,36 @@ function sandboxResult(verdict: RunResult['verdict']): RunResult {
 
 const BRIEF: CoachingBrief = {
   approach: 'You looped twice.',
-  missed: ['the O(n) hash-map pass'],
+  missed: [{ note: 'the O(n) hash-map pass' }],
   pattern: 'hash map',
   patternRecognition: 'Pairs summing to a target.',
   complexity: { yours: 'O(n^2)', optimal: 'O(n)' },
   improvement: 'Reach for a map.',
   mistakeTags: ['brute-force'],
 };
+
+// The corrected code the coach generated for missed[0]. It is the string the
+// withhold test greps the wire for, so it must be distinctive enough that a
+// coincidental match is impossible.
+const FIX_TEXT = 'const seen = new Map(); // THE ANSWER';
+const FIX_BEFORE = 'for (const b of nums) {';
+
+/**
+ * What `coach()` now resolves to: the brief plus a SIDECAR of fixes keyed by
+ * index into `missed`. A fresh brief object per call, because the route writes
+ * `fixId` onto the items and a shared object would leak that between tests.
+ */
+function coachResult(fixes: Array<[number, CoachFix]> = []) {
+  return {
+    brief: { ...BRIEF, missed: BRIEF.missed.map((m) => ({ ...m })) },
+    fixes: new Map<number, CoachFix>(fixes),
+  };
+}
+
+/** The default: one bullet, anchored, with a fix waiting behind it. */
+function coachResultWithFix() {
+  return coachResult([[0, { before: FIX_BEFORE, after: FIX_TEXT }]]);
+}
 
 /** POST a submit and collect the NDJSON lines it streams back. */
 async function submit(
@@ -130,7 +155,8 @@ beforeEach(() => {
   mocks.runTests.mockReset();
   mocks.coach.mockReset();
   mocks.askFollowup.mockReset();
-  mocks.coach.mockResolvedValue(BRIEF);
+  mocks.coach.mockImplementation(async () => coachResultWithFix());
+  clearFixes();
   mocks.askFollowup.mockResolvedValue('because you compared the wrong thing');
   bankProblem();
 });
@@ -160,15 +186,15 @@ suite('POST /api/submit — the stream', () => {
     mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
     // A coach that never resolves would hang the OLD route forever. Here the
     // result must already be a complete, correct event before it is even asked.
-    let resolveCoach: (b: CoachingBrief) => void = () => {};
+    let resolveCoach: (r: ReturnType<typeof coachResult>) => void = () => {};
     mocks.coach.mockImplementation(
-      () => new Promise<CoachingBrief>((r) => { resolveCoach = r; }),
+      () => new Promise<ReturnType<typeof coachResult>>((r) => { resolveCoach = r; }),
     );
     const pending = submit();
     // Let the route reach the coaching call, then release it.
     await new Promise((r) => setTimeout(r, 10));
     expect(mocks.coach).toHaveBeenCalledTimes(1);
-    resolveCoach(BRIEF);
+    resolveCoach(coachResult());
     const { events } = await pending;
     expect(events[0].type).toBe('result');
     expect(events[0].result.verdict).toBe('wrong_answer');
@@ -204,6 +230,47 @@ suite('POST /api/submit — the reference solution', () => {
     expect(events[0].referenceSolution).toBeUndefined();
     // Belt and braces: the text of it must not be anywhere on the wire.
     expect(raw).not.toContain('return 42');
+  });
+});
+
+// =============================================================================
+// The corrected code, and the fact that it is NOT on the wire
+// =============================================================================
+// This is the test the whole withhold-the-fix design exists for, and it is
+// written the same way `redactHiddenExpected` is tested: against the RAW
+// response body, not against the parsed event. A rule that only holds after
+// JSON.parse is a rule about the UI, and the UI is not where assistance is
+// decided.
+//
+// If this ever fails, the fix is never to hide the text in the client. It means
+// the corrected code has become a field on the brief somewhere, and it is
+// readable in devtools without anybody clicking, which makes the reveal ledger
+// theatre.
+suite('POST /api/submit — the fix is withheld until it is paid for', () => {
+  it('never puts the corrected code on the wire', async () => {
+    mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
+    const { raw } = await submit();
+    expect(raw).not.toContain(FIX_TEXT);
+    // Nor the "before" — that one is the player's own code and harmless, but
+    // its absence is what proves the whole sidecar stayed server-side rather
+    // than half of it leaking.
+    expect(raw).not.toContain(FIX_BEFORE);
+  });
+
+  it('ships an opaque handle in its place', async () => {
+    mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
+    const { events } = await submit();
+    const [item] = events[1].coaching.missed;
+    expect(typeof item.fixId).toBe('string');
+    expect(item.fixId.length).toBeGreaterThan(0);
+    expect(item.note).toBe('the O(n) hash-map pass');
+  });
+
+  it('leaves items with no fix alone rather than minting an empty handle', async () => {
+    mocks.coach.mockImplementation(async () => coachResult());
+    mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
+    const { events } = await submit();
+    expect(events[1].coaching.missed[0].fixId).toBeUndefined();
   });
 });
 
@@ -381,6 +448,94 @@ suite('POST /api/submit — coaching failure degrades, never loses the run', () 
   it('leaves the attempt untagged rather than inventing tags', async () => {
     await submit();
     expect(db.getTaggedAttempts('javascript')).toEqual([]);
+  });
+});
+
+// =============================================================================
+// POST /api/coaching/fix — the reveal that costs the same as the other reveal
+// =============================================================================
+// A fix is CORRECTED CODE, so it is a reveal rather than a hint, and it shares
+// /api/reveal's ledger for the reason db.ts states at that table: so a reload, a
+// second tab or a hand-rolled POST cannot launder a revealed problem back into
+// tier credit. The three properties asserted here are the whole contract —
+// written before the body is returned, NOT written when there is nothing to
+// return, and actually visible to the next submit.
+suite('POST /api/coaching/fix', () => {
+  /** Run a submit and hand back the fixId the coach's first bullet was stashed under. */
+  async function submitAndGetFixId(): Promise<string> {
+    mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
+    const { events } = await submit();
+    return events[1].coaching.missed[0].fixId as string;
+  }
+
+  function revealFix(fixId: unknown) {
+    return app.request('/api/coaching/fix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fixId }),
+    });
+  }
+
+  it('returns the before/after and records the reveal', async () => {
+    const fixId = await submitAndGetFixId();
+    expect(db.isSolutionRevealed(PROBLEM_ID)).toBe(false);
+
+    const res = await revealFix(fixId);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      before: FIX_BEFORE,
+      after: FIX_TEXT,
+      assisted: true,
+    });
+    // The ledger row is keyed on the PROBLEM the fix came from — which is why
+    // the stash carries a problemId rather than the route holding a second map.
+    expect(db.isSolutionRevealed(PROBLEM_ID)).toBe(true);
+  });
+
+  it('404s an unknown id and writes NOTHING to the ledger', async () => {
+    await submitAndGetFixId();
+    const res = await revealFix('not-a-real-handle');
+    expect(res.status).toBe(404);
+    // The half that actually matters: a 404 that still charged would let a
+    // guessed id cost somebody their clean solve.
+    expect(db.isSolutionRevealed(PROBLEM_ID)).toBe(false);
+  });
+
+  it('404s a missing or non-string id without charging either', async () => {
+    await submitAndGetFixId();
+    expect((await revealFix(undefined)).status).toBe(404);
+    expect((await revealFix(42)).status).toBe(404);
+    expect(db.isSolutionRevealed(PROBLEM_ID)).toBe(false);
+  });
+
+  it('404s after the stash is gone, which is the honest answer to a restart', async () => {
+    const fixId = await submitAndGetFixId();
+    clearFixes(); // stands in for the process restart that really does this
+    expect((await revealFix(fixId)).status).toBe(404);
+    expect(db.isSolutionRevealed(PROBLEM_ID)).toBe(false);
+  });
+
+  it('is idempotent — a double-click does not 404 on what was just paid for', async () => {
+    const fixId = await submitAndGetFixId();
+    expect((await revealFix(fixId)).status).toBe(200);
+    expect((await revealFix(fixId)).status).toBe(200);
+  });
+
+  it('makes the NEXT submit of that problem count as assisted', async () => {
+    // THE ONE ACCEPTED CONSEQUENCE, asserted rather than described: the brief
+    // only exists after the attempt row is written, so a peek prices the next
+    // submit and never the one that produced it. Exactly how the Answer button
+    // already behaves.
+    const fixId = await submitAndGetFixId();
+    await revealFix(fixId);
+
+    mocks.runTests.mockResolvedValue(sandboxResult('accepted'));
+    await submit({ problemId: PROBLEM_ID, code: 'x', hintsUsed: 0 });
+
+    const history = db.getHistory('javascript');
+    expect(history[0].hintsUsed).toBeGreaterThanOrEqual(1);
+    // An assisted solve keeps the review queued — it cannot earn tier credit.
+    expect(db.isReviewQueued(PROBLEM_ID)).toBe(true);
   });
 });
 
