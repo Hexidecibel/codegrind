@@ -829,7 +829,7 @@ ${numberLines(userCode)}
 TEST RESULTS (${passed}/${results.length} passed):
 ${summarizeResults(results)}${predictionBlock}`;
 
-  const { input } = await structured({
+  const call = await structured({
     // Teaching call, but it fires on EVERY submit — so it stays on the
     // workhorse role and pays for thinking rather than for the bigger model.
     // (askFollowup fires only when the candidate actually asks, which is why
@@ -842,14 +842,38 @@ ${summarizeResults(results)}${predictionBlock}`;
     //
     // 8000 -> 10000 when `missed` grew from strings to objects carrying a
     // quote and a replacement snippet: the same eight bullets now cost several
-    // lines of the candidate's code each. Headroom is cheap and truncation is
-    // not — a tool call cut mid-JSON loses the WHOLE brief, not the last field.
-    maxTokens: 10000,
+    // lines of the candidate's code each.
+    //
+    // 10000 -> 16000 after a live truncation on a binary-search submit: the
+    // brief arrived with `approach` and `pattern` filled and everything after
+    // them empty. That also corrects the sentence that used to sit here — a
+    // tool call cut mid-JSON does NOT lose the whole brief. The API returns the
+    // PARTIAL input, so every field the model had not reached yet quietly takes
+    // its default (`missed: []`, blank patternRecognition, complexity
+    // unknown/unknown) and a gutted brief renders exactly like a complete one.
+    // That is worse than losing it, and it is why the check below is not
+    // optional. 16000 is generateProblem's already-proven budget.
+    maxTokens: 16000,
     thinking: 'adaptive',
     system: COACH_SYSTEM_BY_LANGUAGE[problem.language],
     tool: EMIT_COACHING_TOOL,
     messages: [{ role: 'user', content: userMessage }],
   });
+  // Catch truncation HERE, the only point where the stop reason is still
+  // visible — once parsed, a truncated brief is indistinguishable from a terse
+  // one. generateProblem has guarded this since its own incident (`truncated`
+  // above); coaching did not, and shipped a half-empty panel to a real user.
+  // submit.ts turns this throw into "coaching is temporarily unavailable",
+  // which is honest. Complexity "unknown / unknown" beside an empty "what you
+  // missed" is not.
+  if (call.meta.stop === 'max_tokens') {
+    throw new Error(
+      `Coaching truncated at max_tokens (${problem.title}) after ` +
+        `${call.meta.usage.outputTokens} output tokens — the brief would have ` +
+        `rendered with empty fields rather than absent ones.`,
+    );
+  }
+  const { input } = call;
   const complexity = (input.complexity ?? {}) as Record<string, unknown>;
   // Anchors resolve against the RAW submission, never the numbered copy above:
   // the gutter exists only inside the prompt, and code-lines.ts strips it back

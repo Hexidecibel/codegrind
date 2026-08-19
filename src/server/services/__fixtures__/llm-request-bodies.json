@@ -291,7 +291,7 @@
   },
   "coach": {
     "model": "claude-sonnet-5",
-    "max_tokens": 10000,
+    "max_tokens": 16000,
     "thinking": {
       "type": "adaptive"
     },
