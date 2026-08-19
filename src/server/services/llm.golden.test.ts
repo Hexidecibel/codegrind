@@ -82,7 +82,17 @@ const TOOL_RESULTS: Record<string, Record<string, unknown>> = {
   },
   emit_coaching: {
     approach: 'You scanned the array twice.',
-    missed: ['the empty case'],
+    // Objects since `missed` grew an anchor. The quote is USER_CODE's only
+    // line, verbatim, so the real resolveAnchor path runs during the capture
+    // rather than being short-circuited by a quote that matches nothing.
+    missed: [
+      {
+        note: 'the empty case',
+        quote: 'function pairSum(nums, target) { return null; }',
+        line: 1,
+        fix: 'function pairSum(nums, target) { return []; }',
+      },
+    ],
     pattern: 'two-pointer',
     patternRecognition: 'Sorted input plus a target sum.',
     complexity: { yours: 'O(n^2) time, O(1) space', optimal: 'O(n) time, O(1) space' },

@@ -31,6 +31,24 @@ export interface CodeEditorHandle {
   indent(direction: 1 | -1): void;
   /** Insert text at the caret, replacing any selection. */
   insert(text: string): void;
+  /**
+   * Paint a band over lines `startLine`..`endLine` (1-based, inclusive) and
+   * scroll them into view — the editor half of clicking a "what you missed"
+   * bullet. Replaces any previous band; there is only ever one.
+   *
+   * NEVER TAKES FOCUS, and that is a hard requirement rather than a nicety.
+   * This is called from a tap in the coach panel, and on a phone stealing focus
+   * opens the soft keyboard over the very lines the user just asked to be shown
+   * — plus `typing` (SolveSurface's focus-is-the-keyboard proxy) would fire and
+   * collapse the results pane the bullet lives in.
+   *
+   * An out-of-range request clears the band rather than throwing: the caller
+   * re-anchors against a live buffer, and "the lines are gone" is a normal
+   * outcome there, not an error.
+   */
+  highlightLines(startLine: number, endLine: number): void;
+  /** Remove the band, if any. Also never focuses. */
+  clearHighlight(): void;
 }
 
 /** Props shared by every editor implementation. */
@@ -117,9 +135,32 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
   function CodeEditor(props, ref) {
     const isDesktop = useIsDesktop();
     const handleRef = useRef<CodeEditorHandle | null>(null);
+    /**
+     * The last band asked for, remembered across implementations.
+     *
+     * Every other method on the handle is fire-and-forget: if nothing is
+     * mounted yet, dropping a `relayout()` costs nothing because the next
+     * resize sends another one. A highlight is different — it is a piece of
+     * STATE the host set once and expects to stay up — and there are two
+     * moments where the delegator has no editor to hand it to:
+     *
+     *   1. the `lazy()` mount race. Clicking a bullet on a phone flips to the
+     *      code pane, and on the very first flip the CodeMirror chunk may still
+     *      be downloading. The call would land on a null ref and vanish.
+     *   2. rotating the device across the `lg` breakpoint swaps Monaco for
+     *      CodeMirror (or back). The new editor is a fresh instance with no
+     *      decorations, so the band would silently disappear mid-session.
+     *
+     * So the range is stored here and replayed in `onReady`. `null` is stored
+     * too — an explicit clear must not be undone by a later remount.
+     */
+    const bandRef = useRef<[number, number] | null>(null);
 
     const onReady = useCallback((h: CodeEditorHandle | null) => {
       handleRef.current = h;
+      if (!h) return;
+      const band = bandRef.current;
+      if (band) h.highlightLines(band[0], band[1]);
     }, []);
 
     // Delegate through a stable handle so the host's ref survives the swap.
@@ -131,6 +172,14 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
         revealCursor: () => handleRef.current?.revealCursor(),
         indent: (direction: 1 | -1) => handleRef.current?.indent(direction),
         insert: (text: string) => handleRef.current?.insert(text),
+        highlightLines: (startLine: number, endLine: number) => {
+          bandRef.current = [startLine, endLine];
+          handleRef.current?.highlightLines(startLine, endLine);
+        },
+        clearHighlight: () => {
+          bandRef.current = null;
+          handleRef.current?.clearHighlight();
+        },
       }),
       [],
     );

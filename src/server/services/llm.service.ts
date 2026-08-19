@@ -19,7 +19,12 @@ import {
   type Lesson,
   type LessonKind,
   type TrackOutlineItem,
+  type MissedItem,
 } from '../../shared/types.js';
+import { numberLines, resolveAnchor, sliceLines } from '../../shared/code-lines.js';
+// Type-only: the fixes this file produces are STORED by coachfix.service, which
+// owns their shape. No runtime import — nothing in here touches the stash.
+import type { CoachFix } from './coachfix.service.js';
 import type { Language } from '../../shared/languages.js';
 import {
   CORPUS_LANGUAGE,
@@ -557,13 +562,19 @@ export const COACH_SYSTEM_BY_LANGUAGE: Record<Language, string> = perLanguage(
 
 Your job: a structured coaching brief focused on INTERVIEW PATTERN MASTERY.
 - approach: paraphrase what the candidate's code actually does, in plain language. Be accurate about their real approach.
-- missed: concrete things they got wrong or overlooked. TIE each item to the specific failing test(s) and the root cause. If everything passed, note remaining risks or edge cases they handled implicitly. Empty array only if truly flawless.
+- missed: concrete things they got wrong or overlooked, as an array of OBJECTS. TIE each item to the specific failing test(s) and the root cause. If everything passed, note remaining risks or edge cases they handled implicitly. Empty array only if truly flawless. Each object has:
+  - note (REQUIRED): the bullet itself — exactly the sentence or two you would have written anyway.
+  - quote (optional): the line, or at most a few CONSECUTIVE lines, of THEIR submission that this item is about, copied CHARACTER FOR CHARACTER out of the CANDIDATE'S SUBMISSION block. It is used to find that line in their editor and light it up, so it must be a line they actually wrote — never a line you wish they had written, never a paraphrase, never your own corrected version. OMIT the field entirely when the item is about something ABSENT from their code (a missing guard, an unhandled empty case, a check they never made): there is no line to point at, and an invented one points at the wrong place.
+  - line (optional): the gutter number of the first quoted line. It is used ONLY to disambiguate when the quoted text appears more than once, so include it whenever you include a quote.
+  - fix (optional): what those exact quoted lines SHOULD have been — the replacement for them and nothing else, same indentation, no surrounding code, no commentary. Only when you gave a quote, and only when replacing those few lines genuinely fixes the item. Omit it when the fix is "rewrite the approach".
 - pattern: name the underlying pattern this problem tests.
 - patternRecognition: how to RECOGNIZE this pattern in a future problem — the signals/cues an interviewer plants. This is the most valuable part.
 - complexity: the candidate's time & space complexity ("yours") vs the optimal ("optimal"), each as a short string like "O(n^2) time, O(1) space".
 - improvement: one short, direct nudge on how to get better at this pattern.
 - mistakeTags: choose ZERO OR MORE tags describing the recurring failure modes this submission shows, chosen ONLY from this fixed vocabulary: ${MISTAKE_TAGS.join(', ')}. Return an EMPTY array if the solution was clean. Do NOT invent tags outside this list.
 - calibration: ONLY when the candidate provided a pre-solve prediction (given below). Write one short sentence comparing their PREDICTED approach/time/space against what their code ACTUALLY does — name the gap plainly (e.g. "You predicted O(n) but your nested scan is O(n^2)"). If they were right, affirm it briefly. If no prediction was provided, return an empty string.
+
+The CANDIDATE'S SUBMISSION is shown to you with a "   7 | " line-number gutter that the app added — it is NOT part of their code. Never copy the gutter into a quote or a fix; quote the code that follows it.
 
 Be specific and honest. Reference the real test names and outcomes. Call emit_coaching exactly once.`
 );
@@ -575,7 +586,37 @@ const EMIT_COACHING_TOOL: ToolSpec = {
     type: 'object',
     properties: {
       approach: { type: 'string' },
-      missed: { type: 'array', items: { type: 'string' } },
+      // Only `note` is required, following the `mistakeTags`/`calibration`
+      // precedent above: a field the model cannot honestly fill is better
+      // omitted than invented, and `quote` is precisely the field where an
+      // invention (a "missing guard" line that does not exist) costs the most.
+      // No `strict: true` — that is an OpenAI-only spelling the adapter
+      // deliberately avoids, and it would demand every property be required,
+      // which is the opposite of what this schema is for.
+      missed: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            note: { type: 'string', description: 'The bullet: what they got wrong or overlooked.' },
+            quote: {
+              type: 'string',
+              description:
+                "The line(s) of THEIR submission this is about, copied verbatim without the line-number gutter. Omit when the item is about code that is ABSENT.",
+            },
+            line: {
+              type: 'number',
+              description: 'Gutter line number of the first quoted line (disambiguation only).',
+            },
+            fix: {
+              type: 'string',
+              description:
+                'What those exact quoted lines should have been — the replacement and nothing else. Only alongside a quote.',
+            },
+          },
+          required: ['note'],
+        },
+      },
       pattern: { type: 'string' },
       patternRecognition: { type: 'string' },
       complexity: {
@@ -617,6 +658,112 @@ function coerceMistakeTags(raw: unknown): string[] {
   return out;
 }
 
+/**
+ * At most eight bullets survive.
+ *
+ * Not a token guard — the model already wrote them by the time we are here. It
+ * is a reading guard: "what you missed" is a list somebody acts on, and a
+ * twenty-item list is a list nobody acts on. Eight is roughly one screen.
+ */
+const MAX_MISSED_ITEMS = 8;
+
+/** What `coach()` hands back alongside the brief, keyed by index into `missed`. */
+export interface CoachResult {
+  brief: CoachingBrief;
+  /**
+   * Corrected code, keyed by its index in `brief.missed`. A SIDECAR, not a
+   * field on the brief — the caller stashes these and puts back only opaque
+   * ids. A field would have to be stripped before serialization, and stripping
+   * is one forgotten code path away from shipping the answer to devtools.
+   */
+  fixes: Map<number, CoachFix>;
+}
+
+/**
+ * Turn whatever came back in `missed` into MissedItems, resolving anchors
+ * against the source the candidate actually submitted.
+ *
+ * THE STRING BRANCH IS THE MOST IMPORTANT PART OF THIS FUNCTION. A schema is a
+ * request, not a guarantee: a small local model — which this app is explicitly
+ * built to run on — will answer `["you never reset left", "…"]` no matter what
+ * the items say, because a flat array of strings is what "missed" looks like in
+ * its training data. Without the branch, every one of those items fails the
+ * object check and the whole section renders EMPTY. With it, the worst case is
+ * a brief that reads exactly as it did before this feature existed: complete,
+ * just not clickable. That is the entire degradation story.
+ *
+ * The other rules, each earning its line:
+ *  - a blank `note` drops the item; there is nothing to render and a bullet
+ *    consisting of an anchor is not a sentence;
+ *  - `fix` is dropped when the anchor did not resolve — a correction with no
+ *    "before" to sit against is not a diff, it is a code sample;
+ *  - `fix` is dropped when it equals the line it replaces, which is what a
+ *    model emits when it has run out of things to say and is filling a field.
+ */
+function coerceMissed(
+  raw: unknown,
+  source: string
+): { missed: MissedItem[]; fixes: Map<number, CoachFix> } {
+  const missed: MissedItem[] = [];
+  const fixes = new Map<number, CoachFix>();
+  if (!Array.isArray(raw)) return { missed, fixes };
+
+  // Counted for the warn below, which is the ONLY visibility anyone has into
+  // quote fidelity. Everything about this feature rests on the model quoting
+  // its way back to a real line, and that assumption fails SILENTLY — an
+  // unresolved anchor renders as ordinary prose, indistinguishable from a
+  // bullet the coach never tried to anchor.
+  let quoted = 0;
+  let unresolved = 0;
+
+  for (const entry of raw) {
+    if (missed.length >= MAX_MISSED_ITEMS) break;
+
+    if (typeof entry === 'string') {
+      const note = entry.trim();
+      if (note) missed.push({ note });
+      continue;
+    }
+    if (!entry || typeof entry !== 'object') continue;
+
+    const e = entry as Record<string, unknown>;
+    const note = typeof e.note === 'string' ? e.note.trim() : '';
+    if (!note) continue;
+
+    const item: MissedItem = { note };
+    const quote = typeof e.quote === 'string' ? e.quote : '';
+    if (quote.trim()) {
+      quoted++;
+      // A grammar-constrained decoder emits `"line": "7"` often enough to be
+      // worth two lines here; a hint that fails to parse is simply absent, and
+      // absent is a case resolveAnchor already handles.
+      const hintRaw = typeof e.line === 'number' ? e.line : Number(e.line);
+      const hint = Number.isFinite(hintRaw) ? hintRaw : undefined;
+      const anchor = resolveAnchor(source, quote, hint);
+      if (anchor) item.anchor = anchor;
+      else unresolved++;
+    }
+
+    const index = missed.length;
+    missed.push(item);
+
+    const fix = typeof e.fix === 'string' ? e.fix.replace(/\s+$/, '') : '';
+    if (item.anchor && fix.trim()) {
+      const before = sliceLines(source, item.anchor);
+      if (fix.trim() !== before.trim()) fixes.set(index, { before, after: fix });
+    }
+  }
+
+  if (unresolved > 0) {
+    // Deliberately a warn on every occurrence rather than a sampled metric:
+    // this app has one user and one log. If most quotes stop resolving, the
+    // first lever is a worked example in the prompt above — but only this line
+    // makes "most quotes stop resolving" an observable event at all.
+    console.warn(`[coach] anchor unresolved (${unresolved}/${quoted})`);
+  }
+  return { missed, fixes };
+}
+
 function summarizeResults(results: TestResult[]): string {
   return results
     .map((r) => {
@@ -637,7 +784,7 @@ export async function coach(
   userCode: string,
   results: TestResult[],
   prediction?: Prediction
-): Promise<CoachingBrief> {
+): Promise<CoachResult> {
   const passed = results.filter((r) => r.passed).length;
   // Off the PROBLEM, never off the active setting — the problem is what the
   // reference solution and every `expected` were written in.
@@ -651,6 +798,17 @@ export async function coach(
 - confidence: ${prediction.confidence}/5`
     : '';
 
+  // The candidate's code is NUMBERED here and the reference solution is not.
+  //
+  // Numbering costs nothing that was not already being paid. Only the system
+  // block is marked for prompt caching; this user message carries the
+  // candidate's code and their test results, so it is unique on every submit
+  // and was never a cache hit to begin with. A gutter therefore buys a
+  // reliable tiebreaker for duplicate lines (`left++`, a bare `}`) for ~5
+  // tokens a line and nothing else. It is on the candidate's block ONLY
+  // because that is the only buffer an anchor can point into — numbering the
+  // reference too would invite a quote out of the wrong one, which would
+  // resolve to nothing and cost a bullet its anchor.
   const userMessage = `PROBLEM: ${problem.title} (pattern: ${problem.pattern}, difficulty: ${problem.difficulty})
 
 Statement:
@@ -665,7 +823,7 @@ ${problem.referenceSolution}
 
 CANDIDATE'S SUBMISSION:
 \`\`\`${fence}
-${userCode}
+${numberLines(userCode)}
 \`\`\`
 
 TEST RESULTS (${passed}/${results.length} passed):
@@ -681,17 +839,26 @@ ${summarizeResults(results)}${predictionBlock}`;
     // 2500 was sized for a thinking-off model. With adaptive thinking the
     // budget covers thinking + the brief, so a tight cap truncates the tool
     // call mid-JSON and the whole brief is lost.
-    maxTokens: 8000,
+    //
+    // 8000 -> 10000 when `missed` grew from strings to objects carrying a
+    // quote and a replacement snippet: the same eight bullets now cost several
+    // lines of the candidate's code each. Headroom is cheap and truncation is
+    // not — a tool call cut mid-JSON loses the WHOLE brief, not the last field.
+    maxTokens: 10000,
     thinking: 'adaptive',
     system: COACH_SYSTEM_BY_LANGUAGE[problem.language],
     tool: EMIT_COACHING_TOOL,
     messages: [{ role: 'user', content: userMessage }],
   });
   const complexity = (input.complexity ?? {}) as Record<string, unknown>;
+  // Anchors resolve against the RAW submission, never the numbered copy above:
+  // the gutter exists only inside the prompt, and code-lines.ts strips it back
+  // off whatever the model quotes.
+  const { missed, fixes } = coerceMissed(input.missed, userCode);
 
   const brief: CoachingBrief = {
     approach: typeof input.approach === 'string' ? input.approach : '',
-    missed: coerceStrings(input.missed),
+    missed,
     pattern: typeof input.pattern === 'string' && input.pattern.trim() ? input.pattern : problem.pattern,
     patternRecognition: typeof input.patternRecognition === 'string' ? input.patternRecognition : '',
     complexity: {
@@ -706,7 +873,7 @@ ${summarizeResults(results)}${predictionBlock}`;
     const cal = typeof input.calibration === 'string' ? input.calibration.trim() : '';
     if (cal) brief.calibration = cal;
   }
-  return brief;
+  return { brief, fixes };
 }
 
 // ===========================================================================
