@@ -333,3 +333,50 @@ describe('the unresolved-quote instrumentation', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 });
+
+// =============================================================================
+// Truncation, which used to render as a complete brief
+// =============================================================================
+// A live binary-search submit came back with `approach` and `pattern` filled and
+// everything after them empty: no "what you missed", no recognition text, and
+// complexity showing "unknown / unknown". Nothing errored, because a truncated
+// tool call is not an error — the API returns the PARTIAL input and every field
+// the model never reached takes its default. Parsed, that is indistinguishable
+// from a terse brief, so the only place it can be caught is the stop reason.
+describe('a truncated tool call', () => {
+  /** Same 200 shape as `coachWith`, but stopped for length rather than tool_use. */
+  async function coachTruncated() {
+    mocks.create.mockReset();
+    mocks.create.mockImplementation(async (body: Record<string, unknown>) => ({
+      model: 'claude-fixture',
+      stop_reason: 'max_tokens',
+      usage: { input_tokens: 100, output_tokens: 16000, cache_read_input_tokens: 0 },
+      content: [
+        {
+          type: 'tool_use',
+          name: (body.tool_choice as { name?: string } | undefined)?.name,
+          // What the wire actually carries: the fields it got to, and no others.
+          input: { approach: REST.approach, pattern: REST.pattern },
+        },
+      ],
+    }));
+    return llm.coach(PROBLEM, USER_CODE, RESULTS);
+  }
+
+  it('throws rather than returning the half of the brief that arrived', async () => {
+    await expect(coachTruncated()).rejects.toThrow(/truncated at max_tokens/i);
+  });
+
+  it('names the problem and the output tokens, so the budget can be judged', async () => {
+    await expect(coachTruncated()).rejects.toThrow(/Longest Substring/);
+    await expect(coachTruncated()).rejects.toThrow(/16000 output tokens/);
+  });
+
+  // The point of throwing: submit.ts turns it into "coaching is temporarily
+  // unavailable". A partial brief would instead have rendered an empty "what
+  // you missed" and unknown/unknown complexity as though the coach meant them.
+  it('does not quietly succeed with empty fields', async () => {
+    const result = await coachTruncated().catch(() => null);
+    expect(result).toBeNull();
+  });
+});
