@@ -68,7 +68,7 @@
 
 import { createAnthropicClient } from './llm.anthropic.js';
 import { createOpenAiClient } from './llm.openai.js';
-import { findLeakedToolCallFraming, LlmToolCallError } from './llm.types.js';
+import { findLeakedToolCallFraming, findSchemaTypeViolation, LlmToolCallError } from './llm.types.js';
 import type {
   CallRole,
   LlmClient,
@@ -480,6 +480,22 @@ export function clientFor(role: CallRole): LlmClient {
  */
 export async function structured(req: StructuredRequest): Promise<StructuredResult> {
   const result = await clientFor(req.role).structured(req);
+
+  // TYPE FIRST, because it is the cheaper and blunter of the two questions and
+  // it names the field the collapse STARTED at rather than a field the debris
+  // happened to land in. See findSchemaTypeViolation.
+  const wrongType = findSchemaTypeViolation(result.input, req.tool);
+  if (wrongType) {
+    throw new LlmToolCallError(
+      `${result.meta.servedModel} called ${req.tool.name}, but "${wrongType.field}" is declared ` +
+        `${wrongType.declared} in the schema and arrived as a string ` +
+        `("${wrongType.got}") — the model stopped emitting JSON at that field and serialized ` +
+        `the rest of the call into it. Nothing downstream can tell that apart from an honest ` +
+        `empty answer, which is why it is rejected here.`,
+      result.meta
+    );
+  }
+
   const leak = findLeakedToolCallFraming(result.input, req.tool);
   if (leak) {
     // LlmToolCallError, not a plain Error: this is semantically identical to

@@ -149,12 +149,26 @@ describe('a model that ignores the object schema still produces a brief', () => 
     expect(brief.missed[1].anchor).toEqual({ startLine: 3, endLine: 3 });
   });
 
-  it('returns an empty list rather than throwing when `missed` is not an array', async () => {
-    // Observed shape from small models: a single prose blob where an array was
-    // asked for. Nothing to salvage, but it must not take the brief with it.
-    const { brief } = await coachWith('you missed the empty case');
-    expect(brief.missed).toEqual([]);
-    expect(brief.approach).toBe(REST.approach);
+  it('REJECTS a `missed` that is a string, and tries the plain schema once', async () => {
+    // THIS TEST USED TO ASSERT THE OPPOSITE, and the reversal is the bug fix.
+    // It read "returns an empty list rather than throwing when `missed` is not
+    // an array", on the theory that a prose blob where an array was asked for is
+    // nothing to salvage but must not take the brief with it.
+    //
+    // It takes the brief with it either way. Five live calls proved what that
+    // shape actually is: not a small model being vague, but a capable one
+    // breaking out of JSON at exactly the field where the schema stops being
+    // flat and serializing the REST OF THE TOOL CALL into it. Every field after
+    // `missed` is then missing, and "an empty list" renders as a confident,
+    // complete-looking brief with nothing in "What you missed" and
+    // "unknown / unknown" beside it. That panel shipped to a real user.
+    //
+    // So it is now a structural failure: rejected, retried ONCE with the
+    // plain-string schema (which the fake answers the same broken way here, so
+    // it fails again), and surfaced. routes/submit.ts turns that into "coaching
+    // is temporarily unavailable", which is honest about what happened.
+    await expect(coachWith('you missed the empty case')).rejects.toThrow(/missed/);
+    expect(mocks.create).toHaveBeenCalledTimes(2);
   });
 
   it('drops entries that are neither strings nor objects', async () => {

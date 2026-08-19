@@ -89,6 +89,12 @@ export interface ToolSchema {
   type: 'object';
   properties: Record<string, unknown>;
   required?: string[];
+  /**
+   * Required by `exactSchema` below, and meaningless without it. Left optional
+   * here because nine of the app's eleven tools do not ask for exact validation
+   * and adding the key to them would move their cached prefix for nothing.
+   */
+  additionalProperties?: boolean;
 }
 
 /**
@@ -102,6 +108,54 @@ export interface ToolSpec {
   name: string;
   description: string;
   schema: ToolSchema;
+  /**
+   * "This schema must be validated EXACTLY — the answer is worthless if it is
+   * merely schema-shaped."
+   *
+   * INTENT, NOT A VENDOR FIELD, which is what keeps it on the right side of the
+   * seam. Anthropic implements exactly this guarantee as `strict: true` on the
+   * tool definition (GA, no beta header), and llm.anthropic.ts is the only file
+   * that knows the spelling. An endpoint that cannot offer the guarantee simply
+   * does not: llm.openai.ts sends nothing, because the OpenAI-only `strict`
+   * spelling is one of the several newer spellings the local servers this app
+   * targets do not all accept, and the whole reason findSchemaTypeViolation
+   * below exists is that that path has to be defended in code instead.
+   *
+   * Setting it obliges the schema to carry `additionalProperties: false` and to
+   * name EVERY property in `required` — a field that must stay optional in
+   * effect is typed nullable (`type: ['string', 'null']`) and the consumer
+   * treats an explicit null exactly as it treats an absent field.
+   */
+  exactSchema?: boolean;
+  /**
+   * The trailing string field where a model's post-call drift lands, if this
+   * tool has one. Only meaningful together with `exactSchema`.
+   *
+   * MEASURED, AND THE MEASUREMENT IS THE WHOLE JUSTIFICATION. With strict tool
+   * use on, the coaching call stopped collapsing — every field arrived, every
+   * type was right, `missed` came back as four real anchored objects. What did
+   * NOT stop was the model's urge to write tool-call markup once it had said
+   * everything it had to say; the grammar simply has nowhere left to put it but
+   * the last string still open. Two live calls, and both of them ended with
+   *
+   *     calibration: "</antml>\n\n<invoke name=\"emit_coaching\">\n"
+   *     calibration: "</antml :parameter>\n"
+   *
+   * and a complete, correct brief in front of it.
+   *
+   * findLeakedToolCallFraming rejects a leak because it means THE FIELDS THAT
+   * SHOULD HAVE FOLLOWED ARE MISSING — read its header, that is the entire
+   * argument. Nothing follows the last field, and under `exactSchema` nothing
+   * can be missing anyway, so in this one slot the premise is simply false. A
+   * guard that fired here threw a good brief away and sent the player to a
+   * degraded retry that answered `pattern: "bogus"` — which is how this was
+   * found.
+   *
+   * The named field is NOT thereby trusted. It is excused from meaning "the
+   * call collapsed"; the consumer still has to treat its contents as suspect,
+   * which for `emit_coaching` is `looksLikeToolCallFraming` in llm.service.
+   */
+  leakSink?: string;
 }
 
 /** One conversational turn. `system` is not a role here — it is its own field. */
@@ -330,8 +384,57 @@ const TAG_NAME = /name\s*=\s*"([^"]*)"/i;
  * Any tool-call element at all, named or not. Used only as corroboration for
  * the unmatched-close-tag rule below — never on its own, because on its own it
  * is exactly the "regex-strip tags out of prose" mistake this avoids.
+ *
+ * IT HAS TO KNOW THE SCHEMA'S FIELD NAMES, and that is a measurement. The
+ * `<parameter name="x">` dialect is only one of the two the model actually
+ * emits; the other names the FIELD directly, and a real payload went
+ *
+ *     …reach for binary search.</patternRecognition>\n<complexity>\n<yours>O(…
+ *
+ * with not one `<parameter>` in it. Corroborating only on `parameter`/`invoke`/
+ * `function_calls` therefore let that whole dialect through: the close tag was
+ * found, nothing "tool-call-shaped" followed it as far as this regex was
+ * concerned, and the leak was reported as clean content.
+ *
+ * The safety argument is unchanged, because it never rested on this regex
+ * alone: the rule still needs an UNMATCHED close tag naming a field of THIS
+ * tool, and what follows must ALSO name a field of this tool (or be a wrapper).
+ * A lesson holding a bare `</code>` is still fine; a lesson holding `</code>`
+ * followed by `<takeaway>` is the torn edge of a serialized call.
  */
-const FOLLOWING_FRAMING = /<\/?\s*(?:antml:)?(?:function_calls|invoke|parameter)\b/i;
+const escapeForRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function followingFraming(fields: Set<string>): RegExp {
+  const names = ['function_calls', 'invoke', 'parameter', ...fields].map(escapeForRegex);
+  return new RegExp(`<\\/?\\s*(?:antml:)?(?:${names.join('|')})\\b`, 'i');
+}
+
+/**
+ * Every property name anywhere in a tool's schema, nested ones included.
+ *
+ * NESTED NAMES ARE THE POINT. When `missed` grew from `string[]` to an array of
+ * objects, the names the model can write in markup grew with it — a captured
+ * payload put `<parameter name="note">` (a SUBFIELD of a `missed` item) inside
+ * the `missed` string, and a detector holding only the eight top-level names
+ * had nothing to match it against and passed the payload through.
+ */
+export function schemaFieldNames(schema: unknown): Set<string> {
+  const out = new Set<string>();
+  const walk = (node: unknown) => {
+    if (!node || typeof node !== 'object') return;
+    const n = node as Record<string, unknown>;
+    const props = n.properties;
+    if (props && typeof props === 'object') {
+      for (const [k, v] of Object.entries(props as Record<string, unknown>)) {
+        out.add(k);
+        walk(v);
+      }
+    }
+    if (n.items) walk(n.items);
+  };
+  walk(schema);
+  return out;
+}
 
 /** Where a leak was found, and what gave it away. Both go into the error message. */
 export interface ToolCallLeak {
@@ -351,9 +454,11 @@ export function findLeakedToolCallFraming(
   input: Record<string, unknown>,
   tool: ToolSpec
 ): ToolCallLeak | null {
-  // The tool's own field names. A tag naming one of these is the signature: the
-  // model was writing THIS schema, in markup, inside a value of THIS schema.
-  const fields = new Set(Object.keys(tool.schema.properties ?? {}));
+  // The tool's own field names, TOP LEVEL AND NESTED. A tag naming one of these
+  // is the signature: the model was writing THIS schema, in markup, inside a
+  // value of THIS schema.
+  const fields = schemaFieldNames(tool.schema);
+  const following = followingFraming(fields);
 
   const leakIn = (s: string): string | null => {
     for (const m of s.matchAll(FRAMING_TAG)) {
@@ -388,13 +493,18 @@ export function findLeakedToolCallFraming(
       const close = `</${field}>`;
       const at = s.indexOf(close);
       if (at < 0 || s.includes(`<${field}>`)) continue;
-      if (FOLLOWING_FRAMING.test(s.slice(at + close.length))) return close;
+      if (following.test(s.slice(at + close.length))) return close;
     }
     return null;
   };
 
+  // See ToolSpec.leakSink. Excused only when the schema is validated exactly,
+  // because that is what makes "nothing can be missing" a fact rather than a hope.
+  const sink = tool.exactSchema ? tool.leakSink : undefined;
+
   const walk = (value: unknown, path: string): ToolCallLeak | null => {
     if (typeof value === 'string') {
+      if (path === sink) return null;
       const marker = leakIn(value);
       return marker ? { field: path, marker } : null;
     }
@@ -415,6 +525,111 @@ export function findLeakedToolCallFraming(
   };
 
   return walk(input, '');
+}
+
+// -----------------------------------------------------------------------------
+// A field that arrived as the WRONG JSON TYPE
+// -----------------------------------------------------------------------------
+// THE SECOND HALF OF THE SAME BUG, and the half the leak detector above cannot
+// see. When the model breaks out of JSON partway through a tool call, the field
+// it breaks out AT does not arrive as damaged content — it arrives as a
+// different TYPE. Five live calls against one real submission produced, at the
+// exact field where the schema stopped being a flat list of strings:
+//
+//   missed:     declared `array`,  arrived as "\n<item><note>…</note>…"
+//   missed:     declared `array`,  arrived as "\n<parameter name=\"note\">…"
+//   complexity: declared `object`, arrived as "\n<parameter name=\"yours\">O(n…"
+//
+// Nothing objected. `coerceMissed` starts `if (!Array.isArray(raw)) return []`
+// and `coach` starts `(input.complexity ?? {})`, so a string in either slot is
+// silently read as "the model had nothing to say" — an EMPTY "what you missed"
+// beside a confident "unknown / unknown", which is precisely the panel a real
+// user reported. Every one of those defences is correct in isolation; together
+// they turn a structural failure into a plausible-looking answer.
+//
+// THE RULE IS DELIBERATELY THE NARROWEST ONE THAT CATCHES ALL OF IT: a property
+// the schema declares `array` or `object`, arriving as a `string`. There is no
+// legitimate reading of that. It is NOT a JSON Schema validator and must not
+// grow into one — no `required` check (a model omitting an optional field is
+// ordinary), no enum check (`coerceMistakeTags` already filters), and above all
+// no check on ARRAY ELEMENTS: `missed` declares objects and a small local model
+// answers with plain strings, which `coerceMissed` supports on purpose and
+// which is a degraded brief, not a broken one.
+//
+// On the Anthropic path `exactSchema` makes this unreachable — the API validates
+// the call before it is returned. It is written for the OpenAI-compatible path,
+// which has no such guarantee, and as the belt for the day a `strict` promise
+// does not hold.
+
+/** A field whose JSON type contradicts the schema. Both parts go in the error. */
+export interface SchemaTypeViolation {
+  /** Dotted path to the offending value, e.g. `complexity` or `missed[0].fix`. */
+  field: string;
+  /** What the schema declared: `array` or `object`. */
+  declared: string;
+  /** The first 120 characters of the string that arrived instead. */
+  got: string;
+}
+
+/**
+ * Find a property the schema declares as a container that arrived as a string.
+ *
+ * Walks the schema and the value together, so `properties` nested inside
+ * `properties` and inside `items` are all reached.
+ */
+export function findSchemaTypeViolation(
+  input: Record<string, unknown>,
+  tool: ToolSpec
+): SchemaTypeViolation | null {
+  const walk = (schema: unknown, value: unknown, path: string): SchemaTypeViolation | null => {
+    if (!schema || typeof schema !== 'object') return null;
+    const node = schema as Record<string, unknown>;
+
+    const props = node.properties;
+    if (props && typeof props === 'object' && value && typeof value === 'object' && !Array.isArray(value)) {
+      const v = value as Record<string, unknown>;
+      for (const [key, sub] of Object.entries(props as Record<string, unknown>)) {
+        if (!(key in v)) continue;
+        const here = path ? `${path}.${key}` : key;
+        const declared = (sub as Record<string, unknown> | null)?.type;
+        if ((declared === 'array' || declared === 'object') && typeof v[key] === 'string') {
+          return { field: here, declared, got: (v[key] as string).slice(0, 120) };
+        }
+        const hit = walk(sub, v[key], here);
+        if (hit) return hit;
+      }
+      return null;
+    }
+
+    // Into arrays only to REACH nested properties. The elements themselves are
+    // never judged here — see the note above on `missed` and local models.
+    if (node.items && Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) {
+        const hit = walk(node.items, value[i], `${path}[${i}]`);
+        if (hit) return hit;
+      }
+    }
+    return null;
+  };
+
+  return walk(tool.schema, input, '');
+}
+
+/**
+ * Does this short string look like tool-call markup rather than a sentence?
+ *
+ * For a `leakSink` field ONLY — it is deliberately blunter than
+ * findLeakedToolCallFraming, because it is applied to one short field with a
+ * known job (a one-sentence predicted-vs-actual note) rather than to a lesson
+ * that may legitimately teach XML. It also has to catch the SPACED form the
+ * model actually emitted, `</antml :parameter>`, which is not a well-formed tag
+ * and which the strict detector correctly declines to match.
+ */
+const SINK_FRAMING =
+  /<\/?\s*(?:antml\s*[:.]?\s*)?(?:function_calls|invoke|parameter)\b|<\/\s*antml\b/i;
+
+export function looksLikeToolCallFraming(s: string): boolean {
+  return SINK_FRAMING.test(s);
 }
 
 /** The call did not finish inside its budget. Names the model and the endpoint. */

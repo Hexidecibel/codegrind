@@ -1,0 +1,235 @@
+{
+  "call1-missed-item-dialect": {
+    "meta": {
+      "servedModel": "claude-sonnet-5",
+      "stop": "tool_use",
+      "latencyMs": 19421,
+      "usage": {
+        "inputTokens": 1894,
+        "outputTokens": 1789,
+        "cachedInputTokens": 2202
+      }
+    },
+    "keys": [
+      "approach",
+      "missed",
+      "pattern",
+      "patternRecognition"
+    ],
+    "input": {
+      "approach": "The candidate tries a search-like approach: they compute a starting guess `cnt` (roughly half the \"extra\" pages above the max book), then loop while `cnt` is between `max` and `sum`, simulating a day-count for that limit with a flawed greedy scan (using `<` instead of `<=`, resetting `tmp` incorrectly), and nudging `cnt` up or down by 1 each iteration based on whether the simulated day count is >= days. They try to track a `potential` answer only when the simulated day count exactly equals `days`, but `potential` is never initialized, so `Math.min(cnt, potential)` is `NaN` forever, and it's returned as `undefined`/`null` in every single test.",
+      "missed": "\n<item>\n<note>`potential` is declared but never initialized before use, so `Math.min(cnt, potential)` always evaluates to `NaN`, and if that branch is never hit at all, the function returns `undefined`. This alone breaks all 11 tests.</note>\n<quote>let potential;</quote>\n<line>5</line>\n<fix>let potential = Infinity;</fix>\n</item>\n<item>\n<note>This is a linear +1/-1 walk toward the answer rather than binary search — it's O(sum) or worse iterations, not O(log(sum) * n), and it only updates the answer when the day count exactly equals `days`, but many optimal limits produce day counts strictly less than `days` (extra slack), so `potential` may never be set even if `cnt` were initialized, causing wrong or missing answers.</note>\n<quote>    if (dy>=days) {\n      if (dy == days) {\n        potential=Math.min(cnt, potential)\n      }\n      cnt--\n    } else {\n      cnt++\n    }</quote>\n<line>22</line>\n<fix>if (dy <= days) { potential = cnt; hi = cnt; } else { lo = cnt + 1; }</fix>\n</item>\n<item>\n<note>The day-count simulation itself is buggy: it uses `pg < tmp` (should be `pg > tmp` style check against remaining capacity) and resets `tmp = cnt` then immediately subtracts `pg` from the fresh capacity even on the day it overflows, which double-counts/miscounts pages and produces incorrect day totals regardless of the search strategy.</note>\n<quote>      if (pg<tmp) {\n        tmp-=pg\n      } else {\n        tmp=cnt\n        dy++\n        tmp-=pg\n      }</quote>\n<line>13</line>\n<fix>if (tmp + pg > cnt) { dy++; tmp = pg; } else { tmp += pg; }</fix>\n</item>\n<item>\n<note>The starting value `cnt = Math.floor((sum-max)/2)` is an arbitrary guess with no principled lower/upper bound search (should start `lo = max`, `hi = sum` and binary search between them); combined with the broken loop condition `cnt>max && cnt<sum`, the search can terminate at the wrong boundary or never converge correctly, e.g. for \"single book single day\" (pages=[42], days=1) `max=sum=42`, `cnt=0`, and the while condition `cnt>max` is immediately false, so `potential` stays uninitialized and `undefined` is returned — matching the observed failure.</note>\n</item>\n",
+      "pattern": "Binary search on the answer (search over a monotonic predicate space, not over the array itself)",
+      "patternRecognition": "Look for phrasing like \"minimize the maximum\" or \"maximize the minimum\" combined with a constraint like a fixed number of days/workers/groups — this is the classic signal for binary-searching over the *answer value* (a page limit, a speed, a capacity) rather than searching the input array. The key ingredients are: (1) a monotonic feasibility check — \"can I achieve this within the limit?\" — that gets easier as the limit grows, and (2) natural lower/upper bounds (max single element, sum of all elements) to seed `lo`/`hi`. Once you see monotonic feasibility + min-of-max or max-of-min phrasing, reach for binary search on the answer with a greedy feasibility helper.</patternRecognition>\n<complexity>\n<yours>O(sum(pages)) worst case per full run (linear walk with a buggy feasibility check, plus never actually returns a value), O(1) space</yours>\n<optimal>O(n log(sum(pages))) time, O(1) space</optimal>\n</complexity>\n<improvement>Practice the standard \"binary search on the answer\" template explicitly: set lo = max(array), hi = sum(array), write a clean, separately-testable feasibility/greedy helper (`daysNeeded(limit)`), and narrow with `while (lo < hi) { mid = ...; if (feasible(mid)) hi = mid; else lo = mid+1; } return lo;` — always initialize accumulator/result variables and unit-test the helper function in isolation before wiring up the search.</improvement>\n<mistakeTags>runtime-error,brute-force-only,complexity-misjudged,edge-case-missed,off-by-one</mistakeTags>\n<calibration\"></calibration>\n"
+    }
+  },
+  "call2-end-turn": {
+    "meta": {
+      "servedModel": "claude-sonnet-5",
+      "stop": "end_turn",
+      "latencyMs": 19864,
+      "usage": {
+        "inputTokens": 1894,
+        "outputTokens": 1698,
+        "cachedInputTokens": 2202
+      }
+    },
+    "keys": [
+      "approach",
+      "missed"
+    ],
+    "input": {
+      "approach": "The candidate tries to binary-search on the answer (the daily page limit), but the implementation is broken in several ways: they seed `cnt` from an arbitrary midpoint formula `(sum-max)/2` instead of a proper lo/hi binary search, they never initialize `potential`, the day-counting loop logic is buggy (it doesn't correctly simulate \"days needed for a given limit\"), and the loop condition/update (`cnt--`/`cnt++`) doesn't converge like a real binary search — it's closer to a fragile linear hill-climb that can also infinite-loop or exit without ever setting `potential`.",
+      "missed": "\n<item>\n<note>`potential` is declared but never initialized, so `Math.min(cnt, potential)` is `NaN` on the first assignment, and if the `dy == days` branch is never hit at all, `potential` stays `undefined` forever — which is exactly what happened on every single test (all returned `undefined`).</note>\n<quote>let potential;</quote>\n<line>5</line>\n<fix>let potential = Infinity;</fix>\n</item>\n<item>\n<note>The day-simulation loop is wrong: it initializes `tmp = cnt` then subtracts pages from `tmp`, but instead of checking whether the *current day's remaining capacity* can fit the next book, it compares `pg < tmp` (using the shrinking `tmp`) and only resets `tmp = cnt` when starting a new day AFTER already having decided to split — this conflates \"capacity used so far\" with a running countdown, and it never correctly restarts accumulation. This doesn't correctly compute \"how many days are needed to finish at this page limit\", which is the core building block of the algorithm.</note>\n<quote>      if (pg<tmp) {\n        tmp-=pg\n      } else {\n        tmp=cnt\n        dy++\n        tmp-=pg\n      }</quote>\n<line>13</line>\n<fix>      if (tmp + pg > cnt) {\n        dy++\n        tmp = pg\n      } else {\n        tmp += pg\n      }</fix>\n</item>\n<item>\n<note>Starting point `cnt = Math.floor((sum-max)/2)` is an arbitrary guess with no justification, and the loop bounds/update rules (`cnt--` / `cnt++` one at a time, with condition `cnt>max && cnt<sum`) don't implement binary search at all — this is a linear scan disguised as a while-loop, so even if the day-count logic were fixed, this would be O(sum) per call instead of O(log(sum) * n), and could still exit early without ever finding the true minimum (e.g. if it overshoots past the boundary in the wrong direction).</note>\n<quote>  let cnt = Math.floor((sum-max)/2)</quote>\n<line>4</line>\n<fix>  let lo = max, hi = sum;</fix>\n</item>\n<item>\n<note>Every single hidden test failed — including trivial ones like \"single book single day\" and \"one day read all\" — confirming this isn't an edge-case gap but a fundamentally broken core loop; the function essentially never produces a defined numeric answer.</note>\n</item>\n</missed>\n<pattern>Binary search on the answer space (search for the minimum feasible value using a monotonic feasibility check)</pattern>\n<patternRecognition>Look for phrasing like \"minimize the maximum\" or \"maximize the minimum\" combined with a constraint on how many groups/days/workers you're allowed — that's the classic signal for binary-searching the answer instead of trying to construct the partition directly. The key insight is that feasibility (\"can I finish within days at this page limit?\") is monotonic: if limit X works, every limit > X also works. Whenever you can write a boolean `canDo(x)` that's monotonic in `x`, binary search on `x` between a natural lower bound (max single element, since you can't split it) and a natural upper bound (sum of all elements).</patternRecognition>\n<complexity>\n<yours>Effectively O(sum(pages) * n) worst case (linear step through candidate answers, each requiring an O(n) simulation), and even that never terminates correctly to produce a valid answer, O(1) extra space</yours>\n<optimal>O(n log(sum(pages))) time, O(1) space</optimal>\n</complexity>\n<improvement>Practice writing the binary-search-on-answer template cold: `lo = max(arr)`, `hi = sum(arr)`, `while (lo < hi) { mid = (lo+hi)>>1; if (feasible(mid)) hi = mid; else lo = mid+1; }`, and write `feasible`/`daysNeeded` as its own small pure function you can unit-test mentally with the example before wiring it into the search — don't hand-roll ad-hoc increment/decrement loops.</improvement>\n<mistakeTags>runtime-error,wrong-data-structure,complexity-misjudged,brute-force-only,edge-case-missed</mistakeTags>\n<calibration\"></calibration>\n</emit_coaching>\n\n"
+    }
+  },
+  "call4-subfields-flattened": {
+    "meta": {
+      "servedModel": "claude-sonnet-5",
+      "stop": "tool_use",
+      "latencyMs": 21920,
+      "usage": {
+        "inputTokens": 1894,
+        "outputTokens": 2101,
+        "cachedInputTokens": 2202
+      }
+    },
+    "keys": [
+      "approach",
+      "missed",
+      "line",
+      "note",
+      "fix",
+      "pattern",
+      "patternRecognition",
+      "complexity",
+      "optimal",
+      "improvement",
+      "mistakeTags",
+      "calibration"
+    ],
+    "input": {
+      "approach": "The candidate attempts a search over the candidate \"max pages per day\" value, but instead of a clean binary search they start `cnt` at a somewhat arbitrary midpoint `(sum-max)/2`, then loop while `cnt` is strictly between `max` and `sum`, incrementing/decrementing `cnt` by 1 each iteration based on whether the simulated day-count is >= days or not. The day-count simulation itself (the inner for-loop) is also buggy — it doesn't correctly count how many days are needed to read all books under a given daily limit. Finally, the only path that sets `potential` requires hitting the exact day count equal to `days`, and even then it does `Math.min(cnt, potential)` while `potential` starts as `undefined`, so `Math.min` immediately returns `NaN`, and the loop can also exit without `potential` ever being set at all, leaving it `undefined`.",
+      "missed": "\n<parameter name=\"note\">The starting bounds and search strategy are not a proper binary search at all — `cnt` starts at `(sum-max)/2` and only moves by ±1 per iteration (linear search dressed up as binary search), so it's O(sum) per adjustment instead of O(log(sum-max)); combined with the broken feasibility check and never-updated `potential`, the function returns `undefined`/`null`/`NaN` on all 11 hidden tests.",
+      "line": 9,
+      "note": "This day-counting simulation has an off-by-one/boundary bug: it uses `pg < tmp` instead of `pg <= tmp` (or equivalently checking `tmp - pg < 0`), so a book that exactly fills the remaining capacity incorrectly forces a new day; it also fails to handle the very first book cleanly since `tmp` starts at `cnt` fully every time a new day starts rather than tracking pages consumed so far in the current day the way the reference `daysNeeded` helper does.",
+      "fix": "let potential = Infinity;",
+      "pattern": "Binary search on the answer (search over a monotonic predicate space)",
+      "patternRecognition": "Recognize this pattern when: (1) you're asked to minimize/maximize some value X such that a certain condition holds, (2) there's a monotonic relationship — as X increases, feasibility (or some derived count) monotonically increases or decreases, and (3) brute-force would mean checking every possible X value from a huge range. The fix is to binary search directly on the answer's value range (not indices into the array), using a helper \"is this X feasible?\" function, and shrink `[lo, hi]` by halves (`mid = (lo+hi)>>1`) rather than incrementing/decrementing by 1.",
+      "complexity": "\n<parameter name=\"yours\">O(sum(pages) * n) time in the worst case (linear step search with an O(n) feasibility check each step, and the result is broken anyway), O(1) space",
+      "optimal": "O(n * log(sum(pages) - max(pages))) time, O(1) space",
+      "improvement": "Rebuild this as a textbook binary-search-on-answer: set `lo = max(pages)`, `hi = sum(pages)`, write a correct `daysNeeded(limit)` helper that greedily packs books into a day while `current + p <= limit`, then binary search with `mid = Math.floor((lo+hi)/2)`, moving `hi = mid` when feasible and `lo = mid + 1` when not, returning `lo` — no need for a separate `potential` variable if you track the invariant correctly.",
+      "mistakeTags": [
+        "off-by-one",
+        "complexity-misjudged",
+        "brute-force-only",
+        "runtime-error",
+        "edge-case-missed"
+      ],
+      "calibration": ""
+    }
+  },
+  "call5-old-schema-clean": {
+    "meta": {
+      "servedModel": "claude-sonnet-5",
+      "stop": "tool_use",
+      "latencyMs": 16688,
+      "usage": {
+        "inputTokens": 1894,
+        "outputTokens": 1470,
+        "cachedInputTokens": 0
+      }
+    },
+    "keys": [
+      "approach",
+      "missed",
+      "pattern",
+      "patternRecognition",
+      "complexity",
+      "improvement",
+      "mistakeTags"
+    ],
+    "input": {
+      "approach": "The candidate attempts a binary-search-like approach: they start with a guessed \"cnt\" (roughly midpoint between max and sum), then simulate reading books by decrementing a \"tmp\" budget per day and counting days used (\"dy\"). Based on whether the simulated day-count is >=/< days, they nudge cnt up or down by 1 each iteration (linear step, not real binary search), and try to remember a \"potential\" answer when dy exactly equals days.",
+      "missed": [
+        "potential is never initialized (declared with `let potential;` — stays undefined unless the dy===days branch fires), so in almost every test the function returns undefined even when the internal search logic might otherwise be close, e.g. 'single book single day' and 'all equal pages' both return undefined.",
+        "The day-simulation logic is buggy: `if (pg<tmp) tmp-=pg; else { tmp=cnt; dy++; tmp-=pg; }` uses strict `<` instead of `<=`, and doesn't handle the case where a single book's pages exceed the daily limit `cnt` — it will produce wrong day counts (e.g., 'books with single heavy book' expects 100 but got undefined because the exact-match branch for `dy===days` was likely never hit).",
+        "The loop condition `cnt>max && cnt<sum` combined with cnt++/cnt-- by 1 each iteration means once cnt drifts outside (max, sum) the loop just exits without ever having set potential — this explains cases like 'large pages with few days' returning null (probably from Math.min(cnt, undefined) coercion) instead of the expected 210.",
+        "The initial cnt = Math.floor((sum-max)/2) is an arbitrary starting guess, not lo/hi bounds for binary search — this means the algorithm isn't really doing search-space halving, it's a linear increment/decrement walk that can fail to converge to the exact answer before exiting the loop (seen across nearly all 11 failing tests).",
+        "Because the answer is only captured when dy is *exactly* equal to days (line 22-25), any off-by-one in the day count (from the `<` vs `<=` bug) means dy skips over 'days' entirely for many inputs, so potential is never assigned — matches the pervasive undefined outputs across 10 of 11 tests."
+      ],
+      "pattern": "binary-search-on-answer (search over the space of possible answers, using a feasibility check function)",
+      "patternRecognition": "Look for problems asking to 'minimize the maximum' or 'maximize the minimum' of some grouping/split/allocation — classic cues: 'split into consecutive chunks', 'minimum days/workers/capacity to finish X', 'you cannot reorder/split items'. The signal is that the answer itself lives on a monotonic axis (as the daily limit increases, required days monotonically decreases), which means you can binary-search on the ANSWER value rather than search over splits directly. Write a feasibility/greedy check function (like daysNeeded(limit)) that answers 'can I finish within days using this limit?', and then binary search lo=max(single item), hi=sum(all items) for the smallest limit that satisfies feasibility.",
+      "complexity": {
+        "yours": "O(n * sum) time worst case (linear walk over the search space, each step O(n)), O(1) space — but also incorrect/non-terminating in many cases",
+        "optimal": "O(n log(sum)) time, O(1) space using true binary search with lo/hi halving"
+      },
+      "improvement": "Rebuild this as textbook binary-search-on-answer: set lo = max(pages), hi = sum(pages), then while(lo<hi) compute mid = floor((lo+hi)/2), check feasibility with a clean greedy day-counter (using <=, not <, and resetting tmp=0 not tmp=cnt), and shrink hi=mid if feasible else lo=mid+1; return lo. Also always initialize your return variable to a sane default (e.g., hi) so you never return undefined.",
+      "mistakeTags": [
+        "runtime-error",
+        "off-by-one",
+        "complexity-misjudged",
+        "edge-case-missed"
+      ]
+    }
+  },
+  "call6-strict-brief-dirty-calibration": {
+    "meta": {
+      "servedModel": "claude-sonnet-5",
+      "stop": "tool_use",
+      "usage": {
+        "inputTokens": 1894,
+        "outputTokens": 2145,
+        "cachedInputTokens": 2282
+      }
+    },
+    "keys": [
+      "approach",
+      "missed",
+      "pattern",
+      "patternRecognition",
+      "complexity",
+      "improvement",
+      "mistakeTags",
+      "calibration"
+    ],
+    "input": {
+      "approach": "The candidate tries to binary-search-ish walk toward an answer, but instead of a clean binary search they start from a single guessed midpoint (`cnt = floor((sum-max)/2)`), simulate how many days that limit would take, and then increment/decrement `cnt` by 1 each iteration depending on whether the simulated day count is too high or too low. They also try to track a `potential` best answer only when the simulated day count exactly equals `days`, but `potential` is never initialized, so it stays `undefined` (or `null` after a `Math.min` with undefined) for the entire run since it's used before being set to anything numeric.",
+      "missed": [
+        {
+          "note": "`potential` is declared but never given an initial numeric value. Even in the one path where it should update (`dy === days`), `Math.min(cnt, potential)` compares against `undefined`, which always yields `NaN`/`undefined`, so the returned value is never a valid page count — this is why every single test returns `undefined` or `null`.",
+          "quote": "let potential;",
+          "line": 5,
+          "fix": "let potential = Infinity;"
+        },
+        {
+          "note": "The day-simulation logic itself is buggy: it only updates `potential` and returns a value when the simulated days exactly equal `days` (`dy == days`); if the search skips over that exact match (which can easily happen since `cnt` moves by only 1 each loop but simulated `dy` can jump by more than 1 between consecutive `cnt` values), you never record a valid answer and the loop just drifts until `cnt` exits the `[max, sum]` bounds, returning `undefined`. A correct approach needs 'days needed <= limit' framing (feasibility check), not an exact-equality check.",
+          "quote": "if (dy>=days) {\n      if (dy == days) {\n        potential=Math.min(cnt, potential)\n      }\n      cnt--\n    } else {\n      cnt++\n    }",
+          "line": 22,
+          "fix": "if (dy<=days) {\n      potential = cnt;\n      cnt--;\n    } else {\n      cnt++;\n    }"
+        },
+        {
+          "note": "The day-counting simulation itself is off: it initializes `dy=1` and `tmp=cnt`, but then compares `pg<tmp` instead of tracking accumulated pages read so far against the limit; on the first book it never adds `pg` to a running total before comparing, and the reset logic (`tmp=cnt; dy++; tmp-=pg`) conflates 'start a new day' with the previous day's leftover, producing an incorrect number of days needed for a given page limit — a linear scan like the reference's `daysNeeded` helper (accumulate pages, and only start a new day when adding the next book would exceed the limit) is needed instead.",
+          "quote": "let tmp = cnt\n      let dy=1\n      for (let i=0; i<pages.length; i++) {\n        let pg = pages[i]\n        if (pg<tmp) {\n          tmp-=pg\n        } else {\n          tmp=cnt\n          dy++\n          tmp-=pg\n        }\n      }",
+          "line": 9,
+          "fix": "let current = 0;\n      let dy = 1;\n      for (let i=0; i<pages.length; i++) {\n        const pg = pages[i];\n        if (current + pg > cnt) {\n          dy++;\n          current = pg;\n        } else {\n          current += pg;\n        }\n      }"
+        },
+        {
+          "note": "There is no real binary search: starting from a single arbitrary midpoint and doing linear +1/-1 stepping toward the answer defeats the purpose of the pattern and can also infinite-loop or exit without ever finding a valid candidate, as seen across all 11 hidden tests (100% failure). The reference solution instead runs a classic binary search between `lo = max(pages)` and `hi = sum(pages)`, shrinking the range by half each iteration until it converges.",
+          "quote": "let cnt = Math.floor((sum-max)/2)",
+          "line": 4,
+          "fix": "let lo = max, hi = sum;"
+        }
+      ],
+      "pattern": "Binary search on the answer (search space is a range of possible answers, feasibility check via greedy simulation)",
+      "patternRecognition": "Look for problems that ask you to \"minimize the maximum\" or \"maximize the minimum\" of some quantity subject to a constraint (e.g., number of days, number of groups, capacity). The key signal is: you can't directly compute the answer, but given a candidate answer you CAN cheaply verify feasibility (here: \"can I finish within `days` days if my daily cap is X?\"), and feasibility is monotonic (if X works, every larger X also works). Whenever you see monotonic feasibility + a candidate value to test, binary search the answer space between a provable lower bound (largest single element, since you can't split it) and upper bound (sum of everything), and shrink with `hi = mid` / `lo = mid + 1` while `lo < hi`.",
+      "complexity": {
+        "yours": "Approximately O(n * range) worst case (or non-terminating/incorrect) due to +1/-1 stepping through the answer range instead of halving it, with additional correctness bugs preventing any valid result",
+        "optimal": "O(n log(sum - max)) time, O(1) space"
+      },
+      "improvement": "Rebuild this as a textbook binary-search-on-answer template: fix `lo = max(pages)`, `hi = sum(pages)`, write a clean `feasible(limit)` helper that greedily counts days needed (accumulate until exceeding limit, then reset), and loop `while (lo < hi) { mid = (lo+hi)>>1; feasible(mid) ? hi=mid : lo=mid+1; } return lo;` — memorize this shape since it's identical for \"minimum capacity to ship packages\", \"split array largest sum\", etc.",
+      "mistakeTags": [
+        "runtime-error",
+        "wrong-data-structure",
+        "complexity-misjudged",
+        "edge-case-missed",
+        "brute-force-only"
+      ],
+      "calibration": "</antml>\n\n<invoke name=\"emit_coaching\">\n"
+    }
+  },
+  "call7-strict-degenerate": {
+    "meta": {
+      "servedModel": "claude-sonnet-5",
+      "stop": "tool_use",
+      "usage": {
+        "inputTokens": 1894,
+        "outputTokens": 508,
+        "cachedInputTokens": 0
+      }
+    },
+    "keys": [
+      "approach",
+      "missed",
+      "pattern",
+      "patternRecognition",
+      "complexity",
+      "improvement",
+      "mistakeTags",
+      "calibration"
+    ],
+    "input": {
+      "approach": "The candidate tries to binary/linear search over a candidate daily page limit `cnt`, starting from roughly the midpoint between max(pages) and sum(pages), and adjusting `cnt` up or down based on whether the simulated day count is above or below `days`. Inside the loop, it tries to simulate how many days are needed for a given `cnt` limit, but the simulation logic itself is broken (wrong accumulation, wrong comparison direction, off-by-one book skipping), and the search loop only updates `potential` when `dy` is exactly equal to `days`, leaving it `undefined` in the vast majority of cases.",
+      "missed": [],
+      "pattern": "binary-search",
+      "patternRecognition": " ",
+      "complexity": {
+        "yours": "O(range * n) worst-case but incorrect/non-terminating in many cases, O(1) space",
+        "optimal": "O(n log(sum-max)) time, O(1) space"
+      },
+      "improvement": "placeholder",
+      "mistakeTags": [],
+      "calibration": "</antml :parameter>\n"
+    }
+  }
+}

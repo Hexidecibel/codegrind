@@ -167,12 +167,26 @@ describe('the response', () => {
     expect((await translateSnippets(SNIPPETS, 'javascript', 'python')).size).toBe(0);
   });
 
-  it('survives a malformed payload instead of throwing into the warm job', async () => {
-    mocks.create.mockResolvedValue(toolResponse('not an array'));
-    expect((await translateSnippets(SNIPPETS, 'javascript', 'python')).size).toBe(0);
-
+  it('survives junk ENTRIES instead of throwing into the warm job', async () => {
     mocks.create.mockResolvedValue(toolResponse([null, 'nope', { code: 'no id' }]));
     expect((await translateSnippets(SNIPPETS, 'javascript', 'python')).size).toBe(0);
+  });
+
+  it('is LOUD when `translations` is not an array at all', async () => {
+    // This half used to sit in the test above, asserting an empty map. It has
+    // been split out and reversed, because the two payloads are not the same
+    // kind of wrong. A junk ENTRY is a model being sloppy about one snippet.
+    // A `translations` that is a STRING is the field where the model stopped
+    // emitting JSON — the same collapse that was measured on the coaching call
+    // — and everything after it is gone. Silently storing nothing marks the
+    // topic translated-and-empty; throwing lands in `once()`, which records the
+    // cooldown and leaves the reader on the source-language snippets until the
+    // next attempt. That is the same treatment "did not call the tool" gets
+    // below, and for the same reason.
+    mocks.create.mockResolvedValue(toolResponse('not an array'));
+    await expect(translateSnippets(SNIPPETS, 'javascript', 'python')).rejects.toThrow(
+      /translations/
+    );
   });
 
   it('throws when the model did not call the tool at all', async () => {

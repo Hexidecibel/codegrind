@@ -332,6 +332,16 @@ export function createOpenAiClient(model: string, opts: OpenAiClientOptions): Ll
                   // The tool schema IS the response schema, passed through
                   // unchanged — the same JSON Schema body Anthropic is handed.
                   parameters: tool.schema,
+                  // AND `ToolSpec.exactSchema` IS DELIBERATELY NOT TRANSLATED
+                  // HERE, for the same reason `max_tokens` is not spelled
+                  // `max_completion_tokens` above: OpenAI's `strict` is a newer
+                  // OpenAI-only spelling that llama.cpp, llama-swap and vLLM's
+                  // older routes do not all accept, and the ones that do accept
+                  // it do not all enforce it. Sending it would buy a promise
+                  // this path cannot keep. `exactSchema` says what is WANTED;
+                  // an endpoint that cannot offer it says so by doing nothing,
+                  // and llm.client.structured()'s findSchemaTypeViolation is
+                  // the defence that covers this path instead.
                 },
               },
             ],
