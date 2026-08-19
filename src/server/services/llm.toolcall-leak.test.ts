@@ -309,13 +309,28 @@ describe('coach() rejects the collapsed brief instead of rendering it', () => {
     );
   });
 
-  it('is a SEMANTIC failure — one call, never retried at the transport layer', async () => {
+  it('is a SEMANTIC failure — never retried at the transport layer, and the one ' +
+     'service-level retry changes the SCHEMA rather than repeating the request', async () => {
     answerWith(LEAKED_COACHING);
     await expect(llm.coach(PROBLEM, 'function pairSum() {}', RESULTS)).rejects.toThrow();
-    // Three attempts here would be three paid calls re-sending a prompt that
-    // just failed. routes/submit.ts catches this and shows the "coaching is
-    // temporarily unavailable" brief; bank generation varies the prompt itself.
-    expect(mocks.create).toHaveBeenCalledTimes(1);
+    // Three attempts would be three paid calls re-sending a prompt that just
+    // failed, which is why the transport still never retries this.
+    //
+    // TWO, not one, and the second is a DIFFERENT REQUEST. A structural failure
+    // is evidence against the schema that produced it, so coach() drops the
+    // nesting once — `missed` back to a plain array of strings, the shape that
+    // measured clean on the same submission. Without it, the validation added
+    // here would turn every submit on a model that cannot hold the nested shape
+    // into "coaching is temporarily unavailable", which is worse than the plain
+    // bullets it replaced. Here the fake answers the second call the same
+    // broken way, so the failure still surfaces — the ladder has two rungs.
+    expect(mocks.create).toHaveBeenCalledTimes(2);
+    const schemaOf = (i: number) =>
+      (mocks.create.mock.calls[i][0] as {
+        tools: { input_schema: { properties: { missed: { items: { type: string } } } } }[];
+      }).tools[0].input_schema.properties.missed.items.type;
+    expect(schemaOf(0)).toBe('object');
+    expect(schemaOf(1)).toBe('string');
   });
 
   it('still returns the brief when the model answers properly', async () => {

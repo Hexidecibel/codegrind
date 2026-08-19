@@ -33,7 +33,13 @@ import {
   type LanguageProfile,
 } from './llm.language.js';
 import { structured, text as textCall } from './llm.client.js';
-import { LlmToolCallError, type CallMeta, type LlmMessage, type ToolSpec } from './llm.types.js';
+import {
+  LlmToolCallError,
+  looksLikeToolCallFraming,
+  type CallMeta,
+  type LlmMessage,
+  type ToolSpec,
+} from './llm.types.js';
 
 // ---------------------------------------------------------------------------
 // This file writes PROMPTS and unwraps ANSWERS.
@@ -495,10 +501,10 @@ export async function generateProblem(
       system: GENERATE_SYSTEM_BY_LANGUAGE[language],
       tool: EMIT_PROBLEM_TOOL_BY_LANGUAGE[language],
       messages: [
-        {
-          role: 'user',
-          content: buildGenerateUserMessage(language, topic, difficulty, opts),
-        },
+      {
+      role: 'user',
+      content: buildGenerateUserMessage(language, topic, difficulty, opts),
+      },
       ],
     });
     if (call.meta.stop === 'max_tokens') throw truncated(call.meta);
@@ -564,9 +570,9 @@ Your job: a structured coaching brief focused on INTERVIEW PATTERN MASTERY.
 - approach: paraphrase what the candidate's code actually does, in plain language. Be accurate about their real approach.
 - missed: concrete things they got wrong or overlooked, as an array of OBJECTS. TIE each item to the specific failing test(s) and the root cause. If everything passed, note remaining risks or edge cases they handled implicitly. Empty array only if truly flawless. Each object has:
   - note (REQUIRED): the bullet itself — exactly the sentence or two you would have written anyway.
-  - quote (optional): the line, or at most a few CONSECUTIVE lines, of THEIR submission that this item is about, copied CHARACTER FOR CHARACTER out of the CANDIDATE'S SUBMISSION block. It is used to find that line in their editor and light it up, so it must be a line they actually wrote — never a line you wish they had written, never a paraphrase, never your own corrected version. OMIT the field entirely when the item is about something ABSENT from their code (a missing guard, an unhandled empty case, a check they never made): there is no line to point at, and an invented one points at the wrong place.
-  - line (optional): the gutter number of the first quoted line. It is used ONLY to disambiguate when the quoted text appears more than once, so include it whenever you include a quote.
-  - fix (optional): what those exact quoted lines SHOULD have been — the replacement for them and nothing else, same indentation, no surrounding code, no commentary. Only when you gave a quote, and only when replacing those few lines genuinely fixes the item. Omit it when the fix is "rewrite the approach".
+  - quote: the line, or at most a few CONSECUTIVE lines, of THEIR submission that this item is about, copied CHARACTER FOR CHARACTER out of the CANDIDATE'S SUBMISSION block. It is used to find that line in their editor and light it up, so it must be a line they actually wrote — never a line you wish they had written, never a paraphrase, never your own corrected version. Use null when the item is about something ABSENT from their code (a missing guard, an unhandled empty case, a check they never made): there is no line to point at, and an invented one points at the wrong place.
+  - line: the gutter number of the first quoted line. It is used ONLY to disambiguate when the quoted text appears more than once, so give it whenever you give a quote, and null when quote is null.
+  - fix: what those exact quoted lines SHOULD have been — the replacement for them and nothing else, same indentation, no surrounding code, no commentary. Only when you gave a quote, and only when replacing those few lines genuinely fixes the item. Use null when quote is null, or when the fix is "rewrite the approach".
 - pattern: name the underlying pattern this problem tests.
 - patternRecognition: how to RECOGNIZE this pattern in a future problem — the signals/cues an interviewer plants. This is the most valuable part.
 - complexity: the candidate's time & space complexity ("yours") vs the optimal ("optimal"), each as a short string like "O(n^2) time, O(1) space".
@@ -579,68 +585,172 @@ The CANDIDATE'S SUBMISSION is shown to you with a "   7 | " line-number gutter t
 Be specific and honest. Reference the real test names and outcomes. Call emit_coaching exactly once.`
 );
 
+/**
+ * The coaching schema, and the one tool in this app that asks to be validated
+ * EXACTLY.
+ *
+ * WHY `exactSchema` IS SET HERE AND NOWHERE ELSE. This is the only tool whose
+ * schema is not a flat bag of strings — `missed` is an array of objects and
+ * `complexity` is an object — and that nesting is exactly where a real model
+ * stopped emitting JSON. Measured on five live calls against one real broken
+ * submission: with `missed` as an array of OBJECTS the call came back structurally
+ * broken 4 times out of 4 (once as `stop_reason: end_turn` with the last five
+ * fields simply absent, once with the `missed` subfields flattened to the top
+ * level, twice with the remainder of the call serialized into a string); with
+ * `missed` as a plain `string[]` — the fifth call, same prompt, same submission —
+ * it came back clean. Peak output was 2101 tokens against a 16000 budget and 0
+ * thinking tokens, so it was neither truncation nor budget: it was the shape.
+ *
+ * (The comment that used to sit here called `strict: true` "an OpenAI-only
+ * spelling the adapter deliberately avoids". That was wrong. Anthropic's strict
+ * tool use is GA, takes no beta header, and lives as a top-level field on the
+ * TOOL — not on `tool_choice` — where it guarantees `tool_use.input` validates
+ * against this schema. The similarly-named field that the local-endpoint
+ * adapter deliberately does not send is a different question, and it is why
+ * `exactSchema` is intent rather than a vendor flag: see ToolSpec.)
+ *
+ * WHAT STRICT COSTS, AND HOW THE OPTIONAL FIELDS SURVIVE IT. Strict requires
+ * `additionalProperties: false` and requires every property to be named in
+ * `required` — which reads like the opposite of what this schema wants, since
+ * `quote`, `line` and `fix` must stay omittable: a fabricated `quote` (a
+ * "missing guard" line that does not exist in the submission) is the single
+ * most expensive thing the coach can invent. They stay omittable IN EFFECT by
+ * being typed nullable. The model writes `null` where it would have written
+ * nothing, `coerceMissed` treats an explicit null exactly as it treats an
+ * absent field, and the instruction in COACH_SYSTEM_BY_LANGUAGE still says
+ * "omit" because that is the behaviour being asked for.
+ */
+const MISSED_ITEM_SCHEMA = {
+  type: 'object',
+  properties: {
+    note: { type: 'string', description: 'The bullet: what they got wrong or overlooked.' },
+    quote: {
+      // Nullable rather than absent — see the note above. `null` IS the omission.
+      type: ['string', 'null'],
+      description:
+        "The line(s) of THEIR submission this is about, copied verbatim without the line-number gutter. Use null when the item is about code that is ABSENT.",
+    },
+    line: {
+      type: ['number', 'null'],
+      description: 'Gutter line number of the first quoted line (disambiguation only); null with no quote.',
+    },
+    fix: {
+      type: ['string', 'null'],
+      description:
+        'What those exact quoted lines should have been — the replacement and nothing else. Only alongside a quote; null otherwise.',
+    },
+  },
+  required: ['note', 'quote', 'line', 'fix'],
+  additionalProperties: false,
+} as const;
+
+/** Everything except `missed`, which is the only field the two variants differ in. */
+const COACHING_PROPERTIES_BUT_MISSED = {
+  approach: { type: 'string' },
+  pattern: { type: 'string' },
+  patternRecognition: { type: 'string' },
+  complexity: {
+    type: 'object',
+    properties: {
+      yours: { type: 'string' },
+      optimal: { type: 'string' },
+    },
+    required: ['yours', 'optimal'],
+    additionalProperties: false,
+  },
+  improvement: { type: 'string' },
+  mistakeTags: {
+    type: 'array',
+    description: `Recurring failure-mode tags, chosen ONLY from: ${MISTAKE_TAGS.join(', ')}. Empty if clean.`,
+    items: { type: 'string', enum: MISTAKE_TAGS as unknown as string[] },
+  },
+  calibration: {
+    type: 'string',
+    description:
+      'Predicted-vs-actual complexity/approach note when a prediction was provided; empty string otherwise.',
+  },
+} as const;
+
+/**
+ * Every property, in the order they are described in the system prompt.
+ *
+ * Built ONCE at module load, like every other tool here — see the byte-stability
+ * note in llm.types.ts. A schema rebuilt per call is a cached prefix thrown away
+ * per call.
+ */
+const coachingSchema = (missed: Record<string, unknown>) => ({
+  type: 'object' as const,
+  properties: {
+    approach: COACHING_PROPERTIES_BUT_MISSED.approach,
+    missed,
+    pattern: COACHING_PROPERTIES_BUT_MISSED.pattern,
+    patternRecognition: COACHING_PROPERTIES_BUT_MISSED.patternRecognition,
+    complexity: COACHING_PROPERTIES_BUT_MISSED.complexity,
+    improvement: COACHING_PROPERTIES_BUT_MISSED.improvement,
+    mistakeTags: COACHING_PROPERTIES_BUT_MISSED.mistakeTags,
+    calibration: COACHING_PROPERTIES_BUT_MISSED.calibration,
+  },
+  // Strict wants all of them. `mistakeTags` and `calibration` were already
+  // documented in the prompt as "empty array"/"empty string" rather than
+  // "omit", so requiring them asks for nothing new.
+  required: [
+    'approach',
+    'missed',
+    'pattern',
+    'patternRecognition',
+    'complexity',
+    'improvement',
+    'mistakeTags',
+    'calibration',
+  ],
+  additionalProperties: false,
+});
+
 const EMIT_COACHING_TOOL: ToolSpec = {
   name: 'emit_coaching',
   description: 'Emit the structured coaching brief.',
-  schema: {
-    type: 'object',
-    properties: {
-      approach: { type: 'string' },
-      // Only `note` is required, following the `mistakeTags`/`calibration`
-      // precedent above: a field the model cannot honestly fill is better
-      // omitted than invented, and `quote` is precisely the field where an
-      // invention (a "missing guard" line that does not exist) costs the most.
-      // No `strict: true` — that is an OpenAI-only spelling the adapter
-      // deliberately avoids, and it would demand every property be required,
-      // which is the opposite of what this schema is for.
-      missed: {
-        type: 'array',
-        items: {
-          type: 'object',
-          properties: {
-            note: { type: 'string', description: 'The bullet: what they got wrong or overlooked.' },
-            quote: {
-              type: 'string',
-              description:
-                "The line(s) of THEIR submission this is about, copied verbatim without the line-number gutter. Omit when the item is about code that is ABSENT.",
-            },
-            line: {
-              type: 'number',
-              description: 'Gutter line number of the first quoted line (disambiguation only).',
-            },
-            fix: {
-              type: 'string',
-              description:
-                'What those exact quoted lines should have been — the replacement and nothing else. Only alongside a quote.',
-            },
-          },
-          required: ['note'],
-        },
-      },
-      pattern: { type: 'string' },
-      patternRecognition: { type: 'string' },
-      complexity: {
-        type: 'object',
-        properties: {
-          yours: { type: 'string' },
-          optimal: { type: 'string' },
-        },
-        required: ['yours', 'optimal'],
-      },
-      improvement: { type: 'string' },
-      mistakeTags: {
-        type: 'array',
-        description: `Recurring failure-mode tags, chosen ONLY from: ${MISTAKE_TAGS.join(', ')}. Empty if clean.`,
-        items: { type: 'string', enum: MISTAKE_TAGS as unknown as string[] },
-      },
-      calibration: {
-        type: 'string',
-        description:
-          'Predicted-vs-actual complexity/approach note when a prediction was provided; empty string otherwise.',
-      },
-    },
-    required: ['approach', 'missed', 'pattern', 'patternRecognition', 'complexity', 'improvement'],
-  },
+  exactSchema: true,
+  // Last in the schema, empty by design whenever there is no prediction, and
+  // — measured, twice, live — where this model parks its closing tool-call
+  // markup once the brief is written. See ToolSpec.leakSink.
+  leakSink: 'calibration',
+  schema: coachingSchema({
+    type: 'array',
+    items: MISSED_ITEM_SCHEMA as unknown as Record<string, unknown>,
+  }),
+};
+
+/**
+ * The same brief with the ANCHORS GIVEN UP: `missed` is a plain array of
+ * strings again.
+ *
+ * THIS IS THE FALLBACK, AND IT IS A REAL ANSWER RATHER THAN AN ERROR. The
+ * validation added alongside it is honest but merciless: a model that cannot
+ * produce the nested shape now fails the coaching call outright, and for a
+ * local-model install that would turn a brief that reads a little plainer into
+ * "coaching is temporarily unavailable" on every single submit — strictly worse
+ * than what shipped before any of this. So a structural failure buys exactly
+ * ONE retry, with this schema, which is the schema that was measured clean.
+ *
+ * What the player loses is the click-to-highlight anchor and the suggested
+ * replacement. What they keep is every bullet, tied to the failing tests, which
+ * is what "what you missed" was for two weeks ago and is still worth reading.
+ * `coerceMissed`'s string branch — written for exactly this — renders it.
+ */
+const EMIT_COACHING_TOOL_PLAIN_MISSED: ToolSpec = {
+  name: 'emit_coaching',
+  description: 'Emit the structured coaching brief.',
+  exactSchema: true,
+  // Last in the schema, empty by design whenever there is no prediction, and
+  // — measured, twice, live — where this model parks its closing tool-call
+  // markup once the brief is written. See ToolSpec.leakSink.
+  leakSink: 'calibration',
+  schema: coachingSchema({
+    type: 'array',
+    items: { type: 'string' },
+    description:
+      'Concrete things they got wrong or overlooked, one sentence or two per item, each tied to the failing test(s) and the root cause.',
+  }),
 };
 
 /** Keep only tags in the fixed vocabulary (defensive — the schema also constrains). */
@@ -737,7 +847,12 @@ function coerceMissed(
       // A grammar-constrained decoder emits `"line": "7"` often enough to be
       // worth two lines here; a hint that fails to parse is simply absent, and
       // absent is a case resolveAnchor already handles.
-      const hintRaw = typeof e.line === 'number' ? e.line : Number(e.line);
+      //
+      // `null` IS ABSENT, and it has to be spelled out: `Number(null)` is 0,
+      // which is finite, so without this line a schema that (for strict tool
+      // use) declares `line` required-but-nullable would hand resolveAnchor a
+      // confident hint of line 0 for every item the coach declined to anchor.
+      const hintRaw = e.line == null ? NaN : typeof e.line === 'number' ? e.line : Number(e.line);
       const hint = Number.isFinite(hintRaw) ? hintRaw : undefined;
       const anchor = resolveAnchor(source, quote, hint);
       if (anchor) item.anchor = anchor;
@@ -829,51 +944,87 @@ ${numberLines(userCode)}
 TEST RESULTS (${passed}/${results.length} passed):
 ${summarizeResults(results)}${predictionBlock}`;
 
-  const call = await structured({
-    // Teaching call, but it fires on EVERY submit — so it stays on the
-    // workhorse role and pays for thinking rather than for the bigger model.
-    // (askFollowup fires only when the candidate actually asks, which is why
-    // that one is the `tutor` role.) If coaching quality disappoints, switching
-    // this to `tutor` is the whole change.
-    role: 'workhorse',
-    // 2500 was sized for a thinking-off model. With adaptive thinking the
-    // budget covers thinking + the brief, so a tight cap truncates the tool
-    // call mid-JSON and the whole brief is lost.
-    //
-    // 8000 -> 10000 when `missed` grew from strings to objects carrying a
-    // quote and a replacement snippet: the same eight bullets now cost several
-    // lines of the candidate's code each.
-    //
-    // 10000 -> 16000 after a live truncation on a binary-search submit: the
-    // brief arrived with `approach` and `pattern` filled and everything after
-    // them empty. That also corrects the sentence that used to sit here — a
-    // tool call cut mid-JSON does NOT lose the whole brief. The API returns the
-    // PARTIAL input, so every field the model had not reached yet quietly takes
-    // its default (`missed: []`, blank patternRecognition, complexity
-    // unknown/unknown) and a gutted brief renders exactly like a complete one.
-    // That is worse than losing it, and it is why the check below is not
-    // optional. 16000 is generateProblem's already-proven budget.
-    maxTokens: 16000,
-    thinking: 'adaptive',
-    system: COACH_SYSTEM_BY_LANGUAGE[problem.language],
-    tool: EMIT_COACHING_TOOL,
-    messages: [{ role: 'user', content: userMessage }],
-  });
-  // Catch truncation HERE, the only point where the stop reason is still
-  // visible — once parsed, a truncated brief is indistinguishable from a terse
-  // one. generateProblem has guarded this since its own incident (`truncated`
-  // above); coaching did not, and shipped a half-empty panel to a real user.
-  // submit.ts turns this throw into "coaching is temporarily unavailable",
-  // which is honest. Complexity "unknown / unknown" beside an empty "what you
-  // missed" is not.
-  if (call.meta.stop === 'max_tokens') {
-    throw new Error(
-      `Coaching truncated at max_tokens (${problem.title}) after ` +
-        `${call.meta.usage.outputTokens} output tokens — the brief would have ` +
-        `rendered with empty fields rather than absent ones.`,
+  /**
+   * One attempt, with the truncation check that has to happen while the stop
+   * reason is still visible.
+   */
+  const ask = async (tool: ToolSpec): Promise<Record<string, unknown>> => {
+    const call = await structured({
+      // Teaching call, but it fires on EVERY submit — so it stays on the
+      // workhorse role and pays for thinking rather than for the bigger model.
+      // (askFollowup fires only when the candidate actually asks, which is why
+      // that one is the `tutor` role.) If coaching quality disappoints, switching
+      // this to `tutor` is the whole change.
+      role: 'workhorse',
+      // 2500 was sized for a thinking-off model. With adaptive thinking the
+      // budget covers thinking + the brief, so a tight cap truncates the tool
+      // call mid-JSON and the whole brief is lost.
+      //
+      // 8000 -> 10000 when `missed` grew from strings to objects carrying a
+      // quote and a replacement snippet: the same eight bullets now cost several
+      // lines of the candidate's code each.
+      //
+      // 10000 -> 16000 after a live truncation on a binary-search submit: the
+      // brief arrived with `approach` and `pattern` filled and everything after
+      // them empty. That also corrects the sentence that used to sit here — a
+      // tool call cut mid-JSON does NOT lose the whole brief. The API returns the
+      // PARTIAL input, so every field the model had not reached yet quietly takes
+      // its default (`missed: []`, blank patternRecognition, complexity
+      // unknown/unknown) and a gutted brief renders exactly like a complete one.
+      // That is worse than losing it, and it is why the check below is not
+      // optional. 16000 is generateProblem's already-proven budget.
+      maxTokens: 16000,
+      thinking: 'adaptive',
+      system: COACH_SYSTEM_BY_LANGUAGE[problem.language],
+      tool,
+      messages: [{ role: 'user', content: userMessage }],
+    });
+    // Catch truncation HERE, the only point where the stop reason is still
+    // visible — once parsed, a truncated brief is indistinguishable from a terse
+    // one. generateProblem has guarded this since its own incident (`truncated`
+    // above); coaching did not, and shipped a half-empty panel to a real user.
+    // submit.ts turns this throw into "coaching is temporarily unavailable",
+    // which is honest. Complexity "unknown / unknown" beside an empty "what you
+    // missed" is not.
+    if (call.meta.stop === 'max_tokens') {
+      throw new Error(
+        `Coaching truncated at max_tokens (${problem.title}) after ` +
+          `${call.meta.usage.outputTokens} output tokens — the brief would have ` +
+          `rendered with empty fields rather than absent ones.`,
+      );
+    }
+    return call.input;
+  };
+
+  // ONE RETRY, WITH A SIMPLER SHAPE — and it is deliberately not a retry of the
+  // same request. `LlmToolCallError` out of `structured()` means the answer was
+  // structurally broken: the tool call collapsed into one of its own strings, or
+  // a field the schema declares as a container arrived as a string, or no tool
+  // call came back at all. Re-sending the identical body would re-send the
+  // identical schema, which is the thing that failed. So the second attempt
+  // drops the nesting: `missed` becomes a plain array of strings, the shape that
+  // measured clean on the same submission, and the brief comes back without
+  // anchors instead of not at all.
+  //
+  // NOT retried on truncation (a plain Error above, not this one) and not
+  // retried when the failure ALREADY says max_tokens — a smaller schema does not
+  // buy back a budget, and a second 16000-token call to learn that is expensive.
+  // Never more than one: two schemas is the whole ladder there is.
+  let input: Record<string, unknown>;
+  try {
+    input = await ask(EMIT_COACHING_TOOL);
+  } catch (err) {
+    if (!(err instanceof LlmToolCallError) || err.meta.stop === 'max_tokens') throw err;
+    // Loud on purpose. This is the only signal that the rich schema is failing
+    // on whatever model is configured, and a silent degradation would look
+    // exactly like a coach that stopped bothering to quote anybody's code.
+    console.warn(
+      `[coach] emit_coaching failed structurally on ${err.meta.servedModel} ` +
+        `(${err.message.slice(0, 200)}) — retrying once with plain-string "missed". ` +
+        `The brief will have no line anchors and no suggested fixes.`
     );
+    input = await ask(EMIT_COACHING_TOOL_PLAIN_MISSED);
   }
-  const { input } = call;
   const complexity = (input.complexity ?? {}) as Record<string, unknown>;
   // Anchors resolve against the RAW submission, never the numbered copy above:
   // the gutter exists only inside the prompt, and code-lines.ts strips it back
@@ -893,9 +1044,18 @@ ${summarizeResults(results)}${predictionBlock}`;
     mistakeTags: coerceMistakeTags(input.mistakeTags),
   };
   // calibration only surfaces when a prediction was in play and the coach wrote one.
+  //
+  // AND ONLY WHEN IT IS A SENTENCE. This is the schema's `leakSink`: the field
+  // the model reliably parks its leftover tool-call markup in now that strict
+  // tool use stops it from breaking out of the JSON altogether. Excusing the
+  // field from the collapse detector (see ToolSpec.leakSink) is what keeps a
+  // complete brief from being thrown away over its last line; dropping it here
+  // is the other half, and it is the same rule as every other coercion in this
+  // file — a field that cannot be rendered honestly is absent, not rendered.
   if (prediction) {
     const cal = typeof input.calibration === 'string' ? input.calibration.trim() : '';
-    if (cal) brief.calibration = cal;
+    if (cal && !looksLikeToolCallFraming(cal)) brief.calibration = cal;
+    else if (cal) console.warn('[coach] calibration held tool-call markup; dropped.');
   }
   return { brief, fixes };
 }

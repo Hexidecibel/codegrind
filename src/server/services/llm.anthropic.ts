@@ -170,6 +170,15 @@ export function createAnthropicClient(model: string, seam?: AnthropicSeam): LlmC
                 name: tool.name,
                 description: tool.description,
                 input_schema: tool.schema as unknown as Anthropic.Tool.InputSchema,
+                // `ToolSpec.exactSchema` spelled the way Anthropic spells it.
+                // GA — no beta header — and it is the direct cure for a model
+                // that breaks out of JSON partway through a forced tool call:
+                // with it set, `tool_use.input` is guaranteed to validate
+                // against the schema, so the "rest of the fields serialized
+                // into the last string" shape cannot come back at all. Emitted
+                // only when asked for, because it moves the cached prefix of
+                // every call that carries it.
+                ...(tool.exactSchema ? { strict: true } : {}),
               },
             ],
             tool_choice: { type: 'tool' as const, name: tool.name },
