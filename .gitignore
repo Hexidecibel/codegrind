@@ -33,3 +33,10 @@ data-scratch/
 # needs nor uses it, and it must never be tracked again (it named an internal
 # vault path and revealed which projects share one key).
 .cush-secrets
+
+# The author's direnv hook: refreshes .env from cush-tools secret tooling on cd.
+# NOT part of the product. It hardcodes a path that only exists on one machine,
+# and `dotenv` is a direnv builtin, so the file is inert-to-broken anywhere else.
+# Shipping it meant every clone with direnv installed opened on a red
+# ".envrc is blocked" error before bin/setup was even run.
+.envrc
