@@ -67,6 +67,10 @@ blocked: a revealed problem simply earns no tier credit.
 
 ## Quickstart
 
+**You need [Docker](https://docs.docker.com/get-started/get-docker/) and npm.** That is the
+whole prerequisite list — your submissions run in per-language sandbox containers, so Docker
+is not optional. Nothing else needs installing, and there is nothing to configure first.
+
 ```
 git clone git@github.com:Hexidecibel/codegrind.git
 cd codegrind
