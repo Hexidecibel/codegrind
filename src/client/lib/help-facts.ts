@@ -80,6 +80,16 @@ export const UNLOCK_TIER: Difficulty = 'easy';
 export const REVIEW_LADDER_DAYS: readonly number[] = [0, 2, 5, 10];
 
 /**
+ * The lowest ladder rung a SKIPPED review is snoozed on. A skip reads the rung
+ * at max(attempts, this) and does not add an attempt; rung 0 is "due now", so
+ * anything lower would snooze nothing. `db.snoozeReview`.
+ */
+export const REVIEW_SKIP_MIN_RUNG = 1;
+
+/** How long a skipped review stays away at minimum, in days. */
+export const REVIEW_SKIP_MIN_DAYS = REVIEW_LADDER_DAYS[REVIEW_SKIP_MIN_RUNG];
+
+/**
  * The per-TOPIC spaced-repetition boxes, in hours. A clean solve pushes the
  * topic one box further out; a miss pulls it back. `db.BOX_INTERVALS_MS`,
  * converted from ms.

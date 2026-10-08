@@ -1006,7 +1006,8 @@ export function bumpSession(id: string, lastTopic: Topic): void {
 // -----------------------------------------------------------------------------
 // Review queue — spaced re-solve of failed / hint-assisted problems (retrieval
 // loop). An item is "due" when clearedAt IS NULL and dueAt <= now. A clean,
-// unaided solve clears it; another miss pushes dueAt out on a spaced ladder.
+// unaided solve clears it; another miss pushes dueAt out on a spaced ladder; a
+// skip pushes dueAt out too but does not count as a miss.
 // -----------------------------------------------------------------------------
 export type ReviewReason = 'failed' | 'hinted';
 
@@ -1070,6 +1071,36 @@ export function bumpReviewOnFail(problemId: string): void {
   const attempts = existing.attempts + 1;
   const dueAt = new Date(reviewDueMsFor(attempts, nowMs)).toISOString();
   bumpReviewStmt.run({ problemId, attempts, dueAt });
+}
+
+const snoozeReviewStmt = db.prepare(`
+  UPDATE review_queue SET dueAt = @dueAt
+  WHERE problemId = @problemId AND clearedAt IS NULL AND dueAt <= @now
+`);
+
+/**
+ * A due review the player skipped ("Next" without submitting): push dueAt out
+ * so the queue can move on. Without this a skip changed nothing, getDueReview
+ * kept returning the same earliest row, and one unwanted problem blocked every
+ * other review and all normal scheduling behind it.
+ *
+ * attempts is NOT incremented — a skip is not a miss, and the ladder rung is
+ * the record of misses. The rung is read at max(attempts, 1) because rung 0 is
+ * "due now", which would snooze nothing.
+ *
+ * Only a live row that is due right now is touched; a cleared row, or one a
+ * failed submit already pushed out, is left alone, so a skip can never stack on
+ * top of a verdict. Returns whether a row was snoozed.
+ */
+export function snoozeReview(problemId: string): boolean {
+  const existing = getReviewStmt.get(problemId) as ReviewDbRow | undefined;
+  if (!existing || existing.clearedAt !== null) return false;
+  const nowMs = Date.now();
+  const dueAt = new Date(reviewDueMsFor(Math.max(existing.attempts, 1), nowMs)).toISOString();
+  // The due check lives in the WHERE so it is made against the row as it is at
+  // write time, not as it was when read above.
+  const res = snoozeReviewStmt.run({ problemId, dueAt, now: new Date(nowMs).toISOString() });
+  return res.changes > 0;
 }
 
 const clearReviewStmt = db.prepare(`

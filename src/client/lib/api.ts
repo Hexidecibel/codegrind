@@ -213,11 +213,23 @@ export function startSession(): Promise<SessionStartResponse> {
   });
 }
 
-/** POST /api/session/:id/next — pick + serve the next adaptive problem. */
-export function nextInSession(sessionId: string): Promise<GrindProblem> {
+/**
+ * POST /api/session/:id/next — pick + serve the next adaptive problem.
+ *
+ * `skipProblemId` is the REVIEW problem being left behind, if the one on screen
+ * is a review. The server snoozes it when it is still due (i.e. it was skipped
+ * rather than submitted); without that a due review is the next pick again.
+ */
+export function nextInSession(
+  sessionId: string,
+  skipProblemId?: string,
+): Promise<GrindProblem> {
   return request<GrindProblem>(
     `/api/session/${encodeURIComponent(sessionId)}/next`,
-    { method: 'POST', body: JSON.stringify({}) },
+    {
+      method: 'POST',
+      body: JSON.stringify(skipProblemId ? { skipProblemId } : {}),
+    },
   );
 }
 
