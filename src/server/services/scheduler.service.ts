@@ -369,6 +369,8 @@ export function nextIntent(opts: NextIntentOpts): SchedulerIntent {
   const { language } = opts;
 
   // Retrieval loop: a due review item outranks EVERYTHING — re-serve it cold.
+  // (A review the player skipped is no longer due: the /next route snoozes it
+  // before calling this, which is what lets the pick move on.)
   const due = getDueReview(language);
   if (due) {
     const p = getProblem(due.problemId);

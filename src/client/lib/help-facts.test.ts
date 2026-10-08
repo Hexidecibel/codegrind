@@ -106,6 +106,23 @@ describe('the spaced-repetition numbers match db.ts', () => {
     expect(DB).toContain('const DAY = 24 * HOUR');
   });
 
+  it('mirrors how a skipped review is snoozed', () => {
+    // Help says a skip postpones by at least REVIEW_SKIP_MIN_DAYS and is not a
+    // miss. Both halves are read off snoozeReview itself.
+    const start = DB.indexOf('export function snoozeReview');
+    expect(start, 'no snoozeReview in db.ts').toBeGreaterThan(-1);
+    const body = DB.slice(start, DB.indexOf('\n}\n', start));
+    const match = /reviewDueMsFor\(Math\.max\(existing\.attempts, (\d+)\)/.exec(body);
+    expect(match, 'snoozeReview no longer floors the rung').not.toBeNull();
+    expect(Number(match![1])).toBe(facts.REVIEW_SKIP_MIN_RUNG);
+    expect(facts.REVIEW_SKIP_MIN_DAYS).toBe(facts.REVIEW_LADDER_DAYS[facts.REVIEW_SKIP_MIN_RUNG]);
+    expect(facts.REVIEW_SKIP_MIN_DAYS).toBeGreaterThan(0);
+    // "Not a miss": the statement it runs must not write attempts.
+    const stmt = /const snoozeReviewStmt = db\.prepare\(`([^`]*)`\)/.exec(DB);
+    expect(stmt, 'no snoozeReviewStmt in db.ts').not.toBeNull();
+    expect(stmt![1]).not.toMatch(/attempts/);
+  });
+
   it('phrases the review ladder without dropping a rung', () => {
     const phrase = facts.reviewLadderPhrase();
     for (const n of facts.REVIEW_LADDER_DAYS) expect(phrase).toContain(String(n));
@@ -255,5 +272,15 @@ describe('the scheduler Help describes is still free', () => {
   it('serves a due review ahead of everything else', () => {
     const SCHED = source('src/server/services/scheduler.service.ts');
     expect(SCHED).toContain('a due review item outranks EVERYTHING');
+  });
+
+  it('snoozes a skipped review before that pick, not after', () => {
+    // Help's "Skip for now ... whatever is next in line is served instead" only
+    // holds if the snooze lands before nextIntent reads the queue.
+    const ROUTE = source('src/server/routes/session.ts');
+    const next = ROUTE.slice(ROUTE.indexOf("sessionRoutes.post('/session/:id/next'"));
+    const snooze = next.indexOf('snoozeReview(');
+    expect(snooze, 'the /next route no longer snoozes').toBeGreaterThan(-1);
+    expect(snooze).toBeLessThan(next.indexOf('nextIntent('));
   });
 });

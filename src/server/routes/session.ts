@@ -16,6 +16,7 @@ import {
   getSession,
   bumpSession,
   getActiveLanguage,
+  snoozeReview,
 } from '../services/db.js';
 import type { Language } from '../../shared/languages.js';
 import { TIER_REQUIREMENT, WEAK_SCORE, tierProgress } from '../services/curriculum.js';
@@ -119,6 +120,18 @@ sessionRoutes.post('/session/:id/next', async (c) => {
     const id = c.req.param('id');
     const session = getSession(id);
     if (!session) return c.json({ error: 'session not found' }, 404);
+
+    // "Next" on a review the player did not attempt is a SKIP. The client names
+    // the review it is leaving; snooze it BEFORE the pick, or nextIntent finds
+    // the same earliest-due row and serves the same problem back, forever.
+    // snoozeReview only touches a row that is still due, so a review that was
+    // just solved (cleared) or just missed (already pushed out) is untouched.
+    //
+    // Read leniently: the body is optional, and a client cached from before
+    // this field existed sends `{}` — that must keep working, not 400.
+    const body = (await c.req.json().catch(() => null)) as { skipProblemId?: unknown } | null;
+    const skipProblemId = body?.skipProblemId;
+    if (typeof skipProblemId === 'string' && skipProblemId) snoozeReview(skipProblemId);
 
     const intent = nextIntent({
       // The language the sitting STARTED in — see createSession above.

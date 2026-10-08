@@ -46,6 +46,11 @@ export function GrindPage() {
   const [resuming, setResuming] = useState(!!snapshot);
   const [error, setError] = useState<string | null>(null);
   const [reviewDue, setReviewDue] = useState(0);
+  // The problem a verdict has come back for in this page's lifetime — what
+  // tells "Next" apart from "Skip" on a review. Not persisted: after a reload
+  // the label may say Skip for a review already submitted, and the server
+  // ignores that skip because the row is no longer due.
+  const [submittedProblemId, setSubmittedProblemId] = useState<string | null>(null);
   const [primer, setPrimer] = useState<Primer | null>(null);
   const [primerLoading, setPrimerLoading] = useState(false);
   /**
@@ -207,7 +212,13 @@ export function GrindPage() {
     setError(null);
     setAdvancing(true);
     try {
-      const gp = await nextInSession(snapshot.sessionId);
+      // Only a problem served AS a review is named. A problem missed for the
+      // first time a moment ago is also "due" (queued due-now), and that one is
+      // supposed to come straight back cold — naming it here would snooze it.
+      const gp = await nextInSession(
+        snapshot.sessionId,
+        snapshot.why.kind === 'review' ? snapshot.problem.id : undefined,
+      );
       setSnapshot((prev) =>
         prev
           ? {
@@ -224,14 +235,19 @@ export function GrindPage() {
     } finally {
       setAdvancing(false);
       void refreshPace();
+      // A skipped review left the due set, so the pill's count just changed.
+      void refreshReviewDue();
     }
-  }, [snapshot, advancing, setSnapshot, refreshPace]);
+  }, [snapshot, advancing, setSnapshot, refreshPace, refreshReviewDue]);
 
   // Fires with the VERDICT, which now arrives minutes before the coaching does.
   // Only the counters this page owns belong here.
   const onSubmitted = useCallback(
     (result: SubmitResult) => {
       const accepted = result.verdict === 'accepted';
+      // The surface is keyed on the problem, so a verdict is always for the one
+      // on screen.
+      setSubmittedProblemId(snapshot?.problem.id ?? null);
       setSnapshot((prev) =>
         prev
           ? {
@@ -242,7 +258,7 @@ export function GrindPage() {
           : prev,
       );
     },
-    [setSnapshot],
+    [setSnapshot, snapshot?.problem.id],
   );
 
   // The review count is SERVER-derived and the review-queue move happens after
@@ -314,6 +330,12 @@ export function GrindPage() {
       subject: 'next problem',
     });
 
+    // Leaving a review without submitting it snoozes it (see `next`). Any
+    // submit, pass or fail, already moved it out of the due set, so after one
+    // this is an ordinary advance and the label goes back to saying so.
+    const skipsReview =
+      snapshot.why.kind === 'review' && submittedProblemId !== snapshot.problem.id;
+
     const footer = (
       <div className="space-y-1.5">
         {advancing && wait.note && (
@@ -344,7 +366,8 @@ export function GrindPage() {
               </>
             ) : (
               <>
-                Next problem <ArrowRight className="h-4 w-4" />
+                {skipsReview ? 'Skip for now' : 'Next problem'}{' '}
+                <ArrowRight className="h-4 w-4" />
               </>
             )}
           </Button>

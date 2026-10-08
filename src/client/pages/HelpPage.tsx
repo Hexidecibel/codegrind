@@ -38,6 +38,7 @@ import {
   MIN_HIDDEN_TESTS,
   MIN_SAMPLE_TESTS,
   REVIEW_LADDER_DAYS,
+  REVIEW_SKIP_MIN_DAYS,
   SANDBOX_CPUS,
   SANDBOX_FLAGS,
   SANDBOX_LANGUAGES,
@@ -273,7 +274,10 @@ export function HelpPage() {
           <KeyIdea>
             A due review outranks everything. Before any of the other five
             reasons is even scored, the scheduler checks the review queue — if
-            something is waiting there, that is what you get.
+            something is waiting there, that is what you get. The one way past
+            it without solving it is <strong>Skip for now</strong>: that sets the
+            review aside for at least {REVIEW_SKIP_MIN_DAYS} days, and whatever is
+            next in line is served instead.
           </KeyIdea>
           <p>
             Otherwise it builds a candidate for every topic that qualifies,
@@ -456,7 +460,9 @@ export function HelpPage() {
             whether you can now do it unaided, and a hint would answer a
             different question. Solve it clean and it leaves the queue for good.
             Miss it again and it is pushed further out — {reviewLadderPhrase()}{' '}
-            between attempts.
+            between attempts. Skip it without submitting and it also steps aside,
+            for at least {REVIEW_SKIP_MIN_DAYS} days, but a skip is not a miss: it
+            does not move the problem up the ladder.
           </p>
         </HelpBlock>
 
@@ -512,7 +518,9 @@ export function HelpPage() {
               Per <strong>problem</strong>. A missed or hinted problem is queued
               due immediately; each further miss pushes it out on a{' '}
               {REVIEW_LADDER_DAYS.map((d) => `${d}d`).join(' → ')} ladder. A clean
-              unaided solve clears it.
+              unaided solve clears it. Skipping a due one postpones it by its
+              current step (at least {REVIEW_SKIP_MIN_DAYS}d) without counting as
+              a miss.
             </Term>
             <Term label="Repetition boxes">
               Per <strong>topic</strong>. Clean solves move a topic up through
