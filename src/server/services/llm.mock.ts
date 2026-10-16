@@ -35,7 +35,9 @@ import {
   SD_CONCEPTS,
   INTERVIEWER_MODES,
   CONCEPT_SIGNALS,
+  GAP_TYPES,
   MOCK_LEVEL_LABEL,
+  isGapType,
   isSdStage,
   isSdConcept,
   type MockLevel,
@@ -43,12 +45,19 @@ import {
   type SdStage,
   type InterviewerMode,
 } from '../../shared/sd.js';
-import type { MockDrill, MockGrade, MockObservation, MockStageGrade, MockVerdict } from '../../shared/mock.js';
+import type {
+  MockDrill,
+  MockGrade,
+  MockGradeGap,
+  MockObservation,
+  MockStageGrade,
+  MockVerdict,
+} from '../../shared/mock.js';
 import { structured } from './llm.client.js';
 import { LlmToolCallError, looksLikeToolCallFraming, type CallMeta, type LlmMessage, type ToolSpec } from './llm.types.js';
 import { CANDIDATE_CARD, WARM_UP_RULE } from './sd-candidate.js';
 import { RUBRIC_TEXT } from './sd-rubric.js';
-import type { InterviewerReply } from './mock.state.js';
+import type { InterviewerReply, SuppliedGap } from './mock.state.js';
 
 // ===========================================================================
 // 1. interviewerTurn
@@ -66,7 +75,7 @@ STAGES, in order: ${SD_STAGES.join(' → ')}. Move forward when a stage is adequ
 
 MODES (pick one per reply):
 - interview: the normal case. Ask the next question, react to what they said, introduce a twist when a happy path exists.
-- nudge: they are stuck or heading somewhere unproductive. Ask a question that points the way. Never give the answer in a nudge.
+- nudge: they are stuck or heading somewhere unproductive. Ask a question that points the way. Never give the answer in a nudge (if you end up giving it anyway, it is a gap — see GAPS).
 - offer_teach: they have missed the same concept twice, are clearly stuck, or hit one of their honest gaps. Briefly say what you noticed and OFFER a short lesson; the app shows them "Teach me" and "Keep going" buttons. Fill teach.concept with what you would teach.
 - teach: break out of interviewer character and teach. Use this when the candidate asks ("wait, explain X", "what is X?", "I don't know what X means") or a [control: TEACH ME] line arrives. Explain plainly, with one concrete example tied to THIS design, in a short markdown lesson (a few short paragraphs or bullets, at most ~250 words). Then end the message with "Back to the interview:" followed by the question that resumes where you were. Fill teach.concept and teach.gapSummary (one sentence: what they did not know), and resumePoint.
 - wrap_up: only after a [control: END] line, or when every stage is covered. One or two sentences closing the interview. No new question.
@@ -74,6 +83,17 @@ MODES (pick one per reply):
 LINES THE APP ADDS TO THE CANDIDATE'S MESSAGES — they come from the app, not the candidate; never quote them back:
 - [server: …] facts: the clock, the turn count, the current stage, stages the server noticed were skipped, a time warning.
 - [control: …] a button the candidate pressed (TEACH ME, I'M STUCK, MOVE ON, KEEP GOING) or END. Obey it.
+
+ANSWER BEFORE YOU REDIRECT. When the candidate's last message asks a conceptual or clarifying question, or voices confusion ("I guess that's where I get confused on…", "what's the difference between…", "not sure how that works"), your reply OPENS by answering it directly in one or two sentences, plainly and tied to this design — and only then continues with your next question, nudge or offer. Never ignore an explicit question, never answer it with a different topic, and never jump to an offer or a lesson on something else while their question hangs. If answering properly needs more than two sentences, use teach mode on that question. Example (a chat app): "does a sent message have to show up right away?" → "For the sender, yes — they must read their own write the moment it is sent; other people's unread counts can lag a few seconds. So: …".
+
+REASONING OVER RECALL. When the candidate says they do not know a fact but reasons about the trade-off anyway ("not sure which status code, but it's browser caching against seeing every click"), that is the Staff move — credit it in your observations (the reasoning concept, not missing), supply the fact in a sentence, record the fact in gaps, and carry on. Do not treat a missing fact as a failed stage.
+
+GAPS: on every reply, list in gaps every fact or reasoning move YOU handed over in this reply that the candidate did not have — taught in teach mode, explained while answering their question, or given away in a nudge or a follow-up ("a 301 is cached by the browser permanently, so…"). If you told them something they did not know, it is a gap; no exceptions.
+- type fact: domain knowledge — status codes, unit shortcuts (seconds in a month), encodings (base62), what a particular technology guarantees.
+- type skill: a reasoning move — ranking failures, running the estimate, committing to a trade-off, choosing where to deep-dive.
+- title: the drill-card front, a self-contained question someone could answer cold in two weeks, naming the context ("URL shortener redirect: 301 or 302 — and what does the choice do to click analytics?").
+- answer: the card back, two to four sentences: the answer AND why it matters / how it connects to the rest of this design.
+An empty list when you handed nothing over.
 
 OBSERVATIONS: on every reply, record what the candidate's LAST message showed about specific concepts — nailed (did it well, unprompted), weak (partly, or only when pushed), missing (should have, did not). Only concepts from the closed list in the tool schema. Zero observations is a fine answer for a message that showed nothing. Never record an observation about something you just taught them.
 
@@ -98,6 +118,19 @@ const OBSERVATION_ITEM = {
     note: { type: 'string', description: 'One short clause of evidence.' },
   },
   required: ['concept', 'signal', 'note'],
+};
+
+/** A gap the interviewer handed over: a drill card's front and back. */
+const GAP_ITEM = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    concept: { type: 'string', enum: CONCEPT_ENUM },
+    type: { type: 'string', enum: [...GAP_TYPES] },
+    title: { type: 'string', description: 'Drill-card front: a self-contained question.' },
+    answer: { type: 'string', description: 'Drill-card back: 2–4 sentences, including why it matters.' },
+  },
+  required: ['concept', 'type', 'title', 'answer'],
 };
 
 /**
@@ -148,9 +181,14 @@ export const INTERVIEWER_TOOL: ToolSpec = {
         type: 'string',
         description: 'teach mode: the question you resume with. Empty string otherwise.',
       },
+      gaps: {
+        type: 'array',
+        description: 'Every fact or reasoning move you handed over in THIS reply. Empty when none.',
+        items: GAP_ITEM,
+      },
       say: { type: 'string', description: 'What the candidate sees. Markdown allowed in teach mode.' },
     },
-    required: ['observations', 'stage', 'stagesCovered', 'mode', 'teach', 'resumePoint', 'say'],
+    required: ['observations', 'stage', 'stagesCovered', 'mode', 'teach', 'resumePoint', 'gaps', 'say'],
   },
 };
 
@@ -180,6 +218,22 @@ export function coerceObservations(raw: unknown): MockObservation[] {
     out.push({ concept: r.concept, signal, note: typeof r.note === 'string' ? r.note.slice(0, 300) : '' });
   }
   return out;
+}
+
+/** A drill card needs a front and a back; a gap missing either is dropped. */
+export function coerceSuppliedGaps(raw: unknown): SuppliedGap[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SuppliedGap[] = [];
+  for (const g of raw) {
+    const r = (g ?? {}) as Record<string, unknown>;
+    if (!isSdConcept(r.concept)) continue;
+    const title = typeof r.title === 'string' ? r.title.trim().slice(0, 300) : '';
+    const answer = typeof r.answer === 'string' ? r.answer.trim().slice(0, 1500) : '';
+    if (!title || !answer) continue;
+    // An unknown type is a skill: the heavier weight is the safe default.
+    out.push({ concept: r.concept, type: isGapType(r.type) ? r.type : 'skill', title, answer });
+  }
+  return out.slice(0, 6);
 }
 
 /**
@@ -214,6 +268,7 @@ export function coerceReply(input: Record<string, unknown>, fallbackStage: SdSta
     mode: (mode === 'teach' || mode === 'offer_teach') && !teach ? 'interview' : mode,
     teach: mode === 'teach' || mode === 'offer_teach' ? teach : null,
     resumePoint: typeof input.resumePoint === 'string' ? input.resumePoint : '',
+    gaps: coerceSuppliedGaps(input.gaps),
     say,
   };
 }
@@ -266,11 +321,15 @@ Rules:
 - Score each of the seven stages 1–4 against its anchors. A stage the interview never reached scores 0 with evidence "not reached".
 - TAUGHT MATERIAL IS NOT EVIDENCE. Turns marked [TAUGHT: concept] are the interviewer teaching. Anything the candidate says about that concept afterwards shows they listened, not that they knew it. List each taught concept in gapsTaught and do not let it raise a score.
 - Nudges count against "unprompted": an answer that arrived only after a [NUDGE] is at best weak.
+- GAPS ARE NOT EQUAL. A fact gap (did not know 301 vs 302, seconds in a month, base62) is a cheap fix and weighs LITTLE — a Staff engineer may look a fact up. A skill gap (could not rank failures, could not run the estimate, would not commit to a trade-off) is what the level is judged on and weighs heavily. Never hold a stage below level for a missing fact alone; do hold it below level for a missing skill.
+- REASONING WITHOUT THE FACT IS A POSITIVE STAFF SIGNAL. When the candidate says they do not know a fact but reasons about the trade-off correctly ("not sure which code, but it's browser caching against seeing every click"), credit the reasoning in the evidence. Wherever a fact was missing, model that phrasing in staffWouldAdd: "I don't remember X offhand, but the trade-off is A against B, and here I'd pick A because…".
 - atLevel is judged against the level's bar for that stage, not against the score alone.
 - staffWouldAdd / principalWouldAdd: the one or two concrete things a Staff (and a Principal) answer would have added at that stage. Concrete — a sentence they could have said — not "more depth".
 - verdict: below / at / above the stated level overall.
 - conceptObservations: the concepts the transcript gives evidence on, each nailed / weak / missing, from the closed list.
 - drills: 3 to 6 short follow-up drills, most valuable first, each targeting one concept. A drill is a prompt the candidate can answer in a few minutes ("You're designing X. The worst failure is Y. Say your ranking sentence."), plus why it is on the list.
+- summary: name the skill gaps as the practice areas and the fact gaps as cheap fixes, separately.
+- gaps: every fact or reasoning move the INTERVIEWER handed over that is NOT already in RECORDED GAPS below — including ones given away inside a nudge, a follow-up or an answer to the candidate's question. Each with type (fact or skill), title (a self-contained drill-card question naming the context), answer (two to four sentences: the answer and why it matters to the design) and turn (the interviewer turn number, or null). An empty list when the recorded gaps are complete.
 - Write in plain language and use the candidate's own framework (seven questions, six failures, ranking sentence, principal phrases) where it applies.
 
 Return the grade by calling emit_mock_grade exactly once.`;
@@ -336,10 +395,27 @@ function gradeTool(lean: boolean): ToolSpec {
             required: ['concept', 'prompt', 'why'],
           },
         },
+        gaps: {
+          type: 'array',
+          description: 'Gaps the interviewer handed over that RECORDED GAPS does not already list.',
+          items: {
+            type: 'object',
+            ...(lean ? {} : { additionalProperties: false }),
+            properties: {
+              concept: { type: 'string', enum: CONCEPT_ENUM },
+              type: { type: 'string', enum: [...GAP_TYPES] },
+              title: { type: 'string' },
+              answer: { type: 'string' },
+              // anyOf for the same reason as interviewer_turn.teach.
+              turn: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
+            },
+            required: ['concept', 'type', 'title', 'answer', 'turn'],
+          },
+        },
       },
       required: lean
-        ? ['verdict', 'summary', 'stages', 'skipped', 'gapsTaught', 'drills']
-        : ['verdict', 'summary', 'stages', 'skipped', 'gapsTaught', 'conceptObservations', 'drills'],
+        ? ['verdict', 'summary', 'stages', 'skipped', 'gapsTaught', 'drills', 'gaps']
+        : ['verdict', 'summary', 'stages', 'skipped', 'gapsTaught', 'conceptObservations', 'drills', 'gaps'],
     },
   };
 }
@@ -387,6 +463,18 @@ function coerceDrills(raw: unknown): MockDrill[] {
     .map((d) => ({ concept: d.concept as SdConcept, prompt: d.prompt as string, why: typeof d.why === 'string' ? d.why : '' }));
 }
 
+function coerceGradeGaps(raw: unknown): MockGradeGap[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MockGradeGap[] = [];
+  for (const r of raw as Record<string, unknown>[]) {
+    const [g] = coerceSuppliedGaps([r]);
+    if (!g) continue;
+    const turn = r.turn;
+    out.push({ ...g, turn: Number.isInteger(turn) && (turn as number) > 0 ? (turn as number) : null });
+  }
+  return out.slice(0, 12);
+}
+
 export function coerceGrade(input: Record<string, unknown>, level: MockLevel, degraded: boolean): MockGrade {
   const verdict: MockVerdict = ['below', 'at', 'above'].includes(input.verdict as string)
     ? (input.verdict as MockVerdict)
@@ -414,6 +502,7 @@ export function coerceGrade(input: Record<string, unknown>, level: MockLevel, de
       .filter((g): g is { concept: SdConcept; summary: string } => g !== null),
     conceptObservations: coerceObservations(input.conceptObservations),
     drills: coerceDrills(input.drills),
+    gaps: coerceGradeGaps(input.gaps),
     ...(degraded ? { degraded: true } : {}),
   };
 }
@@ -426,6 +515,8 @@ export interface GradeInput {
   transcript: string;
   skipped: SdStage[];
   taught: SdConcept[];
+  /** Gaps already recorded turn by turn, so the grader only adds what they missed. */
+  recordedGaps?: { seq: number | null; type: string; title: string; summary: string }[];
 }
 
 export interface GradeResult {
@@ -445,6 +536,13 @@ export async function gradeMock(input: GradeInput): Promise<GradeResult> {
     `Prompt: ${input.promptTitle} — ${input.brief}`,
     `Stages the server recorded as skipped: ${input.skipped.length ? input.skipped.join(', ') : 'none'}`,
     `Concepts the interviewer taught: ${input.taught.length ? input.taught.join(', ') : 'none'}`,
+    '',
+    'RECORDED GAPS (already drill cards — do not repeat these in gaps):',
+    ...(input.recordedGaps?.length
+      ? input.recordedGaps.map(
+          (g) => `- ${g.seq != null ? `#${g.seq} ` : ''}[${g.type}] ${g.title || g.summary}`
+        )
+      : ['- none']),
     '',
     RUBRIC_TEXT[input.level],
     '',

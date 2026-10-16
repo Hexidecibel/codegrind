@@ -268,7 +268,7 @@ in `PRAGMA user_version`.
 | `settings` | `key` | — | JSON values |
 | `mocks` | `id` | — | one mock interview: level, frozen context, `state`/`usage` JSON |
 | `mock_turns` | `(mockId, seq)` | — | `content` as said, `rendered` as sent to the model (byte-stable) |
-| `mock_gaps` | `(mockId, seq)` | — | each concept the interviewer taught |
+| `mock_gaps` | `id` (v4) | — | every fact/skill the interviewer handed over (turn, grader or backfill); each row is also a drill card with its own `step`/`dueAt` schedule (now→+2d→+5d→+10d→retired, self-graded, no model call) |
 | `mock_grades` | `mockId` | — | the `MockGrade` JSON; Phase 2 folds its observations |
 
 **Why a `language` column and not a `problem_variants` table.** A variant would fork

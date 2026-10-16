@@ -39,6 +39,14 @@ import {
   type MockView,
 } from '../../shared/mock.js';
 import { pickPrompt, sdPrompt } from '../../shared/sd-prompts.js';
+import {
+  gapKey,
+  isGapCardGrade,
+  scheduleGapCard,
+  type GapCard,
+  type GapCardsResponse,
+} from '../../shared/gap-cards.js';
+import { db } from './db.js';
 import type { CallMeta } from './llm.types.js';
 import { gradeMock, interviewerTurn } from './llm.mock.js';
 import { errorBody } from './explain.service.js';
@@ -46,6 +54,7 @@ import {
   applyReply,
   buildContext,
   buildMessages,
+  gapsForReply,
   initialState,
   kindForMode,
   renderCandidateMessage,
@@ -55,14 +64,21 @@ import {
 import {
   appendExchange,
   deleteMock,
+  cardCounts,
+  dueCards,
   emptyUsage,
+  gapKeys,
+  getCard,
+  getGaps,
   getGrade,
+  insertGap,
   getMock,
   getTurns,
   insertMock,
   putGrade,
   recentPromptIds,
   toStoredTurns,
+  updateCardSchedule,
   updateMock,
   type MockRow,
   type NewTurn,
@@ -157,6 +173,7 @@ function toView(m: MockRow, turns: StoredMockTurn[], grade: MockGrade | null): M
     // instructions to the model, not something to show the candidate.
     turns: turns.map(({ rendered: _r, observations: _o, ...t }) => t),
     grade,
+    gaps: getGaps(m.id),
     createdAt: m.createdAt,
     endedAt: m.endedAt,
     limits: { turnCap: MOCK_TURN_CAP, minutes: MOCK_MINUTES },
@@ -226,9 +243,9 @@ export async function startMock(body: { level?: unknown; promptId?: unknown }): 
         content: reply.say,
         rendered: reply.say,
         stage: reply.stage,
-        meta: { mode: reply.mode, teach: reply.teach, observations, call: callUsage(meta) },
+        meta: { mode: reply.mode, teach: reply.teach, gaps: reply.gaps ?? [], observations, call: callUsage(meta) },
       };
-      appendExchange({ ...row, state: next, usage, turnCount: 1 }, [turn], []);
+      appendExchange({ ...row, state: next, usage, turnCount: 1 }, [turn], gapsForReply(reply, 1));
       return getMockView(id);
     });
   } catch (err) {
@@ -297,12 +314,10 @@ export async function takeTurn(id: string, body: unknown): Promise<MockView> {
       content: reply.say,
       rendered: reply.say,
       stage: reply.stage,
-      meta: { mode: reply.mode, teach: reply.teach, observations, call: callUsage(meta) },
+      meta: { mode: reply.mode, teach: reply.teach, gaps: reply.gaps ?? [], observations, call: callUsage(meta) },
     };
-    const gaps =
-      reply.mode === 'teach' && reply.teach
-        ? [{ seq: seq + 2, concept: reply.teach.concept, summary: reply.teach.gapSummary }]
-        : [];
+    // Every fact or move the interviewer handed over is a gap — and a drill card.
+    const gaps = gapsForReply(reply, seq + 2);
     appendExchange({ ...m, state: next, usage, turnCount: m.turnCount + 2 }, [candidate, interviewer], gaps);
     return getMockView(id);
   });
@@ -351,6 +366,7 @@ export async function* runEnd(m: MockRow): AsyncGenerator<MockEndEvent> {
         transcript: renderTranscript(turns),
         skipped: m.state.skipped,
         taught: m.state.taught,
+        recordedGaps: getGaps(m.id).map((g) => ({ seq: g.seq, type: g.type, title: g.title, summary: g.summary })),
       });
       grade = result.grade;
       for (const meta of result.metas) {
@@ -365,6 +381,7 @@ export async function* runEnd(m: MockRow): AsyncGenerator<MockEndEvent> {
       return;
     }
     putGrade(m.id, grade, gradeUsage);
+    storeGradeGaps(m.id, grade);
     const digest = `${grade.verdict} ${m.level}: ${grade.summary.slice(0, 280)}`;
     updateMock({ ...m, status: 'graded', usage, digest, endedAt: new Date().toISOString() });
     yield { type: 'grade', grade, usage };
@@ -380,4 +397,51 @@ export function abandonMock(id: string): MockView {
   if (m.status === 'graded') throw new MockError('A graded mock cannot be abandoned.', 409);
   updateMock({ ...m, status: 'abandoned', endedAt: new Date().toISOString() });
   return getMockView(id);
+}
+
+// -----------------------------------------------------------------------------
+// Gaps the grader found, and the drill cards
+// -----------------------------------------------------------------------------
+
+/**
+ * Store the grader's additional gaps as cards — minus any whose title the
+ * turn-level capture already has (a re-grade after grade_failed must not
+ * double them either). One transaction: all of a grade's gaps or none.
+ */
+export function storeGradeGaps(mockId: string, grade: MockGrade, now = new Date()): number {
+  const seen = gapKeys(mockId);
+  let added = 0;
+  db.transaction(() => {
+    for (const g of grade.gaps ?? []) {
+      const key = gapKey(g.title);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      insertGap(
+        mockId,
+        { seq: g.turn, concept: g.concept, type: g.type, title: g.title, summary: g.title, answer: g.answer, source: 'grade' },
+        now
+      );
+      added++;
+    }
+  })();
+  return added;
+}
+
+/** GET /api/mock/cards — the due pile plus counts. A read; no model. */
+export function gapCards(now = new Date()): GapCardsResponse {
+  return { due: dueCards(now), ...cardCounts(now) };
+}
+
+/**
+ * POST /api/mock/cards/:id/grade — the candidate's own verdict on one card.
+ * Self-graded by design: no model call, so drilling costs nothing.
+ */
+export function gradeGapCard(id: number, body: unknown, now = new Date()): GapCard {
+  const grade = (body as Record<string, unknown> | null)?.grade;
+  if (!isGapCardGrade(grade)) throw new MockError('grade must be got, shaky or missed.', 400);
+  const card = getCard(id);
+  if (!card) throw new MockError('No such card.', 404);
+  if (card.retiredAt) throw new MockError('That card is already retired.', 409);
+  updateCardSchedule(id, scheduleGapCard(card, grade, now));
+  return getCard(id)!;
 }

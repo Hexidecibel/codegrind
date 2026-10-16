@@ -944,11 +944,11 @@ describe('v3 — problems.canonicalized', () => {
     db.close();
   });
 
-  it('is the step that moves SCHEMA_VERSION to 3', () => {
+  it('is a step on the way to SCHEMA_VERSION (3, then 4 for mock gap cards)', () => {
     const db = oldDb();
     migrate(db);
-    expect(userVersion(db)).toBe(3);
-    expect(SCHEMA_VERSION).toBe(3);
+    expect(userVersion(db)).toBe(SCHEMA_VERSION);
+    expect(SCHEMA_VERSION).toBe(4);
     db.close();
   });
 
@@ -1139,7 +1139,7 @@ describe('mock interviews — four additive tables', () => {
     const db = migrated();
     expect(pkColumns(db, 'mocks')).toEqual(['id']);
     expect(pkColumns(db, 'mock_turns')).toEqual(['mockId', 'seq']);
-    expect(pkColumns(db, 'mock_gaps')).toEqual(['mockId', 'seq']);
+    expect(pkColumns(db, 'mock_gaps')).toEqual(['id']);
     expect(pkColumns(db, 'mock_grades')).toEqual(['mockId']);
     // `rendered` is the byte-stable copy the conversation cache depends on.
     expect(columnsOf(db, 'mock_turns')).toContain('rendered');
@@ -1154,6 +1154,94 @@ describe('mock interviews — four additive tables', () => {
     ).run();
     migrate(db);
     expect(db.prepare(`SELECT COUNT(*) AS n FROM mocks`).get()).toEqual({ n: 1 });
+    db.close();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// v4 — mock gaps become drill cards
+// -----------------------------------------------------------------------------
+describe('v4 — mock gap cards', () => {
+  /** A v3 database as Phase 1 left it: the old (mockId, seq)-keyed mock_gaps. */
+  function phase1Db(version = 3): Database.Database {
+    const db = migrated();
+    db.exec(`
+      DROP TABLE mock_gaps;
+      CREATE TABLE mock_gaps (
+        mockId    TEXT NOT NULL REFERENCES mocks(id) ON DELETE CASCADE,
+        seq       INTEGER NOT NULL,
+        concept   TEXT NOT NULL,
+        summary   TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        PRIMARY KEY (mockId, seq)
+      );
+      INSERT INTO mocks (id, kind, level, prompt, status, context, state, usage, createdAt, updatedAt)
+        VALUES ('m1', 'system-design', 'staff', 'p', 'graded', 'c', '{}', '{}', 't', 't');
+      INSERT INTO mock_gaps VALUES ('m1', 19, 'failure-ranking', 'would not rank', '2026-10-16T08:11:31.819Z');
+      INSERT INTO mock_gaps VALUES ('m1', 29, 'scale-estimation', 'no per-second math', '2026-10-16T08:16:23.366Z');
+    `);
+    db.pragma(`user_version = ${version}`);
+    return db;
+  }
+
+  it('rebuilds the old table, keeping every row as a skill card with an empty answer, due when recorded', () => {
+    const db = phase1Db();
+    expect(stepsFrom(db)).toContain('v4-mock-gap-cards');
+    expect(pkColumns(db, 'mock_gaps')).toEqual(['id']);
+    const rows = db.prepare(`SELECT * FROM mock_gaps ORDER BY seq`).all() as Record<string, unknown>[];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      mockId: 'm1',
+      seq: 19,
+      concept: 'failure-ranking',
+      type: 'skill',
+      title: '',
+      summary: 'would not rank',
+      answer: '',
+      source: 'turn',
+      step: 0,
+      reps: 0,
+      retiredAt: null,
+      dueAt: '2026-10-16T08:11:31.819Z',
+    });
+    expect(userVersion(db)).toBe(4);
+    db.close();
+  });
+
+  it('runs once — a second migrate does not rebuild again', () => {
+    const db = phase1Db();
+    migrate(db);
+    expect(stepsFrom(db)).not.toContain('v4-mock-gap-cards');
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM mock_gaps`).get()).toEqual({ n: 2 });
+    db.close();
+  });
+
+  it('still rebuilds when the version marker lies', () => {
+    const db = phase1Db(4);
+    expect(stepsFrom(db)).toContain('v4-mock-gap-cards');
+    expect(columnsOf(db, 'mock_gaps')).toContain('type');
+    db.close();
+  });
+
+  it('a fresh database gets the new shape directly, with the due index', () => {
+    const db = migrated();
+    expect(columnsOf(db, 'mock_gaps')).toEqual(
+      expect.arrayContaining(['type', 'title', 'answer', 'source', 'step', 'dueAt', 'reps', 'lapses', 'retiredAt'])
+    );
+    const idx = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_mock_gaps_due'`).get();
+    expect(idx).toBeTruthy();
+    db.close();
+  });
+
+  it('allows several gaps on one turn (the old key did not)', () => {
+    const db = migrated();
+    db.exec(`
+      INSERT INTO mocks (id, kind, level, prompt, status, context, state, usage, createdAt, updatedAt)
+        VALUES ('m2', 'system-design', 'staff', 'p', 'active', 'c', '{}', '{}', 't', 't');
+      INSERT INTO mock_gaps (mockId, seq, concept, summary, dueAt, createdAt) VALUES ('m2', 5, 'api-design', 'a', 't', 't');
+      INSERT INTO mock_gaps (mockId, seq, concept, summary, dueAt, createdAt) VALUES ('m2', 5, 'caching-invalidation', 'b', 't', 't');
+    `);
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM mock_gaps WHERE mockId = 'm2'`).get()).toEqual({ n: 2 });
     db.close();
   });
 });

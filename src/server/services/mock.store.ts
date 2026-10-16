@@ -18,7 +18,16 @@ import type {
   MockUsage,
   MockVerdict,
 } from '../../shared/mock.js';
-import type { MockLevel, SdConcept } from '../../shared/sd.js';
+import type { GapType, MockLevel, SdConcept } from '../../shared/sd.js';
+import {
+  gapKey,
+  newCardSchedule,
+  type GapCard,
+  type GapCardGrade,
+  type GapCardSchedule,
+  type GapSource,
+  type MockGap,
+} from '../../shared/gap-cards.js';
 import type { StoredTurn } from './mock.state.js';
 import { sdPrompt } from '../../shared/sd-prompts.js';
 
@@ -96,8 +105,33 @@ function prepare() {
     `),
     getTurns: db.prepare(`SELECT * FROM mock_turns WHERE mockId = ? ORDER BY seq ASC`),
     insertGap: db.prepare(`
-      INSERT OR REPLACE INTO mock_gaps (mockId, seq, concept, summary, createdAt)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO mock_gaps (mockId, seq, concept, type, title, summary, answer, source,
+        step, dueAt, reps, lapses, lastGrade, lastReviewedAt, retiredAt, createdAt)
+      VALUES (@mockId, @seq, @concept, @type, @title, @summary, @answer, @source,
+        @step, @dueAt, @reps, @lapses, @lastGrade, @lastReviewedAt, @retiredAt, @createdAt)
+    `),
+    getGaps: db.prepare(`SELECT * FROM mock_gaps WHERE mockId = ? ORDER BY COALESCE(seq, 1e9), id`),
+    getCard: db.prepare(`
+      SELECT g.*, m.promptId AS mockPromptId, m.prompt AS mockPrompt
+      FROM mock_gaps g JOIN mocks m ON m.id = g.mockId WHERE g.id = ?
+    `),
+    dueCards: db.prepare(`
+      SELECT g.*, m.promptId AS mockPromptId, m.prompt AS mockPrompt
+      FROM mock_gaps g JOIN mocks m ON m.id = g.mockId
+      WHERE g.retiredAt IS NULL AND g.dueAt <= ?
+      ORDER BY g.dueAt ASC, g.id ASC LIMIT ?
+    `),
+    cardCounts: db.prepare(`
+      SELECT
+        SUM(CASE WHEN retiredAt IS NULL AND dueAt > @now THEN 1 ELSE 0 END) AS upcoming,
+        SUM(CASE WHEN retiredAt IS NOT NULL THEN 1 ELSE 0 END) AS retired,
+        MIN(CASE WHEN retiredAt IS NULL AND dueAt > @now THEN dueAt END) AS nextDueAt
+      FROM mock_gaps
+    `),
+    updateSchedule: db.prepare(`
+      UPDATE mock_gaps SET step = @step, dueAt = @dueAt, reps = @reps, lapses = @lapses,
+        lastGrade = @lastGrade, lastReviewedAt = @lastReviewedAt, retiredAt = @retiredAt
+      WHERE id = @id
     `),
     putGrade: db.prepare(`
       INSERT OR REPLACE INTO mock_grades (mockId, level, verdict, grade, usage, createdAt)
@@ -208,16 +242,111 @@ export const appendExchange = db.transaction(
   (
     mock: Pick<MockRow, 'id' | 'status' | 'state' | 'usage' | 'turnCount' | 'digest' | 'endedAt'>,
     turns: NewTurn[],
-    gaps: { seq: number; concept: SdConcept; summary: string }[]
+    gaps: NewGap[]
   ) => {
     const now = new Date().toISOString();
     for (const t of turns) {
       S().insertTurn.run({ ...t, mockId: mock.id, meta: JSON.stringify(t.meta), createdAt: now });
     }
-    for (const g of gaps) S().insertGap.run(mock.id, g.seq, g.concept, g.summary, now);
+    for (const g of gaps) insertGap(mock.id, g, new Date(now));
     updateMock(mock);
   }
 );
+
+// -----------------------------------------------------------------------------
+// Gaps — each one is also a drill card (src/shared/gap-cards.ts)
+// -----------------------------------------------------------------------------
+
+export interface NewGap {
+  seq: number | null;
+  concept: SdConcept;
+  type: GapType;
+  title: string;
+  summary: string;
+  answer: string;
+  source?: GapSource;
+}
+
+/** Insert one gap as a fresh card, due now. */
+export function insertGap(mockId: string, g: NewGap, now: Date): void {
+  S().insertGap.run({
+    mockId,
+    seq: g.seq,
+    concept: g.concept,
+    type: g.type,
+    title: g.title,
+    summary: g.summary,
+    answer: g.answer,
+    source: g.source ?? 'turn',
+    ...newCardSchedule(now),
+    createdAt: now.toISOString(),
+  });
+}
+
+interface RawGap extends Omit<GapCard, 'mockTitle'> {
+  mockPromptId?: string | null;
+  mockPrompt?: string;
+}
+
+function toGap(r: RawGap): MockGap {
+  return {
+    id: r.id,
+    mockId: r.mockId,
+    seq: r.seq ?? null,
+    concept: r.concept,
+    type: r.type,
+    title: r.title,
+    summary: r.summary,
+    answer: r.answer,
+    source: r.source,
+    createdAt: r.createdAt,
+  };
+}
+
+function toCard(r: RawGap): GapCard {
+  return {
+    ...toGap(r),
+    step: r.step,
+    dueAt: r.dueAt,
+    reps: r.reps,
+    lapses: r.lapses,
+    lastGrade: (r.lastGrade as GapCardGrade | null) ?? null,
+    lastReviewedAt: r.lastReviewedAt ?? null,
+    retiredAt: r.retiredAt ?? null,
+    mockTitle: (r.mockPromptId && sdPrompt(r.mockPromptId)?.title) || (r.mockPrompt ?? '').slice(0, 80),
+  };
+}
+
+export function getGaps(mockId: string): MockGap[] {
+  return (S().getGaps.all(mockId) as RawGap[]).map(toGap);
+}
+
+/** Gap keys already recorded for a mock — the grader's additions are deduped against these. */
+export function gapKeys(mockId: string): Set<string> {
+  return new Set(getGaps(mockId).map((g) => gapKey(g.title)).filter(Boolean));
+}
+
+export function getCard(id: number): GapCard | null {
+  const r = S().getCard.get(id) as RawGap | undefined;
+  return r ? toCard(r) : null;
+}
+
+export function dueCards(now: Date, limit = 50): GapCard[] {
+  return (S().dueCards.all(now.toISOString(), limit) as RawGap[]).map(toCard);
+}
+
+export function cardCounts(now: Date): { upcoming: number; retired: number; nextDueAt: string | null } {
+  const r = S().cardCounts.get({ now: now.toISOString() }) as {
+    upcoming: number | null;
+    retired: number | null;
+    nextDueAt: string | null;
+  };
+  return { upcoming: r.upcoming ?? 0, retired: r.retired ?? 0, nextDueAt: r.nextDueAt ?? null };
+}
+
+export function updateCardSchedule(id: number, s: GapCardSchedule): void {
+  S().updateSchedule.run({ id, ...s });
+}
 
 export function putGrade(mockId: string, grade: MockGrade, usage: MockUsage): void {
   S().putGrade.run(mockId, grade.level, grade.verdict, JSON.stringify(grade), JSON.stringify(usage), new Date().toISOString());

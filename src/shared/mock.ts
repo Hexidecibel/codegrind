@@ -6,8 +6,10 @@
 // exactly these shapes: per-turn `observations` and the grade's
 // `conceptObservations` are the raw events that fold will read.
 
+import type { MockGap } from './gap-cards.js';
 import type {
   ConceptSignal,
+  GapType,
   InterviewerMode,
   MockLevel,
   SdConcept,
@@ -113,6 +115,20 @@ export interface MockDrill {
 
 export type MockVerdict = 'below' | 'at' | 'above';
 
+/**
+ * A gap the GRADER found in the transcript that the turn-by-turn capture missed
+ * (the interviewer handed over a fact mid-nudge and did not record it). Stored
+ * as a drill card like any other gap.
+ */
+export interface MockGradeGap {
+  concept: SdConcept;
+  type: GapType;
+  title: string;
+  answer: string;
+  /** The interviewer turn that supplied it, or null. */
+  turn: number | null;
+}
+
 export interface MockGrade {
   level: MockLevel;
   verdict: MockVerdict;
@@ -122,6 +138,8 @@ export interface MockGrade {
   gapsTaught: { concept: SdConcept; summary: string }[];
   conceptObservations: MockObservation[];
   drills: MockDrill[];
+  /** Gaps the grader added on top of the recorded ones. Absent on Phase-1 grades. */
+  gaps?: MockGradeGap[];
   /** True when the second, simpler schema had to be used. */
   degraded?: boolean;
 }
@@ -137,6 +155,8 @@ export interface MockView {
   usage: MockUsage;
   turns: MockTurn[];
   grade: MockGrade | null;
+  /** Every gap recorded for this mock — each one is also a drill card. */
+  gaps: MockGap[];
   createdAt: string;
   endedAt: string | null;
   limits: { turnCap: number; minutes: number };

@@ -43,6 +43,7 @@ import type {
   MockTurnRequest,
   MockView,
 } from '@/shared/mock';
+import type { GapCard, GapCardGrade, GapCardsResponse } from '@/shared/gap-cards';
 
 /** Shape returned by GET /api/session/:id (resume). */
 export interface SessionState {
@@ -527,6 +528,16 @@ export async function endMock(id: string, onEvent: (event: MockEndEvent) => void
   });
   if (!res.ok) throw await toApiError(res, 'Grading failed');
   await readNdjson<MockEndEvent>(res, onEvent);
+}
+
+/** GET /api/mock/cards — due gap drill cards plus counts. Free. */
+export function getGapCards(): Promise<GapCardsResponse> {
+  return request<GapCardsResponse>('/api/mock/cards');
+}
+
+/** POST /api/mock/cards/:id/grade — self-grade one card. Free: no model call. */
+export function gradeGapCard(id: number, grade: GapCardGrade): Promise<GapCard> {
+  return request<GapCard>(`/api/mock/cards/${id}/grade`, { method: 'POST', body: JSON.stringify({ grade }) });
 }
 
 /** POST /api/mock/:id/abandon — free. */

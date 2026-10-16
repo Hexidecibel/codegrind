@@ -23,7 +23,7 @@ import { DEFAULT_LANGUAGE } from '../../shared/languages.js';
  * itself become a thing that needs migrating, and it is already there on every
  * SQLite file ever created (0 by default).
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** Optional instrumentation — startup logging, and the seam tests observe. */
 export interface MigrateOptions {
@@ -168,6 +168,33 @@ const LANG = DEFAULT_LANGUAGE;
 // Everything runs inside one transaction: either the database comes out at
 // SCHEMA_VERSION with every step applied, or it comes out untouched.
 
+/**
+ * The v4 mock_gaps shape, as a template so the always-run CREATE (fresh
+ * databases) and the v4 rebuild (old ones) cannot drift apart. Every gap is
+ * a drill card: `title` is the front, `answer` the back, and step..retiredAt
+ * the schedule (src/shared/gap-cards.ts).
+ */
+const MOCK_GAPS_V4 = (name: string) => `
+        CREATE TABLE IF NOT EXISTS ${name} (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          mockId         TEXT NOT NULL REFERENCES mocks(id) ON DELETE CASCADE,
+          seq            INTEGER,                        -- the turn it surfaced on; NULL = grader, no turn
+          concept        TEXT NOT NULL,
+          type           TEXT NOT NULL DEFAULT 'skill',  -- fact | skill
+          title          TEXT NOT NULL DEFAULT '',       -- card front: a self-contained question
+          summary        TEXT NOT NULL,                  -- what the candidate did not know
+          answer         TEXT NOT NULL DEFAULT '',       -- card back: 2-4 sentences incl. why it matters
+          source         TEXT NOT NULL DEFAULT 'turn',   -- turn | grade | backfill
+          step           INTEGER NOT NULL DEFAULT 0,     -- rung on GAP_CARD_LADDER_DAYS
+          dueAt          TEXT NOT NULL,
+          reps           INTEGER NOT NULL DEFAULT 0,
+          lapses         INTEGER NOT NULL DEFAULT 0,
+          lastGrade      TEXT,                           -- got | shaky | missed
+          lastReviewedAt TEXT,
+          retiredAt      TEXT,
+          createdAt      TEXT NOT NULL
+        );`;
+
 export function migrate(db: Database, opts: MigrateOptions = {}): void {
   const from = db.pragma('user_version', { simple: true }) as number;
 
@@ -309,14 +336,7 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
           PRIMARY KEY (mockId, seq)
         );
 
-        CREATE TABLE IF NOT EXISTS mock_gaps (
-          mockId    TEXT NOT NULL REFERENCES mocks(id) ON DELETE CASCADE,
-          seq       INTEGER NOT NULL,            -- the teach turn
-          concept   TEXT NOT NULL,
-          summary   TEXT NOT NULL,
-          createdAt TEXT NOT NULL,
-          PRIMARY KEY (mockId, seq)
-        );
+        ${MOCK_GAPS_V4('mock_gaps')}
 
         CREATE TABLE IF NOT EXISTS mock_grades (
           mockId    TEXT PRIMARY KEY REFERENCES mocks(id) ON DELETE CASCADE,
@@ -446,6 +466,37 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
           db.exec(`UPDATE problems SET canonicalized = 1`);
           opts.onStep?.('v3-problems-canonicalized');
         }
+      }
+
+      // v4. mock_gaps grows into drill cards: a fact/skill type, a card front
+      // and back, and the spaced-repetition schedule. The old key was
+      // (mockId, seq) — one gap per teach turn — but a turn can now supply
+      // several gaps and the grader adds ones with no turn at all, so the key
+      // changes and that means a rebuild. Self-detecting (no `type` column =
+      // old shape), so a lying version marker still gets it.
+      //
+      // Existing rows default to `skill` with an empty answer: Phase 1 only
+      // recorded teach-mode gaps, and those were all reasoning moves. Each one
+      // becomes a card due at the moment it was recorded.
+      const needsGapRebuild = tableExists(db, 'mock_gaps') && !columnExists(db, 'mock_gaps', 'type');
+      if (from < 4 || needsGapRebuild) {
+        if (needsGapRebuild) {
+          const n = countRows(db, 'mock_gaps');
+          db.exec(`
+            ${MOCK_GAPS_V4('mock_gaps_new')}
+            INSERT INTO mock_gaps_new (mockId, seq, concept, type, title, summary, answer, source, dueAt, createdAt)
+            SELECT mockId, seq, concept, 'skill', '', summary, '', 'turn', createdAt, createdAt
+            FROM mock_gaps ORDER BY createdAt, seq;
+            DROP TABLE mock_gaps;
+            ALTER TABLE mock_gaps_new RENAME TO mock_gaps;
+          `);
+          const got = countRows(db, 'mock_gaps');
+          if (got !== n) {
+            throw new Error(`migration aborted: mock_gaps row count changed ${n} -> ${got} in the v4 rebuild.`);
+          }
+          opts.onStep?.('v4-mock-gap-cards');
+        }
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_mock_gaps_due ON mock_gaps (retiredAt, dueAt);`);
       }
 
       // --- Verification, INSIDE the transaction -------------------------------

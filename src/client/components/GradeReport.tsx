@@ -3,9 +3,14 @@
 // =============================================================================
 // Pure presentation over a MockGrade. The drill list is shown as text here;
 // turning each drill into a startable exercise is Phase 2 (`POST /api/drill`).
+// The mock's GAPS are split the way the grade weighs them: facts are cheap
+// fixes, skills are practice areas. Every gap is already a drill card on the
+// Mock tab (GapCards), so this section says so rather than offering a button.
 
-import { AlertTriangle, CheckCircle2, GraduationCap, ListChecks, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, GraduationCap, Layers, ListChecks, XCircle } from 'lucide-react';
 import type { MockGrade, MockUsage, MockVerdict } from '@/shared/mock';
+import type { MockGap } from '@/shared/gap-cards';
+import { GAP_TYPE_META, cardFront } from '@/client/components/GapCards';
 import { MOCK_LEVEL_LABEL, SD_STAGE_META, conceptLabel } from '@/shared/sd';
 import { cn } from '@/lib/utils';
 
@@ -28,7 +33,32 @@ function ScoreDots({ score }: { score: number }) {
   );
 }
 
-export function GradeReport({ grade, usage }: { grade: MockGrade; usage?: MockUsage }) {
+function GapList({ gaps, type }: { gaps: MockGap[]; type: MockGap['type'] }) {
+  const list = gaps.filter((g) => g.type === type);
+  if (!list.length) return null;
+  const meta = GAP_TYPE_META[type];
+  return (
+    <div className="space-y-1.5">
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {type === 'fact' ? 'Cheap fixes — facts' : 'Practice areas — reasoning'}
+        <span className="ml-1 font-normal normal-case tracking-normal">({meta.hint})</span>
+      </div>
+      <ul className="space-y-2 text-sm">
+        {list.map((g) => (
+          <li key={g.id} className="rounded-md border border-border px-3 py-2">
+            <div className="font-medium">
+              {cardFront(g)}
+              {g.seq != null && <span className="ml-1 text-xs font-normal text-muted-foreground">#{g.seq}</span>}
+            </div>
+            {g.answer && <p className="mt-1 text-muted-foreground">{g.answer}</p>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+export function GradeReport({ grade, usage, gaps = [] }: { grade: MockGrade; usage?: MockUsage; gaps?: MockGap[] }) {
   const verdict = VERDICT_META[grade.verdict];
   const signals = { nailed: [] as string[], weak: [] as string[], missing: [] as string[] };
   for (const o of grade.conceptObservations) signals[o.signal].push(conceptLabel(o.concept));
@@ -108,6 +138,16 @@ export function GradeReport({ grade, usage }: { grade: MockGrade; usage?: MockUs
               </li>
             ))}
           </ol>
+        </section>
+      )}
+
+      {gaps.length > 0 && (
+        <section className="space-y-3">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+            <Layers className="h-4 w-4" /> Gaps — each is now a drill card on the Mock tab
+          </h3>
+          <GapList gaps={gaps} type="skill" />
+          <GapList gaps={gaps} type="fact" />
         </section>
       )}
 
