@@ -696,6 +696,15 @@ export function HelpPage() {
               same thing twice — <strong>Teach me</strong> or{' '}
               <strong>Keep going</strong>. Anything taught is never scored.
             </Term>
+            <Term label="Drill cards">
+              Every fact or reasoning move the interviewer had to hand you
+              becomes a card on the Mock tab: a <strong>cheap fix</strong> (a
+              fact, like 301 vs 302) or a <strong>practice area</strong> (a skill,
+              like ranking failures). Answer it, reveal the explanation, and grade
+              yourself — Got it moves it out to 2, 5, then 10 days and then retires
+              it; Shaky repeats tomorrow; Missed starts over. Grading a card never
+              calls the model.
+            </Term>
             <Term label="I&rsquo;m stuck">
               A nudge — a question that points the way, not the answer.
             </Term>

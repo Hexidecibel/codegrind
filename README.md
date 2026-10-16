@@ -193,7 +193,10 @@ Lesson prose is shared across languages; only the code snippets are translated.
 **Mock** — a system-design interview over chat. The interviewer moves you through seven
 stages, breaks off to teach whenever you ask ("wait, explain X", or **Teach me**) and then
 resumes, and at the end grades every stage at Senior, Staff (the default) or Principal
-and hands you a drill list. It runs on the workhorse model with the conversation cached;
+and hands you a drill list. Every fact or reasoning move the interviewer had to hand you
+is recorded as a gap — a **fact** (a cheap fix, weighed lightly) or a **skill** (a practice
+area) — and becomes a drill card on the Mock tab that comes back now → +2d → +5d → +10d
+until you get it; you grade yourself, so drilling never calls the model. It runs on the workhorse model with the conversation cached;
 `bin/mock-dry-run --dry-run` prints what a mock costs without spending anything.
 
 (**Manual** lets you pick a topic and difficulty yourself. **Settings** shows how you are

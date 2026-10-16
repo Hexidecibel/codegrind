@@ -149,3 +149,21 @@ export type InterviewerMode = (typeof INTERVIEWER_MODES)[number];
 /** One observation's verdict. `taught` is never emitted by the interviewer — Phase 2 writes it. */
 export const CONCEPT_SIGNALS = ['nailed', 'weak', 'missing'] as const;
 export type ConceptSignal = (typeof CONCEPT_SIGNALS)[number];
+
+/**
+ * What kind of gap a mock exposed. The distinction drives both the grade and
+ * the drills:
+ *
+ *   fact   domain knowledge you either have or look up — 301 vs 302, seconds
+ *          in a month, base62. CHEAP TO FIX: one flash card closes it, and a
+ *          missing fact weighs far less in a Staff loop than missing judgement,
+ *          especially when the candidate reasons about the trade-off anyway.
+ *   skill  a reasoning move — ranking failures, doing the estimate, committing
+ *          to a trade-off. THE PRACTICE AREA: it only closes with reps.
+ */
+export const GAP_TYPES = ['fact', 'skill'] as const;
+export type GapType = (typeof GAP_TYPES)[number];
+
+export function isGapType(x: unknown): x is GapType {
+  return typeof x === 'string' && (GAP_TYPES as readonly string[]).includes(x);
+}

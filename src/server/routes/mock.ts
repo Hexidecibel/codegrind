@@ -3,6 +3,8 @@
 // =============================================================================
 //   GET  /api/mocks                 list            free
 //   GET  /api/mock/prompts          the prompt bank free
+//   GET  /api/mock/cards            due drill cards free
+//   POST /api/mock/cards/:id/grade  {grade: got|shaky|missed}      free (self-graded, no model)
 //   GET  /api/mock/:id              one mock        free
 //   POST /api/mock/start            {level?, promptId?}            ONE model call
 //   POST /api/mock/:id/turn         {expectedSeq, content, action?} ONE model call
@@ -19,7 +21,9 @@ import type { MockEndEvent, MockListResponse } from '../../shared/mock.js';
 import {
   MockError,
   abandonMock,
+  gapCards,
   getMockView,
+  gradeGapCard,
   prepareEnd,
   runEnd,
   startMock,
@@ -45,6 +49,20 @@ mockRoutes.get('/mocks', (c) => {
 mockRoutes.get('/mock/prompts', (c) =>
   c.json({ prompts: SD_PROMPTS.map(({ id, title, brief, familiar }) => ({ id, title, brief, familiar })) })
 );
+
+// Registered BEFORE /mock/:id, which would otherwise read "cards" as a mock id.
+mockRoutes.get('/mock/cards', (c) => c.json(gapCards()));
+
+mockRoutes.post('/mock/cards/:id/grade', async (c) => {
+  try {
+    const id = Number(c.req.param('id'));
+    if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'No such card.' }, 404);
+    const body = await c.req.json().catch(() => null);
+    return c.json(gradeGapCard(id, body));
+  } catch (err) {
+    return fail(c, 'mock-card', err);
+  }
+});
 
 mockRoutes.get('/mock/:id', (c) => {
   try {

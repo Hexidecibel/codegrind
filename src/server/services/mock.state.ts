@@ -20,6 +20,7 @@ import {
   SD_STAGE_META,
   MOCK_LEVEL_LABEL,
   conceptLabel,
+  type GapType,
   type InterviewerMode,
   type MockLevel,
   type SdConcept,
@@ -157,7 +158,53 @@ export interface InterviewerReply {
   mode: InterviewerMode;
   teach: { concept: SdConcept; gapSummary: string } | null;
   resumePoint: string;
+  /**
+   * Every fact or reasoning move the interviewer handed over in THIS reply —
+   * taught, explained in answer to a question, or given away in a nudge. Each
+   * becomes a gap and a drill card. Optional so a hand-built reply (tests, the
+   * dry run) need not spell out an empty list.
+   */
+  gaps?: SuppliedGap[];
   say: string;
+}
+
+export interface SuppliedGap {
+  concept: SdConcept;
+  type: GapType;
+  /** The card front: a self-contained question. */
+  title: string;
+  /** The card back: 2–4 sentences, including why it matters to the design. */
+  answer: string;
+}
+
+/**
+ * The gaps to store for one interviewer reply. The supplied list is the
+ * source; a teach turn that forgot to list its own lesson still records it
+ * (as a skill, the Phase 1 behaviour) so teaching never goes unrecorded.
+ */
+export function gapsForReply(
+  reply: InterviewerReply,
+  seq: number
+): { seq: number; concept: SdConcept; type: GapType; title: string; summary: string; answer: string }[] {
+  const out = (reply.gaps ?? []).map((g) => ({
+    seq,
+    concept: g.concept,
+    type: g.type,
+    title: g.title,
+    summary: reply.mode === 'teach' && reply.teach?.concept === g.concept ? reply.teach.gapSummary : g.title,
+    answer: g.answer,
+  }));
+  if (reply.mode === 'teach' && reply.teach && !out.some((g) => g.concept === reply.teach!.concept)) {
+    out.push({
+      seq,
+      concept: reply.teach.concept,
+      type: 'skill',
+      title: '',
+      summary: reply.teach.gapSummary,
+      answer: '',
+    });
+  }
+  return out;
 }
 
 /**

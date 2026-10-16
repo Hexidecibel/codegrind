@@ -60,6 +60,7 @@ import {
 import { sdPrompt } from '@/shared/sd-prompts';
 import { Button } from '@/client/components/ui/button';
 import { GradeReport } from '@/client/components/GradeReport';
+import { GapCards } from '@/client/components/GapCards';
 import { cn } from '@/lib/utils';
 
 function ErrorBar({ error, onClose }: { error: ApiError | Error; onClose?: () => void }) {
@@ -210,6 +211,8 @@ function StartCard() {
           {busy ? 'The interviewer is getting ready…' : 'Start the interview'}
         </Button>
       </div>
+
+      <GapCards />
 
       {mocks && mocks.length > 0 && (
         <section className="space-y-2">
@@ -518,7 +521,7 @@ function Graded({ view }: { view: MockView }) {
         <h1 className="text-xl font-bold tracking-tight">{titleOf(view)}</h1>
         <p className="text-sm text-muted-foreground">{view.prompt}</p>
       </div>
-      {view.grade && <GradeReport grade={view.grade} usage={view.usage} />}
+      {view.grade && <GradeReport grade={view.grade} usage={view.usage} gaps={view.gaps} />}
       <div>
         <Button variant="outline" size="sm" onClick={() => setShowTranscript((s) => !s)}>
           {showTranscript ? 'Hide' : 'Show'} the transcript ({view.turns.length} messages)

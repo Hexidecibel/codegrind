@@ -37,9 +37,8 @@ process.env.ANTHROPIC_API_KEY = 'test-key-not-used';
 delete process.env.CODEGRIND_PROVIDER;
 delete process.env.ANTHROPIC_MODEL;
 
-const { interviewerTurn, gradeMock, coerceReply, INTERVIEWER_TOOL, EMIT_MOCK_GRADE_TOOL } = await import(
-  './llm.mock.js'
-);
+const { interviewerTurn, gradeMock, coerceReply, INTERVIEWER_TOOL, EMIT_MOCK_GRADE_TOOL, INTERVIEWER_SYSTEM, GRADE_SYSTEM } =
+  await import('./llm.mock.js');
 const { createAnthropicClient } = await import('./llm.anthropic.js');
 const { buildContext, buildMessages } = await import('./mock.state.js');
 const { sdPrompt } = await import('../../shared/sd-prompts.js');
@@ -102,6 +101,7 @@ await gradeMock({
   transcript: '#1 INTERVIEWER: Go.\n#2 CANDIDATE: Who buys?',
   skipped: ['capacity'],
   taught: ['idempotency'],
+  recordedGaps: [{ seq: 19, type: 'skill', title: 'Rank the failures for a ticketing system.', summary: 's' }],
 });
 const gradeBody = mocks.create.mock.calls[0][0];
 
@@ -328,5 +328,115 @@ describe('the grade', () => {
     };
     walk(EMIT_MOCK_GRADE_TOOL.schema as unknown as Record<string, unknown>);
     walk(INTERVIEWER_TOOL.schema as unknown as Record<string, unknown>);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Gaps: fact vs skill, recorded whenever the interviewer hands something over
+// -----------------------------------------------------------------------------
+const FACT_GAP = {
+  concept: 'api-design',
+  type: 'fact',
+  title: 'URL shortener redirect: 301 or 302 — and what does the choice do to click analytics?',
+  answer: '302. A 301 is cached by the browser permanently, so repeat clicks never reach you and go uncounted.',
+};
+
+describe('gaps on the interviewer reply', () => {
+  it('keeps typed gaps with a front and a back', () => {
+    const r = coerceReply({ ...REPLY, gaps: [FACT_GAP] }, 'api');
+    expect(r.gaps).toEqual([FACT_GAP]);
+  });
+
+  it('drops gaps with no title or answer or an unknown concept, and reads an unknown type as skill', () => {
+    const r = coerceReply(
+      {
+        ...REPLY,
+        gaps: [
+          { ...FACT_GAP, title: ' ' },
+          { ...FACT_GAP, answer: '' },
+          { ...FACT_GAP, concept: 'vibes' },
+          { ...FACT_GAP, type: 'trivia' },
+        ],
+      },
+      'api'
+    );
+    expect(r.gaps).toEqual([{ ...FACT_GAP, type: 'skill' }]);
+  });
+
+  it('treats a missing gaps field as no gaps', () => {
+    expect(coerceReply(REPLY, 'api').gaps).toEqual([]);
+  });
+
+  it('asks for gaps in the schema, before the trailing say', () => {
+    const props = Object.keys((INTERVIEWER_TOOL.schema as { properties: object }).properties);
+    expect(props).toContain('gaps');
+    expect(props[props.length - 1]).toBe('say');
+    expect(props.indexOf('gaps')).toBeLessThan(props.indexOf('say'));
+  });
+});
+
+describe('the interviewer system prompt', () => {
+  it('answers a question before redirecting, and never ignores one', () => {
+    expect(INTERVIEWER_SYSTEM).toContain('ANSWER BEFORE YOU REDIRECT');
+    expect(INTERVIEWER_SYSTEM).toMatch(/Never ignore an explicit question/);
+  });
+
+  it('records every handed-over fact or move as a typed gap', () => {
+    expect(INTERVIEWER_SYSTEM).toMatch(/If you told them something they did not know, it is a gap/);
+    expect(INTERVIEWER_SYSTEM).toMatch(/type fact:/);
+    expect(INTERVIEWER_SYSTEM).toMatch(/type skill:/);
+  });
+
+  it('credits reasoning over recall', () => {
+    expect(INTERVIEWER_SYSTEM).toContain('REASONING OVER RECALL');
+  });
+});
+
+describe('gaps in the grade', () => {
+  const input = {
+    level: 'staff' as const,
+    promptTitle: 'T',
+    brief: 'B',
+    transcript: '#1 INTERVIEWER: Go.',
+    skipped: [],
+    taught: [],
+  };
+
+  it('weighs fact gaps less than skill gaps and credits reasoning without the fact', () => {
+    expect(GRADE_SYSTEM).toMatch(/fact gap .* weighs LITTLE/);
+    expect(GRADE_SYSTEM).toMatch(/skill gap .* weighs heavily/);
+    expect(GRADE_SYSTEM).toContain('REASONING WITHOUT THE FACT IS A POSITIVE STAFF SIGNAL');
+    expect(GRADE_SYSTEM).toMatch(/practice areas .* cheap fixes/);
+  });
+
+  it('tells the grader which gaps are already recorded', async () => {
+    mocks.create.mockResolvedValueOnce(answer(GRADE, 'tool_use', 'emit_mock_grade'));
+    await gradeMock({
+      ...input,
+      recordedGaps: [{ seq: 37, type: 'fact', title: FACT_GAP.title, summary: 's' }],
+    });
+    const user = mocks.create.mock.calls[0][0].messages[0].content as string;
+    expect(user).toContain('RECORDED GAPS');
+    expect(user).toContain(`- #37 [fact] ${FACT_GAP.title}`);
+  });
+
+  it('coerces the grader\'s extra gaps, with a turn or null', async () => {
+    mocks.create.mockResolvedValueOnce(
+      answer(
+        { ...GRADE, gaps: [{ ...FACT_GAP, turn: 37 }, { ...FACT_GAP, title: 'Seconds in a month?', turn: 'x' }, { concept: 'nope' }] },
+        'tool_use',
+        'emit_mock_grade'
+      )
+    );
+    const { grade } = await gradeMock(input);
+    expect(grade.gaps).toEqual([
+      { ...FACT_GAP, turn: 37 },
+      { ...FACT_GAP, title: 'Seconds in a month?', turn: null },
+    ]);
+  });
+
+  it('an old grade with no gaps field coerces to an empty list', async () => {
+    mocks.create.mockResolvedValueOnce(answer(GRADE, 'tool_use', 'emit_mock_grade'));
+    expect((await gradeMock(input)).grade.gaps).toEqual([]);
   });
 });

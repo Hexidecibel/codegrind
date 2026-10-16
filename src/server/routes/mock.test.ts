@@ -322,3 +322,121 @@ describe('abandon', () => {
     expect((await post(`/api/mock/${view.id}/turn`, { expectedSeq: 1, content: 'x' })).status).toBe(409);
   });
 });
+
+// -----------------------------------------------------------------------------
+// Gaps and drill cards
+// -----------------------------------------------------------------------------
+const FACT = {
+  concept: 'api-design',
+  type: 'fact',
+  title: 'URL shortener redirect: 301 or 302 — and why?',
+  answer: '302, so every click passes through you and can be counted.',
+};
+const SKILL = {
+  concept: 'failure-ranking',
+  type: 'skill',
+  title: 'Say the ranking sentence for a URL shortener.',
+  answer: 'Worst is down; accept stale analytics to get it.',
+};
+
+describe('gaps', () => {
+  it('records every gap the interviewer handed over, typed, on any mode — not only teach', async () => {
+    const view = await start();
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ mode: 'nudge', gaps: [FACT, SKILL] }));
+    const res = await post(`/api/mock/${view.id}/turn`, { expectedSeq: 1, content: '301 i guess' });
+    const next = await res.json();
+    expect(next.gaps).toHaveLength(2);
+    expect(next.gaps[0]).toMatchObject({ seq: 3, type: 'fact', title: FACT.title, answer: FACT.answer, source: 'turn' });
+    expect(next.gaps[1]).toMatchObject({ seq: 3, type: 'skill', concept: 'failure-ranking' });
+  });
+
+  it('a teach turn that lists its lesson is not recorded twice', async () => {
+    const view = await start();
+    fake.interviewerTurn.mockResolvedValueOnce(
+      replyWith({ mode: 'teach', teach: { concept: 'failure-ranking', gapSummary: 'would not rank' }, gaps: [SKILL] })
+    );
+    const next = await (await post(`/api/mock/${view.id}/turn`, { expectedSeq: 1, content: '', action: 'teach_me' })).json();
+    expect(next.gaps).toHaveLength(1);
+    expect(next.gaps[0]).toMatchObject({ type: 'skill', title: SKILL.title, summary: 'would not rank' });
+  });
+
+  it('stores the grader’s extra gaps as cards, minus ones already recorded, and a re-grade does not double them', async () => {
+    const view = await start();
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ gaps: [FACT] }));
+    await post(`/api/mock/${view.id}/turn`, { expectedSeq: 1, content: 'hi' });
+    const extra = { concept: 'scale-estimation', type: 'fact', title: 'Seconds in a month, roughly?', answer: '~2.5M.', turn: 5 };
+    const grade = { ...GRADE, gaps: [{ ...FACT, title: FACT.title.toUpperCase(), turn: 3 }, extra] };
+    fake.gradeMock.mockResolvedValueOnce({ grade, metas: [META] });
+    await readEvents(await post(`/api/mock/${view.id}/end`));
+    const input = fake.gradeMock.mock.calls[0][0];
+    expect(input.recordedGaps).toEqual([{ seq: 3, type: 'fact', title: FACT.title, summary: FACT.title }]);
+    const after = await (await app.request(`/api/mock/${view.id}`)).json();
+    expect(after.gaps.map((g: { title: string; source: string }) => [g.title, g.source])).toEqual([
+      [FACT.title, 'turn'],
+      [extra.title, 'grade'],
+    ]);
+    const { storeGradeGaps } = await import('../services/mock.service.js');
+    expect(storeGradeGaps(view.id, grade as never)).toBe(0);
+  });
+});
+
+describe('drill cards', () => {
+  async function withCards() {
+    const view = await start();
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ gaps: [FACT, SKILL] }));
+    await post(`/api/mock/${view.id}/turn`, { expectedSeq: 1, content: 'hi' });
+    fake.interviewerTurn.mockReset();
+    return view.id;
+  }
+
+  it('lists due cards with the mock they came from, and makes no model call', async () => {
+    await withCards();
+    const res = await app.request('/api/mock/cards');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.due).toHaveLength(2);
+    expect(body.due[0]).toMatchObject({ title: FACT.title, step: 0, retiredAt: null });
+    expect(typeof body.due[0].mockTitle).toBe('string');
+    expect(body).toMatchObject({ upcoming: 0, retired: 0, nextDueAt: null });
+    expect(fake.interviewerTurn).not.toHaveBeenCalled();
+    expect(fake.gradeMock).not.toHaveBeenCalled();
+  });
+
+  it('self-grading advances the schedule with no model call', async () => {
+    await withCards();
+    const [card] = (await (await app.request('/api/mock/cards')).json()).due;
+    const res = await post(`/api/mock/cards/${card.id}/grade`, { grade: 'got' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ id: card.id, step: 1, reps: 1, lastGrade: 'got' });
+    const after = await (await app.request('/api/mock/cards')).json();
+    expect(after.due).toHaveLength(1);
+    expect(after.upcoming).toBe(1);
+    expect(after.nextDueAt).toBeTruthy();
+    expect(fake.interviewerTurn).not.toHaveBeenCalled();
+    expect(fake.gradeMock).not.toHaveBeenCalled();
+  });
+
+  it('retires a card after "got it" on the top rung, and refuses to grade it again', async () => {
+    await withCards();
+    const [card] = (await (await app.request('/api/mock/cards')).json()).due;
+    db.prepare(`UPDATE mock_gaps SET step = 3 WHERE id = ?`).run(card.id);
+    expect(await (await post(`/api/mock/cards/${card.id}/grade`, { grade: 'got' })).json()).toMatchObject({
+      retiredAt: expect.any(String),
+    });
+    expect((await (await app.request('/api/mock/cards')).json()).retired).toBe(1);
+    expect((await post(`/api/mock/cards/${card.id}/grade`, { grade: 'got' })).status).toBe(409);
+  });
+
+  it('validates the grade and the card id', async () => {
+    await withCards();
+    const [card] = (await (await app.request('/api/mock/cards')).json()).due;
+    expect((await post(`/api/mock/cards/${card.id}/grade`, { grade: 'easy' })).status).toBe(400);
+    expect((await post(`/api/mock/cards/999999/grade`, { grade: 'got' })).status).toBe(404);
+    expect((await post(`/api/mock/cards/abc/grade`, { grade: 'got' })).status).toBe(404);
+  });
+
+  it('does not shadow GET /api/mock/:id', async () => {
+    const id = await withCards();
+    expect((await app.request(`/api/mock/${id}`)).status).toBe(200);
+  });
+});

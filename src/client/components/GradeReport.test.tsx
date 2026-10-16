@@ -46,3 +46,33 @@ describe('the grade report', () => {
     expect(html).toContain('$0.31');
   });
 });
+
+describe('the gaps section', () => {
+  const gap = (id: number, type: 'fact' | 'skill', title: string) => ({
+    id,
+    mockId: 'm',
+    seq: id,
+    concept: 'api-design' as const,
+    type,
+    title,
+    summary: 's',
+    answer: `answer ${id}`,
+    source: 'turn' as const,
+    createdAt: 't',
+  });
+  const withGaps = renderToStaticMarkup(
+    <GradeReport grade={GRADE} gaps={[gap(1, 'fact', '301 or 302?'), gap(2, 'skill', 'Rank the failures.')]} />
+  );
+
+  it('splits facts (cheap fixes) from skills (practice areas), skills first', () => {
+    expect(withGaps).toContain('Cheap fixes');
+    expect(withGaps).toContain('Practice areas');
+    expect(withGaps.indexOf('Practice areas')).toBeLessThan(withGaps.indexOf('Cheap fixes'));
+    expect(withGaps).toContain('301 or 302?');
+    expect(withGaps).toContain('answer 2');
+  });
+
+  it('is absent when there are no gaps', () => {
+    expect(html).not.toContain('Cheap fixes');
+  });
+});

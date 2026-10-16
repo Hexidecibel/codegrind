@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Add the gaps a Phase-1 mock lost as drill cards, with hand-written answers.
+# Thin wrapper around bin/backfill-mock-gaps.ts. No model call — ever.
+#
+#   bin/backfill-mock-gaps --dry-run     # print what would be added, write nothing
+#   bin/backfill-mock-gaps               # write (idempotent: re-running adds nothing)
+#
+# Run AFTER bin/deploy: the running service must already be on the v4 schema
+# (mock_gaps as drill cards). The .ts migrates on open anyway, but an OLD
+# service writing to a migrated table would fail its next gap insert.
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+# shellcheck source=lib/node.sh
+source "$REPO/bin/lib/node.sh"
+cg_require_node
+
+# DATA_DIR for a CLI run.
+if [[ -f "$REPO/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO/.env"
+  set +a
+fi
+
+if [[ " $* " != *" --dry-run "* ]]; then
+  "$REPO/bin/backup-db" pre-gap-backfill
+fi
+
+exec npx tsx bin/backfill-mock-gaps.ts "$@"
