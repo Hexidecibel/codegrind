@@ -144,8 +144,41 @@ function metaOf(res: Anthropic.Message, model: string, startedAt: number): CallM
       inputTokens: usage?.input_tokens ?? 0,
       outputTokens: usage?.output_tokens ?? 0,
       cachedInputTokens: usage?.cache_read_input_tokens ?? 0,
+      cacheWriteInputTokens: usage?.cache_creation_input_tokens ?? 0,
     },
   };
+}
+
+/**
+ * The cache marker for a TTL. `undefined` is the 5-minute default and is spelled
+ * WITHOUT a `ttl` key, so every call that does not ask for a conversation cache
+ * serializes exactly as it did before the field existed (llm.golden.test.ts).
+ */
+function marker(ttl: '1h' | undefined): Anthropic.CacheControlEphemeral {
+  return ttl ? { type: 'ephemeral', ttl } : { type: 'ephemeral' };
+}
+
+/**
+ * The messages, with the conversation breakpoint on the last one.
+ *
+ * EVERY message becomes a one-block array, not only the last. A string and a
+ * single text block render to the same prompt, but "turn 7 was a string last
+ * time and a block this time" is exactly the kind of difference that is cheap to
+ * rule out and expensive to discover on a bill — so in this mode the shape is
+ * uniform and only the marker moves.
+ */
+function conversationMessages(
+  messages: StructuredRequest['messages'],
+  ttl: '1h' | undefined
+): Anthropic.MessageParam[] {
+  return messages.map((m, i) => ({
+    role: m.role,
+    content: [
+      i === messages.length - 1
+        ? { type: 'text' as const, text: m.content, cache_control: marker(ttl) }
+        : { type: 'text' as const, text: m.content },
+    ],
+  }));
 }
 
 export function createAnthropicClient(model: string, seam?: AnthropicSeam): LlmClient {
@@ -156,13 +189,17 @@ export function createAnthropicClient(model: string, seam?: AnthropicSeam): LlmC
     req: StructuredRequest | TextRequest
   ): Anthropic.MessageCreateParamsNonStreaming {
     const tool = 'tool' in req ? req.tool : undefined;
+    // See BaseRequest.cacheConversation. 'long' moves BOTH markers to 1h:
+    // longer-TTL entries must precede shorter ones, so a 5-minute system marker
+    // ahead of a 1-hour message marker would be rejected.
+    const ttl = req.cacheConversation === 'long' ? ('1h' as const) : undefined;
     return {
       model,
       max_tokens: req.maxTokens,
       thinking: THINKING[req.thinking ?? 'off'],
       // The caller hands over a plain string; the ephemeral wrapper is this
       // adapter's business and is applied unconditionally.
-      system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
+      system: [{ type: 'text', text: req.system, cache_control: marker(ttl) }],
       ...(tool
         ? {
             tools: [
@@ -184,7 +221,9 @@ export function createAnthropicClient(model: string, seam?: AnthropicSeam): LlmC
             tool_choice: { type: 'tool' as const, name: tool.name },
           }
         : {}),
-      messages: req.messages,
+      messages: req.cacheConversation
+        ? conversationMessages(req.messages, ttl)
+        : req.messages,
     };
   }
 

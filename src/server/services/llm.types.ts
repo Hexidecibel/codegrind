@@ -199,6 +199,27 @@ interface BaseRequest {
   timeoutMs?: number;
   /** Caller-side cancellation, composed with the timeout rather than replacing it. */
   signal?: AbortSignal;
+  /**
+   * "This is a growing conversation; cache the history, not just the system."
+   *
+   * INTENT, NOT A VENDOR FIELD — the same rule as `exactSchema`. Absent (every
+   * call that existed before the mock interviewer) means exactly what it always
+   * meant: only the system prompt is cached, and the serialized body is byte-
+   * identical to llm.golden.test.ts's fixture. Set, the Anthropic adapter also
+   * marks the LAST message as a cache breakpoint, so turn N+1 reads turns 1..N
+   * back at the cache-read rate instead of paying full input for them again.
+   *
+   *   'short'  5-minute entries — a conversation whose replies arrive quickly.
+   *   'long'   1-hour entries on BOTH markers — a candidate can think for longer
+   *            than five minutes, and a miss re-bills the whole transcript as a
+   *            cache write. The system marker has to move to 1h too: Anthropic
+   *            requires longer-TTL entries to appear before shorter ones, and a
+   *            5-minute system marker in front of a 1-hour message marker is a 400.
+   *
+   * An endpoint with no such concept ignores it (llm.openai.ts does: llama.cpp's
+   * slot cache is an automatic prefix match and needs no marker).
+   */
+  cacheConversation?: 'short' | 'long';
 }
 
 export interface StructuredRequest extends BaseRequest {
@@ -225,6 +246,14 @@ export interface CallMeta {
     outputTokens: number;
     /** Prefix tokens served from cache. 0 everywhere caching is off or missed. */
     cachedInputTokens: number;
+    /**
+     * Prefix tokens WRITTEN to cache on this call, billed above the base input
+     * rate. Optional because only an endpoint with explicit cache writes has the
+     * number; absent reads as 0. The mock interviewer's cost accounting is the
+     * one consumer that needs it — a conversation cache is mostly writes on the
+     * turn that adds a message and mostly reads on every turn after.
+     */
+    cacheWriteInputTokens?: number;
   };
 }
 
