@@ -20,10 +20,13 @@ import { fileURLToPath } from 'node:url';
 
 const SERVICE = fileURLToPath(new URL('./llm.service.ts', import.meta.url));
 const SOURCE = readFileSync(SERVICE, 'utf8');
+// The mock interviewer's two calls live in their own file and are held to the
+// same rules — a second file is the obvious way for the rule to stop applying.
+const MOCK_SOURCE = readFileSync(fileURLToPath(new URL('./llm.mock.ts', import.meta.url)), 'utf8');
 
 /** Lines matching a pattern, reported with their numbers so a failure is actionable. */
-function hits(pattern: RegExp): string[] {
-  return SOURCE.split('\n')
+function hits(pattern: RegExp, source = SOURCE): string[] {
+  return source.split('\n')
     .map((line, i) => `${i + 1}: ${line.trim()}`)
     .filter((line) => pattern.test(line));
 }
@@ -65,6 +68,27 @@ describe('llm.service.ts stays vendor-free', () => {
     for (const call of calls) {
       expect(call).toMatch(/thinking: '(off|adaptive)'/);
       expect(call).toMatch(/role: '(workhorse|small|tutor)'/);
+      expect(call).toMatch(/maxTokens: \d+/);
+    }
+  });
+});
+
+describe('llm.mock.ts stays vendor-free too', () => {
+  const mockHits = (p: RegExp) => hits(p, MOCK_SOURCE);
+
+  it('has no "provider", no SDK, no wire format and no model name', () => {
+    expect(mockHits(/provider/i)).toEqual([]);
+    expect(mockHits(/@anthropic-ai\/sdk|openai|from '\.\/llm\.anthropic/)).toEqual([]);
+    expect(mockHits(/messages\.create|input_schema|cache_control|type: 'ephemeral'/)).toEqual([]);
+    expect(mockHits(/claude-|ANTHROPIC_MODEL|ANTHROPIC_API_KEY/)).toEqual([]);
+  });
+
+  it('makes its two calls through structured(), each stating role, thinking and budget', () => {
+    const calls = MOCK_SOURCE.match(/await structured\(\{[\s\S]*?\n\s*\}\);/g) ?? [];
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call).toMatch(/thinking: '(off|adaptive)'/);
+      expect(call).toMatch(/role: 'workhorse'/);
       expect(call).toMatch(/maxTokens: \d+/);
     }
   });
