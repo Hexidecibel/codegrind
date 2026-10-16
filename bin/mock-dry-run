@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# What a mock interview costs, turn by turn. Thin wrapper around
+# bin/mock-dry-run.ts so it runs like the other bin scripts.
+#
+#   bin/mock-dry-run --dry-run            # FREE — prints the plan and the estimate
+#   bin/mock-dry-run --live --turns 4     # SPENDS — a scripted mock, measured
+#
+# --dry-run opens no database and sends nothing. --live stores nothing but does
+# make real model calls; it is never run by any other script.
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_DIR}"
+
+# DATA_DIR (for --live's stored routing and key) lives in .env for a CLI run.
+if [[ -f "${REPO_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_DIR}/.env"
+  set +a
+fi
+
+# shellcheck source=lib/node.sh
+source "${REPO_DIR}/bin/lib/node.sh"
+cg_require_node
+
+exec npx tsx bin/mock-dry-run.ts "$@"

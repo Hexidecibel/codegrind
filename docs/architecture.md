@@ -129,12 +129,43 @@ fires first the container dies before printing its structured partial results an
 caller sees an opaque kill instead of "3 of 8 passed, then this one hung".
 `languages.test.ts` asserts `CG_TIMEOUT[go] > 23` (compile + run + grace).
 
+### Running a mock interview
+
+```
+POST /api/mock/start   {level?, promptId?}          one interviewer call (the opening)
+POST /api/mock/:id/turn {expectedSeq, content, action?}
+  └─ withLock(id)                      a second call for the same mock is a 429
+  └─ expectedSeq == last seq?          otherwise 409 — another tab moved it on
+  └─ renderCandidateMessage()          the answer + [server: …]/[control: …] notes, rendered ONCE
+  └─ buildMessages(context, turns, next)   stored bytes, replayed verbatim
+  └─ interviewerTurn()                 llm.mock — workhorse, thinking off, cacheConversation 'long'
+  └─ applyReply()                      covered stages, skip detection, offers, taught concepts
+  └─ appendExchange()                  candidate turn + reply in ONE transaction
+POST /api/mock/:id/end                 NDJSON: `wrapup`, then `grade` (or `error`)
+  └─ gradeMock(renderTranscript(...))  adaptive thinking, 16000 tokens; truncation = error
+```
+
+The rules live in `mock.state.ts` (pure, no clock of its own), the orchestration in
+`mock.service.ts`, the tables in `mock.store.ts` (same connection as `db.ts`), the
+prompt bank in `shared/sd-prompts.ts`, the rubric in `sd-rubric.ts` and what the
+interviewer knows about the candidate in `sd-candidate.ts` — the last three copied from
+resume-builder's `systemDesignCard`, never fetched at runtime.
+
+**A failed model call stores nothing.** The candidate's message is written only together
+with the reply to it, so a transcript never ends on an orphaned user turn and a resend is
+clean. **The prefix is byte-stable by construction**: a candidate turn's control notes —
+the clock above all — are rendered when the turn is taken, stored in
+`mock_turns.rendered`, and replayed; rendering them at build time would re-render every
+earlier turn on every request and the conversation cache would never hit.
+`mock.state.test.ts` pins this. Control notes ride in user turns because the seam has no
+mid-conversation system role (and Sonnet 5, the workhorse default, does not support one).
+
 ---
 
 ## Who answers — the LLM seam
 
 Nothing in this app talks to a vendor. `llm.service.ts` — every prompt, every schema,
-all eleven calls — says *what* it wants and *what kind of call* it is, and one file
+all eleven calls, plus `llm.mock.ts`'s two — says *what* it wants and *what kind of call* it is, and one file
 turns that into a client:
 
 ```
@@ -156,7 +187,7 @@ by function.)
 
 | role | the call sites | routed as |
 |---|---|---|
-| `workhorse` | `generateProblem` (16000 output tokens), `coach` (8000), `translateSnippets` (8000) | its own configuration |
+| `workhorse` | `generateProblem` (16000 output tokens), `coach` (8000), `translateSnippets` (8000), and the mock interviewer: `interviewerTurn` (3000, thinking off, many per mock) and `gradeMock` (16000, adaptive) | its own configuration |
 | `small` | `hint` (1000), `planSession` (800), `generatePrimer` (2500), `generateTrackOutline` (2500), the three lesson writers (3000 each) | **the workhorse's client**, with a tighter timeout |
 | `tutor` | `askFollowup` — the chat behind `POST /api/ask`, and the only `text` call in the app | its own configuration |
 
@@ -197,6 +228,15 @@ posts `{provider:'anthropic'}` on every key save. `client/lib/role-summary.ts` i
 pure, tested half — including the rule that a local install, where both roles are the
 same self-hosted model, is told about no cost at all.
 
+**Caching is system-only unless a call asks for more.** `cacheConversation` on a
+request (`'short' | 'long'`) is intent, like `exactSchema`: the Anthropic adapter then
+also marks the last message as a cache breakpoint, so a growing conversation re-reads its
+history at the cache-read rate. Only the mock interviewer sets it (`'long'`, 1-hour
+entries on both the system block and the last message — a longer TTL may not follow a
+shorter one). Absent, a body serializes exactly as before, which `llm.golden.test.ts`
+still asserts; the mock bodies have their own fixture,
+`__fixtures__/mock-request-bodies.json`, re-captured by `bin/capture-llm-bodies`.
+
 **There is no failover.** A configured endpoint that is down produces failures naming
 the endpoint and the model. They never silently become Anthropic calls.
 
@@ -226,6 +266,10 @@ in `PRAGMA user_version`.
 | `lessons`, `lesson_tracks`, `lesson_reads`, `pattern_primers` | — | **shared** | prose is language-free |
 | `code_translations` | `(sourceId, language)` | in the PK | the only language-bound bytes in the corpus |
 | `settings` | `key` | — | JSON values |
+| `mocks` | `id` | — | one mock interview: level, frozen context, `state`/`usage` JSON |
+| `mock_turns` | `(mockId, seq)` | — | `content` as said, `rendered` as sent to the model (byte-stable) |
+| `mock_gaps` | `(mockId, seq)` | — | each concept the interviewer taught |
+| `mock_grades` | `mockId` | — | the `MockGrade` JSON; Phase 2 folds its observations |
 
 **Why a `language` column and not a `problem_variants` table.** A variant would fork
 `starterCode`, `functionName`, `sampleTests`, `hiddenTests` and `referenceSolution` — 5
@@ -244,7 +288,7 @@ read receipt and reading position stayed valid.
 ### The migration's own rules
 
 `db.migrate.ts` takes the connection as an argument and owns no state, which is what
-makes it testable (`db.migrate.test.ts`, 53 tests, in-memory). It has two tiers:
+makes it testable (`db.migrate.test.ts`, 55 tests, in-memory). It has two tiers:
 
 - **Always-run** steps — cheap and self-detecting (`addColumnIfMissing`, `CREATE TABLE
   IF NOT EXISTS`). Run every startup regardless of `user_version`, so a database whose
@@ -388,12 +432,13 @@ siblings — Monaco is bundled locally rather than CDN-loaded and its chunks are
 
 ```
 src/App.tsx                      the first-run gate, then the router
-  client/components/Layout.tsx   5 tabs: Grind · Manual · Reflect · Study · Settings
+  client/components/Layout.tsx   6 tabs: Grind · Manual · Mock · Reflect · Study · Settings, + the Help `?`
   client/pages/GrindPage.tsx     the adaptive loop
   client/pages/WorkspacePage.tsx "Manual" — pick topic/difficulty; hosts LanguagePicker
   client/pages/ProgressPage.tsx  "Reflect"
   client/pages/StudyPage.tsx     the reading feed
   client/pages/SettingsPage.tsx  routing, the provider form, the language picker
+  client/pages/MockPage.tsx      /mock start card + /mock/:id interview; GradeReport.tsx
   client/components/SolveSurface.tsx   editor + problem + results + coach
   client/components/CodeEditor.tsx     → MonacoEditor (desktop) | CodeMirrorEditor (mobile)
   client/lib/api.ts              every fetch in one place

@@ -1,5 +1,5 @@
 // =============================================================================
-// Six tabs still fit the header
+// Six tabs and the Help `?` still fit the header
 // =============================================================================
 // The nav is a fixed-width budget spent across four breakpoints (Layout's own
 // header comment does the arithmetic). Adding Help was the sixth tab, and paying
@@ -38,16 +38,22 @@ function navHrefs(html: string): string[] {
   return [...nav[1].matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
 }
 
+/** Every `href` in the header, nav and the Help button alike. */
+function headerHrefs(html: string): string[] {
+  const header = /<header [^>]*>([\s\S]*?)<\/header>/.exec(html);
+  if (!header) throw new Error('no <header> in the rendered Layout');
+  return [...header[1].matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
+}
+
 describe('the nav', () => {
-  it('has exactly six destinations, Help last', () => {
-    expect(navHrefs(render())).toEqual([
-      '/',
-      '/manual',
-      '/progress',
-      '/study',
-      '/settings',
-      HELP_ROUTE,
-    ]);
+  it('has exactly six tabs, Mock third and Settings last', () => {
+    expect(navHrefs(render())).toEqual(['/', '/manual', '/mock', '/progress', '/study', '/settings']);
+  });
+
+  it('keeps Help reachable as a `?` beside the gear, outside the tab row', () => {
+    expect(navHrefs(render())).not.toContain(HELP_ROUTE);
+    const hrefs = headerHrefs(render());
+    expect(hrefs[hrefs.length - 1]).toBe(HELP_ROUTE);
   });
 
   it('renders the app children below it', () => {
@@ -55,8 +61,8 @@ describe('the nav', () => {
   });
 
   it('marks the active tab from the current route', () => {
-    // NavLink's own job, but it is what makes six identical glyphs navigable at
-    // all on a phone, where five of them have no label.
+    // NavLink's own job, but it is what makes seven bare glyphs navigable at
+    // all on a phone, where none of them has a label.
     const help = /<a[^>]*href="\/help"[^>]*>/.exec(render(HELP_ROUTE));
     expect(help?.[0]).toContain('bg-secondary');
     const grind = /<a[^>]*href="\/help"[^>]*>/.exec(render('/'));
@@ -69,7 +75,7 @@ describe('every tab is usable with no label showing', () => {
     // Below `sm` the nav is six bare glyphs. Without these it is six unlabelled
     // links, which is unusable rather than merely terse.
     const html = render();
-    for (const label of ['Grind', 'Manual', 'Reflect', 'Study', 'Settings', 'Help']) {
+    for (const label of ['Grind', 'Manual', 'Mock', 'Reflect', 'Study', 'Settings', 'Help']) {
       expect(html).toContain(`aria-label="${label}"`);
       expect(html).toContain(`title="${label}"`);
     }
@@ -79,31 +85,36 @@ describe('every tab is usable with no label showing', () => {
     // With no label the text line-box no longer sets the height; without
     // min-h/min-w these collapse to roughly 40×28.
     const anchors = [...render().matchAll(/<a [^>]*class="([^"]*)"/g)].map((m) => m[1]);
-    expect(anchors).toHaveLength(6);
-    for (const cls of anchors) {
+    expect(anchors).toHaveLength(7);
+    for (const cls of anchors.slice(0, 6)) {
       expect(cls).toContain('min-h-11');
       expect(cls).toContain('min-w-11');
     }
+    // The `?` is narrower by design (36px) but keeps the 44px height.
+    expect(anchors[6]).toContain('min-h-11');
   });
 });
 
 describe('the header budget', () => {
   const html = render();
 
-  it('labels the four content tabs from `sm` and the two utility tabs from `md`', () => {
-    // Six labels do not fit `sm`. The two that wait are the gear and the
-    // question mark — the only two glyphs that already mean their word.
-    const labelled = [...html.matchAll(/<span class="hidden (sm|md):inline">([^<]+)<\/span>/g)];
-    const byBreakpoint: Record<string, string[]> = { sm: [], md: [] };
+  it('labels the five content tabs from `sm`, the gear from `lg`, and the `?` never', () => {
+    const labelled = [...html.matchAll(/<span class="hidden (sm|md|lg):inline">([^<]+)<\/span>/g)];
+    const byBreakpoint: Record<string, string[]> = { sm: [], md: [], lg: [] };
     for (const [, bp, label] of labelled) byBreakpoint[bp].push(label);
-    expect(byBreakpoint.sm).toEqual(['Grind', 'Manual', 'Reflect', 'Study']);
-    expect(byBreakpoint.md).toEqual(['Settings', 'Help']);
+    expect(byBreakpoint.sm).toEqual(['Grind', 'Manual', 'Mock', 'Reflect', 'Study']);
+    expect(byBreakpoint.md).toEqual([]);
+    expect(byBreakpoint.lg).toEqual(['Settings']);
   });
 
-  it('pays for the sixth tab with the wordmark, without hiding it from a reader', () => {
+  it('drops the tab gaps on a phone, where seven 44px glyphs only just fit', () => {
+    expect(html).toMatch(/<nav class="[^"]*gap-0 sm:gap-1/);
+  });
+
+  it('pays for Mock with the wordmark until `md`, without hiding it from a reader', () => {
     // `sr-only`, not `hidden`: the app's name stays in the accessibility tree at
-    // every width and only stops taking layout space on a phone.
-    expect(html).toMatch(/class="sr-only[^"]*sm:not-sr-only[^"]*"[^>]*>\s*codegrind/);
+    // every width and only stops taking layout space on narrow screens.
+    expect(html).toMatch(/class="sr-only[^"]*md:not-sr-only[^"]*"[^>]*>\s*codegrind/);
     expect(html).not.toMatch(/class="hidden[^"]*"[^>]*>\s*codegrind/);
   });
 

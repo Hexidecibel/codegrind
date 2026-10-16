@@ -40,7 +40,8 @@ export type HelpSectionId =
   | 'numbers'
   | 'assistance'
   | 'sandbox'
-  | 'models';
+  | 'models'
+  | 'mock';
 
 export interface HelpSection {
   id: HelpSectionId;
@@ -60,7 +61,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
   {
     id: 'loop',
     title: 'The loop',
-    summary: 'Five tabs, and what each one is for.',
+    summary: 'Six tabs, and what each one is for.',
   },
   {
     id: 'scheduler',
@@ -102,6 +103,11 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
     id: 'models',
     title: 'Choosing a model, and what it costs',
     summary: 'Claude or your own hardware, and the two jobs a model does here.',
+  },
+  {
+    id: 'mock',
+    title: 'Mock interviews',
+    summary: 'A system-design interview over chat that teaches when asked and grades at a level.',
   },
 ];
 

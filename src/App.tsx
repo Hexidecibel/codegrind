@@ -8,6 +8,7 @@ import { ProgressPage } from '@/client/pages/ProgressPage';
 import { StudyPage } from '@/client/pages/StudyPage';
 import { SettingsPage } from '@/client/pages/SettingsPage';
 import { HelpPage } from '@/client/pages/HelpPage';
+import { MockPage } from '@/client/pages/MockPage';
 import { SetupWizard } from '@/client/components/setup/SetupWizard';
 import { getSetupState } from '@/client/lib/api';
 import type { SetupState } from '@/shared/types';
@@ -74,6 +75,10 @@ function App() {
             <Route path="/manual" element={<WorkspacePage />} />
             <Route path="/progress" element={<ProgressPage />} />
             <Route path="/study" element={<StudyPage />} />
+            {/* Mock interviews. /mock is the start card, /mock/:id one interview
+                or its grade — a link that survives a reload. */}
+            <Route path="/mock" element={<MockPage />} />
+            <Route path="/mock/:id" element={<MockPage />} />
             {/* The config screen the wizard used to be the only way to reach.
                 It is a normal route, gated by nothing: once `needed` is false
                 the wizard never renders again, and a model or a key you cannot

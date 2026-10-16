@@ -14,6 +14,7 @@ import { reflectRoutes } from './routes/reflect.js';
 import { settingsRoutes } from './routes/settings.js';
 import { setupRoutes } from './routes/setup.js';
 import { providerRoutes } from './routes/providers.js';
+import { mockRoutes } from './routes/mock.js';
 import { hydrate as hydrateApiKey } from './services/apikey.service.js';
 import { hydrateProviderConfig } from './services/provider.service.js';
 import { describeRouting, needsAnthropicKey } from './services/llm.client.js';
@@ -52,6 +53,7 @@ app.route('/api', reflectRoutes);
 app.route('/api', settingsRoutes);
 app.route('/api', setupRoutes);
 app.route('/api', providerRoutes);
+app.route('/api', mockRoutes);
 
 app.get('/api/health', (c) => c.json({ status: 'ok' }));
 

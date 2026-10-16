@@ -1133,3 +1133,27 @@ describe('v2 — idempotency and failure', () => {
     db.close();
   });
 });
+
+describe('mock interviews — four additive tables', () => {
+  it('creates them on any database, with the keys the store relies on', () => {
+    const db = migrated();
+    expect(pkColumns(db, 'mocks')).toEqual(['id']);
+    expect(pkColumns(db, 'mock_turns')).toEqual(['mockId', 'seq']);
+    expect(pkColumns(db, 'mock_gaps')).toEqual(['mockId', 'seq']);
+    expect(pkColumns(db, 'mock_grades')).toEqual(['mockId']);
+    // `rendered` is the byte-stable copy the conversation cache depends on.
+    expect(columnsOf(db, 'mock_turns')).toContain('rendered');
+    db.close();
+  });
+
+  it('is idempotent — a second migrate changes nothing', () => {
+    const db = migrated();
+    db.prepare(
+      `INSERT INTO mocks (id, kind, level, prompt, status, context, state, usage, createdAt, updatedAt)
+       VALUES ('m1', 'system-design', 'staff', 'p', 'active', 'c', '{}', '{}', 't', 't')`
+    ).run();
+    migrate(db);
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM mocks`).get()).toEqual({ n: 1 });
+    db.close();
+  });
+});

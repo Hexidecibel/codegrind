@@ -55,6 +55,10 @@ import {
   reviewLadderPhrase,
 } from '@/client/lib/help-facts';
 import { cn } from '@/lib/utils';
+import { MOCK_MINUTES, MOCK_TURN_CAP, estimateMockCost } from '@/shared/mock';
+
+/** The start card's number, so Help and the Mock page cannot disagree. */
+const MOCK_TYPICAL_COST = estimateMockCost(25).usd.toFixed(2);
 
 // -----------------------------------------------------------------------------
 // Page furniture
@@ -222,6 +226,14 @@ export function HelpPage() {
               Pick a topic and a difficulty yourself, for when you know exactly
               what you want to drill.
             </Term>
+            <Term label="Mock">
+              A system-design interview over chat, graded at Senior, Staff or
+              Principal — see{' '}
+              <a href="#mock" className="text-primary underline-offset-4 hover:underline">
+                Mock interviews
+              </a>
+              .
+            </Term>
             <Term label="Reflect">
               Where you are in the curriculum, what opens next, and whether the
               grind is working. Numbers, a prerequisite tree, and your recent
@@ -233,7 +245,7 @@ export function HelpPage() {
             </Term>
             <Term label="Settings">
               Which model writes your problems, and which language you practise
-              in.
+              in. The <strong>?</strong> beside it is this page.
             </Term>
           </Terms>
           <p>
@@ -635,8 +647,8 @@ export function HelpPage() {
           <Terms>
             <Term label="The workhorse">
               Writes problems, hints, session plans, pattern primers and Study
-              lessons, and grades your submissions. Most of the calls, and all
-              of the long ones.
+              lessons, grades your submissions, and runs mock interviews. Most
+              of the calls, and all of the long ones.
             </Term>
             <Term label="The coach">
               Answers your follow-up questions in the chat below a submission.
@@ -663,6 +675,50 @@ export function HelpPage() {
             seconds on a hosted model and can be several minutes on a local one,
             which is why the button tells you which kind of wait you are in.
           </p>
+        </HelpBlock>
+
+        {/* ==================================================================== */}
+        <HelpBlock id="mock">
+          <p>
+            A system-design mock, run as a chat. The interviewer opens with a
+            brief, lets you ask your clarifying questions, and moves you through
+            seven stages — requirements, capacity, API, data model, high-level
+            design, deep dive, trade-offs — which light up across the top as you
+            cover them. Jumping past a stage is allowed; the app notices, tells
+            the interviewer, and the grade says so.
+          </p>
+          <Terms>
+            <Term label="Teach me">
+              Press it, or just type &ldquo;wait, explain X&rdquo;, and the
+              interviewer breaks character to teach the concept with an example
+              from your design, then says &ldquo;Back to the interview:&rdquo; and
+              resumes where you were. It also offers on its own when you miss the
+              same thing twice — <strong>Teach me</strong> or{' '}
+              <strong>Keep going</strong>. Anything taught is never scored.
+            </Term>
+            <Term label="I&rsquo;m stuck">
+              A nudge — a question that points the way, not the answer.
+            </Term>
+            <Term label="Move on">Skip to the next stage. The grade records it as skipped.</Term>
+            <Term label="End &amp; grade">
+              One more model call that reads the whole transcript and scores
+              every stage 1–4 against a rubric, judges each against the level you
+              picked (Staff by default), says what a Staff and a Principal answer
+              would have added, and lists the drills worth doing next.
+            </Term>
+          </Terms>
+          <p>
+            The limits are {MOCK_MINUTES} minutes and {MOCK_TURN_CAP} of your
+            turns; near the end the interviewer is told to wrap up. Replies are
+            not streamed — each one takes about 5–10 seconds. If a reply fails,
+            nothing is saved and your text stays in the box: press Send again.
+          </p>
+          <KeyIdea>
+            A mock runs on the workhorse model. Every earlier turn is cached, so
+            a reply re-reads the conversation at a tenth of the price; a typical
+            mock is estimated at about ${MOCK_TYPICAL_COST} including the grade,
+            and each mock shows what it actually cost.
+          </KeyIdea>
         </HelpBlock>
       </div>
     </div>
