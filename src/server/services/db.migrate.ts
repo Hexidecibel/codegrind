@@ -266,6 +266,68 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
         );
       `);
 
+      // Mock interviews. Four new tables, no change to any existing one, so they
+      // are always-run CREATE IF NOT EXISTS rather than a version bump: there is
+      // nothing to backfill and nothing to rebuild. JSON columns hold shapes from
+      // src/shared/mock.ts, which Phase 2's knowledge fold will read back —
+      // `mock_turns.meta.observations` and `mock_grades.grade.conceptObservations`
+      // are the raw events behind "known / shaky / next" and retire-after-3.
+      //
+      // `mock_turns.rendered` is the EXACT text sent to the model for that turn
+      // (a candidate turn's control notes included). It is replayed verbatim on
+      // every later request; recomputing it would move the cached prefix. See
+      // mock.state.ts.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS mocks (
+          id          TEXT PRIMARY KEY,
+          kind        TEXT NOT NULL,             -- 'system-design' (Phase 4 adds 'behavioral')
+          level       TEXT NOT NULL,             -- senior | staff | principal
+          promptId    TEXT,
+          prompt      TEXT NOT NULL,             -- the brief, frozen at start
+          status      TEXT NOT NULL,             -- active | grading | graded | grade_failed | abandoned
+          context     TEXT NOT NULL,             -- the first user message, frozen
+          digest      TEXT,                      -- short post-grade summary (Phase 2 reads it)
+          state       TEXT NOT NULL,             -- JSON MockState
+          usage       TEXT NOT NULL,             -- JSON MockUsage
+          turnCount   INTEGER NOT NULL DEFAULT 0,
+          createdAt   TEXT NOT NULL,
+          updatedAt   TEXT NOT NULL,
+          endedAt     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_mocks_created ON mocks (createdAt);
+
+        CREATE TABLE IF NOT EXISTS mock_turns (
+          mockId    TEXT NOT NULL REFERENCES mocks(id) ON DELETE CASCADE,
+          seq       INTEGER NOT NULL,
+          role      TEXT NOT NULL,               -- interviewer | candidate
+          kind      TEXT NOT NULL,               -- answer | control | question | nudge | offer | teach | wrap_up
+          content   TEXT NOT NULL,               -- what was said / typed
+          rendered  TEXT NOT NULL,               -- what the model was sent, byte for byte
+          stage     TEXT NOT NULL,
+          meta      TEXT,                        -- JSON: mode, teach, action, observations, call usage
+          createdAt TEXT NOT NULL,
+          PRIMARY KEY (mockId, seq)
+        );
+
+        CREATE TABLE IF NOT EXISTS mock_gaps (
+          mockId    TEXT NOT NULL REFERENCES mocks(id) ON DELETE CASCADE,
+          seq       INTEGER NOT NULL,            -- the teach turn
+          concept   TEXT NOT NULL,
+          summary   TEXT NOT NULL,
+          createdAt TEXT NOT NULL,
+          PRIMARY KEY (mockId, seq)
+        );
+
+        CREATE TABLE IF NOT EXISTS mock_grades (
+          mockId    TEXT PRIMARY KEY REFERENCES mocks(id) ON DELETE CASCADE,
+          level     TEXT NOT NULL,
+          verdict   TEXT NOT NULL,
+          grade     TEXT NOT NULL,               -- JSON MockGrade
+          usage     TEXT NOT NULL,               -- JSON: the grade call(s) alone
+          createdAt TEXT NOT NULL
+        );
+      `);
+
       // --- VERSIONED ----------------------------------------------------------
       // Expensive or destructive. Gated on the version marker so a warm database
       // doesn't pay on every boot — but each step still asks the DATABASE

@@ -36,6 +36,13 @@ import type {
   LlmConfigResponse,
 } from '@/shared/types';
 import type { Language } from '@/shared/languages';
+import type {
+  MockEndEvent,
+  MockListResponse,
+  MockStartRequest,
+  MockTurnRequest,
+  MockView,
+} from '@/shared/mock';
 
 /** Shape returned by GET /api/session/:id (resume). */
 export interface SessionState {
@@ -88,7 +95,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 /**
  * Read an NDJSON body, handing each parsed line to `onEvent`.
  *
- * Shared by the app's two streaming POSTs (/api/setup/seed and /api/submit) so
+ * Shared by the app's streaming POSTs (/api/setup/seed, /api/submit, /api/mock/:id/end) so
  * the chunk-boundary handling below exists once. Both are POSTs that spend money
  * or time, which is why neither can be an EventSource.
  */
@@ -467,4 +474,62 @@ export function getStudyIndex(): Promise<StudyIndexResponse> {
  */
 export function getReflect(): Promise<ReflectResponse> {
   return request<ReflectResponse>('/api/reflect');
+}
+
+// -----------------------------------------------------------------------------
+// Mock interviews. GETs are free; every POST except abandon is one model call.
+// -----------------------------------------------------------------------------
+
+export interface MockPromptOption {
+  id: string;
+  title: string;
+  brief: string;
+  familiar: boolean;
+}
+
+/** GET /api/mocks — recent mocks, newest first. Free. */
+export function listMocks(): Promise<MockListResponse> {
+  return request<MockListResponse>('/api/mocks');
+}
+
+/** GET /api/mock/prompts — the static prompt bank. Free. */
+export function getMockPrompts(): Promise<{ prompts: MockPromptOption[] }> {
+  return request<{ prompts: MockPromptOption[] }>('/api/mock/prompts');
+}
+
+/** GET /api/mock/:id — one mock, with its transcript and grade. Free. */
+export function getMock(id: string): Promise<MockView> {
+  return request<MockView>(`/api/mock/${encodeURIComponent(id)}`);
+}
+
+/** POST /api/mock/start — one model call: the interviewer's opening. */
+export function startMock(body: MockStartRequest): Promise<MockView> {
+  return request<MockView>('/api/mock/start', { method: 'POST', body: JSON.stringify(body) });
+}
+
+/**
+ * POST /api/mock/:id/turn — one model call. A 409 means the mock moved on (re-read
+ * it); a 429 means a reply is still in flight. On any failure nothing was stored,
+ * so the same text can simply be sent again.
+ */
+export function sendMockTurn(id: string, body: MockTurnRequest): Promise<MockView> {
+  return request<MockView>(`/api/mock/${encodeURIComponent(id)}/turn`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+/** POST /api/mock/:id/end — NDJSON `wrapup` then `grade` (or `error`). One model call. */
+export async function endMock(id: string, onEvent: (event: MockEndEvent) => void): Promise<void> {
+  const res = await fetch(`/api/mock/${encodeURIComponent(id)}/end`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) throw await toApiError(res, 'Grading failed');
+  await readNdjson<MockEndEvent>(res, onEvent);
+}
+
+/** POST /api/mock/:id/abandon — free. */
+export function abandonMock(id: string): Promise<MockView> {
+  return request<MockView>(`/api/mock/${encodeURIComponent(id)}/abandon`, { method: 'POST' });
 }

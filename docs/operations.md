@@ -70,6 +70,7 @@ re-run after a partial failure only pays for what is still missing — and all t
 |---|---|
 | `bin/seed-bank` | Stock the problem bank. `--language <l>`, `--topic <t>` (repeatable), `--difficulty <d>` (repeatable), `--per-slot N` (default 2), `--dry-run`. Bare, it seeds the **active** language's four root topics (`arrays`, `hashing`, `math`, `bit-manipulation`) at `easy` — 8 problems. Those are the only slots the scheduler's cold-start path can reach before you have done anything, and so the only ones worth pre-paying for. Skip-if-exists uses `servableBankSize`, the same predicate that decides what gets served. |
 | `bin/dry-run-generate` | **One** generation attempt, scored by the stage that failed — `generation`, `too-few-tests` or `sandbox`, which are three completely different problems. Writes nothing unless `--keep`. This is how you find out whether a local model is good enough before committing an evening to it; a missing runner image is never scored against the model, because that says nothing about it. `--language`, `--topic`, `--difficulty`, `--repeat N` (1–20), `--keep`, `--help`. |
+| `bin/mock-dry-run` | What a mock interview costs. `--dry-run` builds the exact request each turn of a 12-turn scripted mock would send (the real system prompt, tool schema and rendered control notes), estimates its tokens, and prices the conversation-cache plan turn by turn plus the grade — **spends nothing and opens no database**. `--live [--turns N] [--grade]` sends that script through the real seam, in memory (nothing stored), and prints the endpoint's measured input, cache-read, cache-write and output tokens per turn, warning if the cache never hits. Bare, it prints help. |
 | `bin/warm-lessons` | Pre-generate the Study reading tracks (18 outlines plus the first lessons of each) so the first reading session is not a series of 15s waits. `--dry-run`/`-n`, `--topic`/`-t` (repeatable), `--lessons N`. |
 | `bin/translate-corpus` | Translate the shared corpus's **snippets** into another language — one batched call per topic, ~18 for the whole corpus, against the 90–180 generation calls re-authoring it per language would cost. `-L <lang>`, `-t <topic>`, `--limit N`, `--dry-run`. The Study feed does the same work lazily one topic ahead of the reader, through the same service call, so this is only the eager half. |
 
@@ -193,7 +194,8 @@ counts perfect.
 
 `bin/capture-llm-bodies` is the development counterpart: it re-captures
 `src/server/services/__fixtures__/llm-request-bodies.json`, the frozen request body every
-one of the eleven call sites sends, which `llm.golden.test.ts` asserts against. The
+one of the eleven call sites sends, which `llm.golden.test.ts` asserts against, and
+`mock-request-bodies.json`, the mock interviewer's two bodies (`llm.mock.test.ts`). The
 transport is faked, so it costs nothing, uses no key and never opens the database. Run it
 deliberately, **never to make a red test go green** — a diff there means either you
 changed a request on purpose or you changed one by accident, and only you know which.

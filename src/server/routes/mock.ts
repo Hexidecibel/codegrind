@@ -1,0 +1,105 @@
+// =============================================================================
+// routes/mock — mock interviews over HTTP
+// =============================================================================
+//   GET  /api/mocks                 list            free
+//   GET  /api/mock/prompts          the prompt bank free
+//   GET  /api/mock/:id              one mock        free
+//   POST /api/mock/start            {level?, promptId?}            ONE model call
+//   POST /api/mock/:id/turn         {expectedSeq, content, action?} ONE model call
+//   POST /api/mock/:id/end          NDJSON: wrapup → grade          ONE model call (two on a retry)
+//   POST /api/mock/:id/abandon      free
+//
+// Every model call is a POST the candidate clicked; every GET is a database read.
+// 409 = the mock moved on (or is not active), 429 = a call for it is in flight.
+
+import { Hono, type Context } from 'hono';
+import { stream } from 'hono/streaming';
+import { SD_PROMPTS } from '../../shared/sd-prompts.js';
+import type { MockEndEvent, MockListResponse } from '../../shared/mock.js';
+import {
+  MockError,
+  abandonMock,
+  getMockView,
+  prepareEnd,
+  runEnd,
+  startMock,
+  takeTurn,
+} from '../services/mock.service.js';
+import { listMocks } from '../services/mock.store.js';
+import { errorBody } from '../services/explain.service.js';
+
+export const mockRoutes = new Hono();
+
+function fail(c: Context, tag: string, err: unknown) {
+  if (err instanceof MockError) return c.json({ error: err.message }, err.status);
+  // A model failure: the candidate's message was NOT stored, so the client
+  // keeps it in the composer and can simply send again.
+  return c.json(errorBody(tag, err), 502);
+}
+
+mockRoutes.get('/mocks', (c) => {
+  const body: MockListResponse = { mocks: listMocks() };
+  return c.json(body);
+});
+
+mockRoutes.get('/mock/prompts', (c) =>
+  c.json({ prompts: SD_PROMPTS.map(({ id, title, brief, familiar }) => ({ id, title, brief, familiar })) })
+);
+
+mockRoutes.get('/mock/:id', (c) => {
+  try {
+    return c.json(getMockView(c.req.param('id')));
+  } catch (err) {
+    return fail(c, 'mock', err);
+  }
+});
+
+mockRoutes.post('/mock/start', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({}));
+    return c.json(await startMock(body ?? {}));
+  } catch (err) {
+    return fail(c, 'mock-start', err);
+  }
+});
+
+mockRoutes.post('/mock/:id/turn', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => null);
+    return c.json(await takeTurn(c.req.param('id'), body));
+  } catch (err) {
+    return fail(c, 'mock-turn', err);
+  }
+});
+
+mockRoutes.post('/mock/:id/abandon', (c) => {
+  try {
+    return c.json(abandonMock(c.req.param('id')));
+  } catch (err) {
+    return fail(c, 'mock-abandon', err);
+  }
+});
+
+mockRoutes.post('/mock/:id/end', (c) => {
+  let mock;
+  try {
+    // Validated BEFORE the stream opens, so "nothing to grade" is a 409 and not
+    // an error line inside a 200.
+    mock = prepareEnd(c.req.param('id'));
+  } catch (err) {
+    return fail(c, 'mock-end', err);
+  }
+  c.header('Content-Type', 'application/x-ndjson; charset=utf-8');
+  c.header('Cache-Control', 'no-store');
+  c.header('X-Accel-Buffering', 'no');
+  return stream(c, async (s) => {
+    for await (const event of runEnd(mock)) {
+      try {
+        await s.write(JSON.stringify(event satisfies MockEndEvent) + '\n');
+      } catch {
+        // The tab went away. Keep iterating: the grade is still stored, and the
+        // next GET shows it.
+      }
+    }
+  });
+});

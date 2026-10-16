@@ -171,7 +171,7 @@ deploy can pin any of it from the environment.
 
 ## The daily loop
 
-Three tabs are the loop.
+Three tabs are the loop, and a fourth is the interview.
 
 **Grind** — the main event. Press start and the app plans a sitting, then serves one
 problem at a time. It picks each one from an intent — `warm-up`, `reinforce`, `variation`,
@@ -190,8 +190,14 @@ Lesson prose is shared across languages; only the code snippets are translated.
 
 ![Reflect: the curriculum bar, the prerequisite skill tree with locked and reached topics, and the counters underneath](docs/images/reflect.png)
 
+**Mock** — a system-design interview over chat. The interviewer moves you through seven
+stages, breaks off to teach whenever you ask ("wait, explain X", or **Teach me**) and then
+resumes, and at the end grades every stage at Senior, Staff (the default) or Principal
+and hands you a drill list. It runs on the workhorse model with the conversation cached;
+`bin/mock-dry-run --dry-run` prints what a mock costs without spending anything.
+
 (**Manual** lets you pick a topic and difficulty yourself. **Settings** shows how you are
-currently routed and lets you change it. **Help** is the in-app manual.)
+currently routed and lets you change it. The **?** beside it is the in-app manual.)
 
 ---
 
