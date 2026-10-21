@@ -60,6 +60,8 @@ import type {
 } from '@/shared/recognize';
 import type { ConceptLesson, ConceptRepView, ConceptToday, ConceptTrack } from '@/shared/concepts';
 import type { EnvelopeCheckResponse, EnvelopeNote, EnvelopeSession, EnvelopeStats } from '@/shared/envelope';
+import type { ForgeOptions, ForgeSessionView } from '@/shared/story-forge';
+import type { DdProjectsResponse } from '@/shared/deep-dive';
 
 /** Shape returned by GET /api/session/:id (resume). */
 export interface SessionState {
@@ -761,4 +763,45 @@ export function getConceptTrack(): Promise<ConceptTrack> {
 /** GET /api/concept/lesson/:concept — cached, or generated once (one model call). */
 export function getConceptLesson(concept: string): Promise<ConceptLesson> {
   return request<ConceptLesson>(`/api/concept/lesson/${encodeURIComponent(concept)}`);
+}
+
+// ---------------------------------------------------------------------------
+// Story forge + project deep-dive (Phase H4)
+// ---------------------------------------------------------------------------
+/** GET /api/forge/options — competencies (gaps first), candidates, stories. Free. */
+export function getForgeOptions(): Promise<ForgeOptions> {
+  return request<ForgeOptions>('/api/forge/options');
+}
+
+/** GET /api/forge/:id. Free. */
+export function getForge(id: string): Promise<ForgeSessionView> {
+  return request<ForgeSessionView>(`/api/forge/${encodeURIComponent(id)}`);
+}
+
+/** POST /api/forge/start — free (the first question is static). */
+export function startForge(body: { competency: string; candidate?: { kind: 'candidate' | 'story'; ref: string } }): Promise<ForgeSessionView> {
+  return request<ForgeSessionView>('/api/forge/start', { method: 'POST', body: JSON.stringify(body) });
+}
+
+/** POST /api/forge/:id/turn — ONE model call on the dictated answer. */
+export function forgeTurn(id: string, answer: string, expectedAnswers: number): Promise<ForgeSessionView> {
+  return request<ForgeSessionView>(`/api/forge/${encodeURIComponent(id)}/turn`, {
+    method: 'POST',
+    body: JSON.stringify({ answer, expectedAnswers }),
+  });
+}
+
+/** POST /api/forge/:id/save — the explicit click: append to resume-builder as a draft. */
+export function saveForge(id: string): Promise<ForgeSessionView & { backup: { ok: boolean; note: string } }> {
+  return request(`/api/forge/${encodeURIComponent(id)}/save`, { method: 'POST', body: JSON.stringify({ confirm: true }) });
+}
+
+/** POST /api/forge/:id/abandon. Free. */
+export function abandonForge(id: string): Promise<ForgeSessionView> {
+  return request<ForgeSessionView>(`/api/forge/${encodeURIComponent(id)}/abandon`, { method: 'POST', body: '{}' });
+}
+
+/** GET /api/mock/projects — the deep-dive's project options. Free. */
+export function getDeepDiveProjects(): Promise<DdProjectsResponse> {
+  return request<DdProjectsResponse>('/api/mock/projects');
 }

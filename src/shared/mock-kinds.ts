@@ -1,7 +1,7 @@
 // =============================================================================
 // mock-kinds — what each KIND of mock interview is, as the client may know it
 // =============================================================================
-// A mock interview is a kind (system design, behavioral, live coding) run through ONE set of plumbing: turns, the clock, End & grade, gaps →
+// A mock interview is a kind (system design, behavioral, live coding, project deep-dive) run through ONE set of plumbing: turns, the clock, End & grade, gaps →
 // drill cards. Everything that differs per kind and is safe to ship to the
 // browser lives here — the stages and their chips, the concept vocabulary and
 // its labels, the prompt catalog, the clock and the turn cap, the start-card
@@ -37,11 +37,19 @@ import {
   CODING_STAGE_META,
   codingConceptLabel,
 } from './coding-mock.js';
+import { DD_CONCEPTS, DD_PROMPTS, DD_STAGES, DD_STAGE_META, ddConceptLabel } from './deep-dive.js';
 
 /** The kinds a mock can be started as. */
-export const MOCK_KINDS = ['system-design', 'behavioral', 'coding'] as const;
+export const MOCK_KINDS = ['system-design', 'behavioral', 'coding', 'project-deep-dive'] as const;
 export type MockKind = (typeof MOCK_KINDS)[number];
 export const DEFAULT_MOCK_KIND: MockKind = 'system-design';
+
+/**
+ * The kinds Today's daily rotation cycles through (Phase H4). The project
+ * deep-dive is a real round but not a daily one: it is picked by an interview
+ * loop that has the round, by the debrief's focus, or by hand.
+ */
+export const ROTATION_MOCK_KINDS: readonly MockKind[] = ['system-design', 'behavioral', 'coding'];
 
 export function isMockKind(x: unknown): x is MockKind {
   return typeof x === 'string' && (MOCK_KINDS as readonly string[]).includes(x);
@@ -115,6 +123,11 @@ export interface MockKindInfo {
    * the chat beside it, and each turn carries the editor.
    */
   editor?: boolean;
+  /**
+   * Project deep-dive: the start card asks which project (a story-bank story, a
+   * master-resume highlight or a typed one-liner) and sends it as `project`.
+   */
+  projectPicker?: boolean;
   /** Start-card copy. */
   start: {
     blurb: string;
@@ -213,10 +226,40 @@ const CODING: MockKindInfo = {
   },
 };
 
+const DEEP_DIVE_PROMPT = DD_PROMPTS[0];
+
+const DEEP_DIVE: MockKindInfo = {
+  kind: 'project-deep-dive',
+  label: 'Project deep-dive',
+  stages: DD_STAGES,
+  stageMeta: DD_STAGE_META,
+  concepts: DD_CONCEPTS,
+  conceptLabel: ddConceptLabel,
+  prompts: DD_PROMPTS,
+  promptById: (id) => DD_PROMPTS.find((p) => p.id === id) ?? null,
+  pickPrompt: () => DEEP_DIVE_PROMPT,
+  minutes: 40,
+  turnCap: 32,
+  // overview 2, then ~2-3 per drill level over seven levels, + a close.
+  typicalTurns: 20,
+  // Answers run long (a project told in depth); the grader reads the story bank
+  // AND the master resume (~10k tokens) for fidelity.
+  cost: { prefix: 3200, perExchange: 450, replyOut: 350, gradeFixed: 14000, gradeOut: 8000 },
+  wordCounts: true,
+  projectPicker: true,
+  start: {
+    blurb:
+      'A Staff project deep-dive over chat: pick one project and the interviewer drills about five levels into it — why that architecture, the alternatives, the hardest problem, a failure and what changed, the numbers, how you got others aligned, and what you would do differently. The grader checks every claim against your story bank and master resume.',
+    pickHint: 'Pick a project from your story bank or resume, or type a one-liner.',
+    familiarTag: '',
+  },
+};
+
 export const MOCK_KIND_INFO: Readonly<Record<MockKind, MockKindInfo>> = {
   'system-design': SYSTEM_DESIGN,
   behavioral: BEHAVIORAL,
   coding: CODING,
+  'project-deep-dive': DEEP_DIVE,
 };
 
 /** The registry entry for a kind. An unknown kind (an old or hand-edited row) reads as system design. */

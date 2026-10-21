@@ -144,6 +144,11 @@ export function CardFace({
               {check.missing.length > 0 && (
                 <p className="text-xs text-muted-foreground">Missing: {check.missing.join(' · ')}</p>
               )}
+              {check.length && (
+                <p className={cn('text-xs', check.length.verdict === 'ok' ? 'text-emerald-400' : 'text-amber-300')}>
+                  Length: {check.length.note}
+                </p>
+              )}
             </div>
           )}
           {checkError && <p className="text-xs text-amber-300">{checkError}</p>}

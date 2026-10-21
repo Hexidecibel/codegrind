@@ -174,6 +174,9 @@ export function ConceptPage() {
           <Link to="/concepts" className="text-sm text-muted-foreground underline underline-offset-4">
             AI-systems track
           </Link>
+          <Link to="/stories" className="text-sm text-muted-foreground underline underline-offset-4">
+            Story forge
+          </Link>
         </header>
 
         {todayStep && <TodayNextBar here={todayStep} screenPath="/concept" refreshKey={day?.doneToday ?? 0} />}

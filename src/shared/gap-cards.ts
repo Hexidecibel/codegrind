@@ -33,7 +33,8 @@ export function isGapCardGrade(x: unknown): x is GapCardGrade {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Where a gap was recorded from. */
-export type GapSource = 'turn' | 'grade' | 'backfill' | 'rep';
+/** 'retell' (Phase H4): a story-forge "2-minute retell" card — its check adds a length check. */
+export type GapSource = 'turn' | 'grade' | 'backfill' | 'rep' | 'retell';
 
 /** One gap, as a mock's view and the drill list both show it. */
 export interface MockGap {
@@ -92,6 +93,8 @@ export interface GapCardCheck {
   /** False when no call was made (an empty / "I don't know" answer). */
   ai: boolean;
   costUsd: number | null;
+  /** Retell cards only: the dictated answer's length against the 2-minute band. */
+  length?: { words: number; verdict: 'short' | 'ok' | 'long'; note: string };
 }
 
 /** The schedule a brand-new card starts with: bottom rung, due now. */

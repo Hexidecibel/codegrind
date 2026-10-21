@@ -10,6 +10,7 @@ import type { MockGap } from './gap-cards.js';
 import type { ConceptSignal, GapType, InterviewerMode, MockLevel } from './sd.js';
 import { MOCK_KIND_INFO, type MockConcept, type MockKind, type MockStage } from './mock-kinds.js';
 import type { CodingMockOptions } from './coding-mock.js';
+import type { DdProjectChoice, DdProjectSource } from './deep-dive.js';
 
 export type { MockConcept, MockKind, MockStage } from './mock-kinds.js';
 
@@ -89,6 +90,8 @@ export interface MockState {
   graderContext?: string;
   /** Coding only: the problem, what the interviewer last saw of the editor, and the test results. */
   coding?: MockCodingState;
+  /** Project deep-dive: the project the mock drills into, as chosen at start. */
+  project?: { source: DdProjectSource; id: string | null; title: string };
 }
 
 /** One hidden-test run inside a coding mock (a mock Submit, or the run at End). */
@@ -227,6 +230,14 @@ export interface MockGrade {
   storyGaps?: { concept: MockConcept; note: string }[];
   /** Coding: the grader's read of the solution, plus the hidden-test result it was given. */
   coding?: MockCodingGrade;
+  /** Project deep-dive: the rubric dimensions, 1–4 each, with one line of evidence. */
+  dimensions?: { concept: MockConcept; score: number; note: string }[];
+  /**
+   * Project deep-dive: claims checked against the story bank and master resume —
+   * unverified (not in confirmed material), contradicted framing, or an open
+   * question stated as fact. Empty when everything said was confirmed.
+   */
+  fidelity?: { claim: string; status: 'unverified' | 'contradicted' | 'open-question'; note: string }[];
 }
 
 export interface MockCodingGrade {
@@ -309,6 +320,8 @@ export interface MockStartRequest {
   promptId?: string;
   /** Coding: how to pick the problem. Absent = the weakest topic, medium. */
   coding?: CodingMockOptions;
+  /** Project deep-dive: which project. Required for that kind. */
+  project?: DdProjectChoice;
 }
 
 export interface MockTurnRequest {

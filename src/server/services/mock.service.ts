@@ -65,7 +65,11 @@ import { getNextProblem } from './bank.service.js';
 import { runTests } from './sandbox.service.js';
 import type { CallMeta } from './llm.types.js';
 import { gradeMock, interviewerTurn } from './llm.mock.js';
-import { mockKindSpec } from './mock-kinds/index.js';
+import { MockPrepError, mockKindSpec } from './mock-kinds/index.js';
+import { projectOptions } from './mock-kinds/project-deep-dive.js';
+import { fetchMasterResume, fetchStoryBank } from './story-bank.js';
+import type { DdProjectsResponse } from '../../shared/deep-dive.js';
+import { retellLength } from '../../shared/story-forge.js';
 import { coerceRunSummary, toCodeResult, weakestTopicOf } from './mock-kinds/coding.js';
 import { errorBody } from './explain.service.js';
 import {
@@ -278,12 +282,26 @@ export async function previewPlan(kindRaw: unknown, levelRaw?: unknown): Promise
   };
 }
 
+/**
+ * GET /api/mock/projects — what the project deep-dive's start card offers:
+ * story-bank stories, then master-resume highlights and projects. Free (two
+ * localhost reads, no model). A source that is down is reported, not fatal.
+ */
+export async function deepDiveProjects(fetchImpl?: typeof fetch): Promise<DdProjectsResponse> {
+  const [bank, resume] = await Promise.all([fetchStoryBank(fetchImpl), fetchMasterResume(fetchImpl)]);
+  return {
+    options: projectOptions(bank.ok ? bank.bank : null, resume.ok ? resume.resume : null),
+    errors: [...(bank.ok ? [] : [`story bank: ${bank.error}`]), ...(resume.ok ? [] : [`master resume: ${resume.error}`])],
+  };
+}
+
 export async function startMock(body: {
   kind?: unknown;
   level?: unknown;
   promptId?: unknown;
   plan?: unknown;
   coding?: unknown;
+  project?: unknown;
 }): Promise<MockView> {
   const kind = parseKind(body.kind);
   const spec = mockKindSpec(kind);
@@ -303,7 +321,17 @@ export async function startMock(body: {
   // Planned kinds read what they need (behavioral: the story bank) BEFORE the
   // row exists; the result is frozen into the context and the state, so every
   // later request and the grade see exactly what the mock started with.
-  const prep = spec.prepare ? await spec.prepare(prepareArgs(kind, level, body.plan, body.coding)) : undefined;
+  let prep;
+  try {
+    prep = spec.prepare
+      ? await spec.prepare(prepareArgs(kind, level, body.plan, kind === 'project-deep-dive' ? body.project : body.coding))
+      : undefined;
+  } catch (err) {
+    // A bad start-request choice (Phase H4: the deep-dive's project) is the
+    // caller's mistake — a 400, never a model error.
+    if (err instanceof MockPrepError) throw new MockError(err.message, 400);
+    throw err;
+  }
   const now = new Date();
   const id = nanoid();
   const state: MockState = {
@@ -311,6 +339,7 @@ export async function startMock(body: {
     ...(prep?.plan ? { plan: prep.plan } : {}),
     ...(prep ? { graderContext: prep.graderContext } : {}),
     ...(prep?.coding ? { coding: prep.coding } : {}),
+    ...(prep?.project ? { project: { source: prep.project.source, id: prep.project.id, title: prep.project.title } } : {}),
   };
   // Phase F carry-forward: today's step notes, FROZEN into the context at
   // start like everything else in it, so the per-mock cached prefix is stable.
@@ -632,6 +661,22 @@ export function gapCards(now = new Date()): GapCardsResponse {
 const cardChecksInFlight = new Set<number>();
 
 /**
+ * Phase H4: a story-forge "2-minute retell" card is graded by the same AI check
+ * PLUS a length check on the dictated answer. Out of the 2-minute band, a "got"
+ * becomes "shaky" (the content was there; the telling was not). Pure.
+ */
+export function withRetellLength(check: GapCardCheck, answer: string): GapCardCheck {
+  const length = retellLength(answer);
+  if (length.verdict === 'ok') return { ...check, length };
+  return {
+    ...check,
+    length,
+    grade: check.grade === 'got' ? 'shaky' : check.grade,
+    missing: [...check.missing, length.verdict === 'short' ? 'length: too short for two minutes' : 'length: over two minutes'],
+  };
+}
+
+/**
  * POST /api/mock/cards/:id/check — grade a typed / dictated answer against the
  * card back: one `small` call (llm.review.runCardCheck). Moves NOTHING: the
  * user confirms or overrides, and /grade applies it. An empty or "I don't
@@ -655,7 +700,8 @@ export async function checkGapCard(id: number, body: unknown): Promise<GapCardCh
       summary: card.summary,
       answer,
     });
-    return { ...result, ai: true, costUsd: costOfMeta(meta) };
+    const check: GapCardCheck = { ...result, ai: true, costUsd: costOfMeta(meta) };
+    return card.source === 'retell' ? withRetellLength(check, answer) : check;
   } finally {
     cardChecksInFlight.delete(id);
   }

@@ -153,6 +153,11 @@ export interface DeriveInput {
    * yet (the step is still to do).
    */
   concept?: { doneToday: number; last: { label: string; grade: string } | null };
+  /**
+   * Phase H4: today's concept step is a STORY-FORGE session instead
+   * (shared/story-forge.forgeDay decides), and what the forge did today.
+   */
+  forge?: { day: boolean; doneToday: number; last: { title: string; status: string } | null };
 }
 
 export interface DerivedSteps {
@@ -218,7 +223,7 @@ function problemResult(p: ProblemOutcome): string {
 /** Every step's state for the day. Pure. */
 export function deriveSteps(input: DeriveInput): DerivedSteps {
   const skipped = new Set(input.skips);
-  const base = new Map<TodayStepId, { status: 'done' | 'skipped' | 'in-progress' | 'todo'; href: string; detail: string; result: string | null; ok: boolean | null }>();
+  const base = new Map<TodayStepId, { status: 'done' | 'skipped' | 'in-progress' | 'todo'; href: string; detail: string; result: string | null; ok: boolean | null; label?: string }>();
 
   // --- warm-up --------------------------------------------------------------
   const reviewsCleared = input.attempts.filter((a) => a.firstAt < input.dayStart);
@@ -274,7 +279,21 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
   // a rep was already done, which still counts.
   const rep = input.concept ?? { doneToday: 0, last: null };
   const repDone = rep.doneToday > 0;
-  base.set('concept', {
+  const forge = input.forge?.day ? input.forge : null;
+  if (forge) {
+    // Phase H4: a story-forge day. Same slot, same skip / 30-min-day rules.
+    const forged = forge.doneToday > 0;
+    base.set('concept', {
+      status: forged ? 'done' : skipped.has('concept') || input.quick ? 'skipped' : 'todo',
+      href: `/stories?${from('concept')}`,
+      detail: input.quick
+        ? 'Off today — a 30-min day has no story forge.'
+        : 'Story forge: draft one behavioral story by voice for an open story-bank gap; the coach pushes back on "we", scope and numbers · ~15 min',
+      result: forged && forge.last ? `${forge.last.status === 'saved' ? 'Saved' : 'Drafted'} · ${forge.last.title}${forge.doneToday > 1 ? ` · ${forge.doneToday} stories` : ''}` : null,
+      ok: forged ? true : null,
+      label: 'Story forge',
+    });
+  } else base.set('concept', {
     status: repDone ? 'done' : skipped.has('concept') || input.quick ? 'skipped' : 'todo',
     href: `/concept?${from('concept')}`,
     detail: input.quick
@@ -358,7 +377,7 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
       current = id;
       if (status === 'todo') status = 'current';
     }
-    return { id, label: TODAY_STEP_LABEL[id], status, href: s.href, detail: s.detail, result: s.result, ok: s.ok };
+    return { id, label: s.label ?? TODAY_STEP_LABEL[id], status, href: s.href, detail: s.detail, result: s.result, ok: s.ok };
   });
   const completed = steps.filter((s) => s.status === 'done' || s.status === 'skipped').length;
   return { steps, current, completed };
@@ -382,6 +401,12 @@ export interface MockKindPickInput {
    * these, ahead of the debrief's focus and the rotation.
    */
   loopKinds?: readonly MockKind[];
+  /**
+   * Phase H4: the kinds the plain rotation (and the weakest-kind jump) cycle
+   * through. Absent = every kind. The project deep-dive exists but is not
+   * rotated: a loop's rounds or the debrief's focus pick it.
+   */
+  rotation?: readonly MockKind[];
 }
 
 const VERDICT_SCORE: Record<MockVerdict, number> = { below: 0, at: 1, above: 2 };
@@ -417,12 +442,14 @@ export function pickMockKind(input: MockKindPickInput): MockKind {
   }
   if (input.focusKind && (kinds as readonly string[]).includes(input.focusKind)) return input.focusKind as MockKind;
 
-  const lastIdx = input.lastKind ? (kinds as readonly string[]).indexOf(input.lastKind) : -1;
-  const rotation = kinds[(lastIdx + 1) % kinds.length];
+  const rotated = input.rotation?.length ? kinds.filter((k) => input.rotation!.includes(k)) : kinds;
+  const cycle = rotated.length ? rotated : kinds;
+  const lastIdx = input.lastKind ? (cycle as readonly string[]).indexOf(input.lastKind) : -1;
+  const rotation = cycle[(lastIdx + 1) % cycle.length];
 
   let weakest: MockKind | null = null;
   let weakestScore = Infinity;
-  for (const k of kinds) {
+  for (const k of cycle) {
     const s = kindStrength(input.grades, k);
     if (s !== null && s < weakestScore) {
       weakest = k;

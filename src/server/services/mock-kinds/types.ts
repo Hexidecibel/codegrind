@@ -89,7 +89,7 @@ export interface MockPrepareArgs {
   recentQuestionIds: string[];
   rand?: () => number;
   fetchImpl?: typeof fetch;
-  /** MockStartRequest.coding, unvalidated. */
+  /** MockStartRequest.coding (coding) or .project (project deep-dive), unvalidated. */
   options?: unknown;
   /**
    * Coding: the problem source and the skill state, injected by mock.service so
@@ -123,4 +123,9 @@ export interface MockPrep {
   brief?: string;
   /** Coding: the full problem, for buildContext only (never stored on the state). */
   problem?: ProblemRecord;
+  /** Project deep-dive: the chosen project (`line` is what the interviewer is told). */
+  project?: { source: 'story' | 'resume' | 'typed'; id: string | null; title: string; line: string };
 }
+
+/** A prepare hook refusing the start request's input (a bad project choice): a 400, not a 502. */
+export class MockPrepError extends Error {}

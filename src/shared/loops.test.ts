@@ -71,8 +71,8 @@ describe('spacing cap', () => {
 });
 
 describe('mock rotation kinds', () => {
-  it('maps rounds to built kinds only (project-deep-dive / other ignored)', () => {
-    expect(loopMockKinds(['project-deep-dive', 'coding', 'other', 'behavioral'])).toEqual(['behavioral', 'coding']);
+  it('maps rounds to built kinds only (other ignored; project-deep-dive maps to its kind since H4)', () => {
+    expect(loopMockKinds(['project-deep-dive', 'coding', 'other', 'behavioral'])).toEqual(['behavioral', 'coding', 'project-deep-dive']);
   });
   it('biases only within 3 days', () => {
     expect(biasKinds({ daysLeft: 3, rounds: ['system-design'] })).toEqual(['system-design']);
