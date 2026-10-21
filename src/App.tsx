@@ -13,6 +13,7 @@ import { TodayPage } from '@/client/pages/TodayPage';
 import { RecognizePage } from '@/client/pages/RecognizePage';
 import { EnvelopePage } from '@/client/pages/EnvelopePage';
 import { ConceptPage, ConceptTrackPage, ConceptLessonPage } from '@/client/pages/ConceptPage';
+import { StoriesPage } from '@/client/pages/StoriesPage';
 import { SetupWizard } from '@/client/components/setup/SetupWizard';
 import { getSetupState } from '@/client/lib/api';
 import type { SetupState } from '@/shared/types';
@@ -86,6 +87,8 @@ function App() {
             <Route path="/concept" element={<ConceptPage />} />
             <Route path="/concepts" element={<ConceptTrackPage />} />
             <Route path="/concepts/:concept" element={<ConceptLessonPage />} />
+            {/* Phase H4: the story forge. */}
+            <Route path="/stories" element={<StoriesPage />} />
             <Route path="/manual" element={<WorkspacePage />} />
             <Route path="/progress" element={<ProgressPage />} />
             <Route path="/study" element={<StudyPage />} />

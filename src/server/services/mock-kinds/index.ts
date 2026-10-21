@@ -9,14 +9,17 @@ import { DEFAULT_MOCK_KIND, isMockKind, type MockKind } from '../../../shared/mo
 import { SYSTEM_DESIGN_SPEC } from './system-design.js';
 import { BEHAVIORAL_SPEC } from './behavioral.js';
 import { CODING_SPEC } from './coding.js';
+import { DEEP_DIVE_SPEC } from './project-deep-dive.js';
 import type { MockKindSpec } from './types.js';
 
 export type { MockKindSpec, MockPrep, MockPrepareArgs, MockFinalizeDeps, MockAfterGradeDeps } from './types.js';
+export { MockPrepError } from './types.js';
 
 export const MOCK_KIND_SPECS: Readonly<Record<MockKind, MockKindSpec>> = {
   'system-design': SYSTEM_DESIGN_SPEC,
   behavioral: BEHAVIORAL_SPEC,
   coding: CODING_SPEC,
+  'project-deep-dive': DEEP_DIVE_SPEC,
 };
 
 /** The spec for a kind. An unknown kind (an old or hand-edited row) reads as system design. */

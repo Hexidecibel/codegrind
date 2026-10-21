@@ -27,6 +27,7 @@ import type {
   MockVerdict,
   StoryBankStatus,
 } from '@/shared/mock';
+import { Link } from 'react-router-dom';
 import { STORY_CAPTURE_URL } from '@/shared/behavioral-questions';
 import type { MockGap } from '@/shared/gap-cards';
 import { GAP_TYPE_META, cardFront } from '@/client/components/GapCards';
@@ -261,14 +262,64 @@ export function GradeReport({
               </li>
             ))}
           </ul>
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {grade.storyGaps.map((g) => (
+              <Link
+                key={g.concept}
+                to={`/stories?competency=${encodeURIComponent(g.concept)}`}
+                className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+              >
+                Forge a {conceptLabel(g.concept).toLowerCase()} story
+              </Link>
+            ))}
+          </div>
           <a
             href={STORY_CAPTURE_URL}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:underline"
           >
-            Capture them in resume-builder (Interview → Capture) <ExternalLink className="h-3.5 w-3.5" />
+            Or capture them in resume-builder (Interview → Capture) <ExternalLink className="h-3.5 w-3.5" />
           </a>
+        </section>
+      )}
+
+      {grade.dimensions && grade.dimensions.length > 0 && (
+        <section className="space-y-2">
+          <h3 className="text-sm font-semibold">Deep-dive rubric</h3>
+          <ul className="space-y-1 text-sm">
+            {grade.dimensions.map((d) => (
+              <li key={d.concept} className="flex gap-2">
+                <span className="w-8 shrink-0 tabular-nums font-medium">{d.score}/4</span>
+                <span>
+                  <span className="font-medium">{conceptLabel(d.concept)}</span>
+                  {d.note && <span className="text-muted-foreground"> — {d.note}</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {grade.fidelity && grade.fidelity.length > 0 && (
+        <section className="space-y-2">
+          <h3 className="text-sm font-semibold">Fidelity — claims checked against your story bank and resume</h3>
+          <ul className="space-y-1 text-sm">
+            {grade.fidelity.map((f, i) => (
+              <li key={i}>
+                <span
+                  className={cn(
+                    'mr-2 rounded-full px-2 py-0.5 text-[11px]',
+                    f.status === 'contradicted' ? 'bg-rose-500/15 text-rose-300' : 'bg-amber-500/15 text-amber-300'
+                  )}
+                >
+                  {f.status}
+                </span>
+                <span className="font-medium">{f.claim}</span>
+                {f.note && <span className="text-muted-foreground"> — {f.note}</span>}
+              </li>
+            ))}
+          </ul>
         </section>
       )}
 

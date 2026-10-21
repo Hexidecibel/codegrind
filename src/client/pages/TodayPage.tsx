@@ -546,6 +546,11 @@ export function TodayPage() {
 
         <InterviewsPanel today={state.date} onChange={() => void getToday().then(setState).catch(() => undefined)} />
 
+        {/* Phase H4: the story forge is always one click away, not only on forge days. */}
+        <Link to="/stories" className="block text-right text-xs text-muted-foreground underline-offset-4 hover:underline">
+          Story forge — draft a behavioral story by voice →
+        </Link>
+
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
           <Timer className="h-4 w-4 text-muted-foreground" />
           <div className="min-w-0 flex-1">

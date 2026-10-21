@@ -42,6 +42,7 @@ import {
   getMock,
   getProblemById,
   getMockPlan,
+  getDeepDiveProjects,
   getMockPrompts,
   listMocks,
   sendMockTurn,
@@ -71,6 +72,7 @@ import {
 } from '@/shared/mock-kinds';
 import { DIFFICULTIES, TOPICS, type Difficulty, type Problem, type RunResult, type Topic } from '@/shared/types';
 import { DEFAULT_CODING_DIFFICULTY } from '@/shared/coding-mock';
+import type { DdProjectChoice, DdProjectsResponse } from '@/shared/deep-dive';
 import { presetToOverrides, type AssistanceSettings } from '@/client/lib/assistance';
 import { SolveSurface } from '@/client/components/SolveSurface';
 import { Button } from '@/client/components/ui/button';
@@ -246,6 +248,75 @@ function PlanPreview({
   );
 }
 
+/** Phase H4: the project deep-dive's project — a bank story, a resume line, or a typed one-liner. */
+function ProjectPicker({ value, onChange }: { value: DdProjectChoice; onChange: (v: DdProjectChoice) => void }) {
+  const [data, setData] = useState<DdProjectsResponse | null>(null);
+  useEffect(() => {
+    let live = true;
+    getDeepDiveProjects()
+      .then((d) => live && setData(d))
+      .catch(() => live && setData({ options: [], errors: ['resume-builder did not answer'] }));
+    return () => {
+      live = false;
+    };
+  }, []);
+  const key = value.source === 'typed' ? 'typed' : `${value.source}:${value.id ?? ''}`;
+  const stories = data?.options.filter((o) => o.source === 'story') ?? [];
+  const resume = data?.options.filter((o) => o.source === 'resume') ?? [];
+  return (
+    <label className="block space-y-1.5">
+      <span className="text-sm font-medium">Project</span>
+      <select
+        value={key}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === 'typed') onChange({ source: 'typed', text: value.text ?? '' });
+          else {
+            const [source, ...rest] = v.split(':');
+            onChange({ source: source as 'story' | 'resume', id: rest.join(':') });
+          }
+        }}
+        className="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+      >
+        <option value="story:">{data ? 'Pick a project…' : 'Loading your projects…'}</option>
+        {stories.length > 0 && (
+          <optgroup label="Story bank">
+            {stories.map((o) => (
+              <option key={o.id} value={`story:${o.id}`}>
+                {o.title}
+                {o.where ? ` — ${o.where}` : ''}
+              </option>
+            ))}
+          </optgroup>
+        )}
+        {resume.length > 0 && (
+          <optgroup label="Master resume">
+            {resume.map((o) => (
+              <option key={o.id} value={`resume:${o.id}`}>
+                {o.title.length > 110 ? `${o.title.slice(0, 107)}…` : o.title} ({o.where})
+              </option>
+            ))}
+          </optgroup>
+        )}
+        <option value="typed">Type a one-liner…</option>
+      </select>
+      {value.source === 'typed' && (
+        <input
+          value={value.text ?? ''}
+          onChange={(e) => onChange({ source: 'typed', text: e.target.value })}
+          maxLength={300}
+          placeholder="e.g. An LLM model router across five GPU hosts with honest backpressure"
+          className="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        />
+      )}
+      <span className="block text-xs text-muted-foreground">
+        The interviewer gets only this line; the grader checks every claim against your story bank and master resume.
+        {data?.errors.length ? ` (${data.errors.join('; ')})` : ''}
+      </span>
+    </label>
+  );
+}
+
 function StartCard() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -273,10 +344,13 @@ function StartCard() {
     topic: 'arrays',
     difficulty: DEFAULT_CODING_DIFFICULTY,
   });
+  const [project, setProject] = useState<DdProjectChoice>({ source: 'story', id: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   const info = mockKindInfo(kind);
+  const projectReady =
+    !info.projectPicker || (project.source === 'typed' ? (project.text ?? '').trim().length >= 8 : !!project.id);
 
   useEffect(() => {
     listMocks().then((r) => setMocks(r.mocks)).catch(() => setMocks([]));
@@ -328,6 +402,7 @@ function StartCard() {
               },
             }
           : {}),
+        ...(info.projectPicker ? { project } : {}),
       });
       navigate(`/mock/${view.id}${todayStep ? '?from=today&step=mock' : ''}`);
     } catch (err) {
@@ -417,6 +492,8 @@ function StartCard() {
 
         {info.editor && <CodingOptions {...coding} onChange={setCoding} />}
 
+        {info.projectPicker && <ProjectPicker value={project} onChange={setProject} />}
+
         {prompts.length > 1 && (
           <label className="block space-y-1.5">
             <span className="text-sm font-medium">Prompt</span>
@@ -453,7 +530,7 @@ function StartCard() {
 
         {error && <ErrorBar error={error} onClose={() => setError(null)} />}
 
-        <Button onClick={start} disabled={busy} className="w-full sm:w-auto">
+        <Button onClick={start} disabled={busy || !projectReady} className="w-full sm:w-auto">
           {busy ? <Loader2 className="animate-spin" /> : <ArrowRight />}
           {busy
             ? info.editor

@@ -415,3 +415,106 @@ export function planBehavioral(input: PlanInput): PlanResult {
 export function describePlan(items: MockPlan['items']): string {
   return items.map((i) => `${i.stage}: ${competencyLabel(i.concept)} — ${i.question}`).join('\n');
 }
+
+// -----------------------------------------------------------------------------
+// The master resume (Phase H4: the project deep-dive) — READ ONLY
+// -----------------------------------------------------------------------------
+// resume-builder's base-resumes.json: an array of base resumes; the first is the
+// master. The deep-dive offers its highlights and projects as projects to drill
+// into, and the grader gets it (with the story bank) to check claims against.
+
+export interface ResumeExperience {
+  id: string;
+  company: string;
+  title: string;
+  start: string;
+  end: string;
+  highlights: string[];
+}
+
+export interface ResumeProject {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface MasterResume {
+  summary: string;
+  experience: ResumeExperience[];
+  projects: ResumeProject[];
+}
+
+export type ResumeResult = { ok: true; resume: MasterResume } | { ok: false; error: string };
+
+export function resumeUrl(): string {
+  const base = (process.env.CODEGRIND_STORY_BANK_URL || DEFAULT_STORY_BANK_URL).replace(/\/+$/, '');
+  return `${base}/api/data/read?file=base-resumes.json`;
+}
+
+/** The first base resume, defensively. Throws on a shape with no resume at all. */
+export function normalizeResume(raw: unknown): MasterResume {
+  const first = (Array.isArray(raw) ? raw[0] : null) as Record<string, unknown> | null;
+  const r = (first?.resume ?? null) as Record<string, unknown> | null;
+  if (!r) throw new Error('base-resumes.json has no resume');
+  const experience: ResumeExperience[] = [];
+  for (const e of (Array.isArray(r.experience) ? r.experience : []) as Record<string, unknown>[]) {
+    if (!e || typeof e.id !== 'string') continue;
+    experience.push({
+      id: e.id,
+      company: str(e.company),
+      title: str(e.title),
+      start: str(e.startDate) || String(e.startDate ?? ''),
+      end: str(e.endDate) || (e.endDate === null ? 'present' : ''),
+      highlights: strs(e.highlights),
+    });
+  }
+  const projects: ResumeProject[] = [];
+  for (const p of (Array.isArray(r.projects) ? r.projects : []) as Record<string, unknown>[]) {
+    if (!p || typeof p.id !== 'string' || !str(p.name)) continue;
+    projects.push({ id: p.id, name: str(p.name), description: str(p.description) });
+  }
+  return { summary: str(r.summary), experience, projects };
+}
+
+/** GET the master resume. Never throws. */
+export async function fetchMasterResume(fetchImpl: typeof fetch = fetch): Promise<ResumeResult> {
+  try {
+    const res = await fetchImpl(resumeUrl(), { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (!res.ok) return { ok: false, error: `resume-builder answered ${res.status}` };
+    return { ok: true, resume: normalizeResume(await res.json()) };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `resume-builder unreachable (${msg.slice(0, 120)})` };
+  }
+}
+
+/** The master resume for a grader: every line is the candidate's own confirmed claim. */
+export function renderResumeForGrader(r: ResumeResult): string {
+  if (!r.ok) return `MASTER RESUME: UNAVAILABLE (${r.error}).`;
+  const { resume } = r;
+  return [
+    'MASTER RESUME (resume-builder; every line here is a claim the candidate stands behind):',
+    resume.summary ? `summary: ${resume.summary}` : '',
+    ...resume.experience.flatMap((e) => [
+      `<experience id="${e.id}">${e.title} — ${e.company} (${e.start || '?'} – ${e.end || '?'})`,
+      ...e.highlights.map((h) => `  - ${h}`),
+      '</experience>',
+    ]),
+    ...(resume.projects.length
+      ? ['projects:', ...resume.projects.map((p) => `  - [${p.id}] ${p.name}: ${p.description}`)]
+      : []),
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * Facts the user has CONFIRMED about their own history (2026-10-21), for every
+ * prompt that judges or shapes a story (the deep-dive grader, the story forge).
+ * Short on purpose: each line exists because a model got it wrong.
+ */
+export const CANDIDATE_KNOWN_FACTS = `CONFIRMED FACTS ABOUT THE CANDIDATE (from the candidate; override anything that contradicts them):
+- Sitehound was a NEW multi-tenant SaaS product built as the successor to the single-tenant Fulcrum/Oracle product — not a "migration" or a "port". Telling it as a migration is wrong framing.
+- dox / supdox has NO live customers. Never claim or accept usage, users, customers, volume or revenue for it.
+- gwag and corrallm are NOT the candidate's projects (they belong to someone else). Never attribute them to the candidate.
+- Only facts the candidate has confirmed go into a story. Anything else is an open question until they confirm it.`;

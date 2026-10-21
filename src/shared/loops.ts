@@ -151,7 +151,7 @@ export function loopCountdown(loops: readonly InterviewLoop[], today: string): L
 
 /**
  * The mock kinds a loop's rounds map to — only kinds that exist. Unknown round
- * types (project-deep-dive until H4 builds it, other) are ignored.
+ * types without a mock kind (other) are ignored; project-deep-dive maps to its kind (Phase H4).
  */
 export function loopMockKinds(rounds: readonly string[]): MockKind[] {
   return (MOCK_KINDS as readonly MockKind[]).filter((k) => rounds.includes(k));

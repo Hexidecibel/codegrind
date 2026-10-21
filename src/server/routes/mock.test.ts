@@ -772,3 +772,79 @@ describe('coding', () => {
     expect(fake.interviewerTurn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('project deep-dive (Phase H4)', () => {
+  const BANK = {
+    stories: [
+      {
+        id: 'story-saas', title: 'Multi-tenant SaaS', employer: 'Sitehound', status: 'confirmed', situation: 'SITUATION-TEXT', task: 't', action: 'a', result: 'r',
+        numbers: ['NUMBER-TEXT'], caveats: [], unconfirmed: ['UNCONFIRMED-TEXT'], fits: ['architecture'], doesNotFit: [],
+      },
+    ],
+    gaps: [],
+  };
+  const RESUME = [
+    {
+      id: 'base',
+      resume: {
+        summary: 'Principal engineer.',
+        experience: [{ id: 'exp-a', company: 'Sitehound Inc.', title: 'CTO', startDate: '2019', endDate: null, highlights: ['Owned a greenfield SaaS platform: 50+ tenants.'] }],
+        projects: [{ id: 'proj-router', name: 'Model Router', description: 'Go service with honest backpressure.' }, { id: 'proj-more', name: 'Other work', description: 'more' }],
+      },
+    },
+  ];
+  function rbUp() {
+    vi.stubGlobal('fetch', async (u: string) =>
+      new Response(JSON.stringify(u.includes('base-resumes') ? RESUME : BANK), { status: 200 })
+    );
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('lists projects for free: bank stories, resume highlights and projects (not "Other work")', async () => {
+    rbUp();
+    const r = await (await app.request('/api/mock/projects')).json();
+    expect(r.errors).toEqual([]);
+    expect(r.options.map((o: { id: string }) => o.id)).toEqual(['story-saas', 'exp-a#0', 'proj-router']);
+    expect(fake.interviewerTurn).not.toHaveBeenCalled();
+  });
+
+  it('starts on a story: the interviewer gets the title line only; the grader context holds bank + resume', async () => {
+    rbUp();
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'overview', say: 'Walk me through it.' }));
+    const res = await post('/api/mock/start', { kind: 'project-deep-dive', project: { source: 'story', id: 'story-saas' } });
+    expect(res.status).toBe(200);
+    const view = await res.json();
+    expect(view.kind).toBe('project-deep-dive');
+    expect(view.prompt).toBe('Multi-tenant SaaS');
+    expect(view.state.stage).toBe('overview');
+    expect(view.state.project).toEqual({ source: 'story', id: 'story-saas', title: 'Multi-tenant SaaS' });
+    expect(view.state.graderContext).toBeUndefined();
+    const [messages, , kind] = fake.interviewerTurn.mock.calls[0];
+    expect(kind).toBe('project-deep-dive');
+    expect(messages[0].content).toContain('The project they chose: Multi-tenant SaaS (Sitehound)');
+    expect(JSON.stringify(messages)).not.toMatch(/SITUATION-TEXT|NUMBER-TEXT|UNCONFIRMED-TEXT/);
+    const row = db.prepare(`SELECT state FROM mocks WHERE id = ?`).get(view.id) as { state: string };
+    const g = JSON.parse(row.state).graderContext as string;
+    expect(g).toContain('SITUATION-TEXT');
+    expect(g).toContain('OPEN QUESTIONS');
+    expect(g).toContain('MASTER RESUME');
+    expect(g).toContain('Owned a greenfield SaaS platform');
+  });
+
+  it('starts on a typed one-liner even with resume-builder down; a bad choice is a 400 with no call', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('connect ECONNREFUSED');
+    });
+    let res = await post('/api/mock/start', { kind: 'project-deep-dive', project: { source: 'story', id: 'story-saas' } });
+    expect(res.status).toBe(400);
+    res = await post('/api/mock/start', { kind: 'project-deep-dive' });
+    expect(res.status).toBe(400);
+    expect(fake.interviewerTurn).not.toHaveBeenCalled();
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'overview', say: 'Walk me through it.' }));
+    res = await post('/api/mock/start', { kind: 'project-deep-dive', project: { source: 'typed', text: 'An LLM model router across five GPU hosts' } });
+    expect(res.status).toBe(200);
+    const view = await res.json();
+    expect(view.state.project.source).toBe('typed');
+    expect(fake.interviewerTurn.mock.calls[0][0][0].content).toContain('An LLM model router across five GPU hosts');
+  });
+});

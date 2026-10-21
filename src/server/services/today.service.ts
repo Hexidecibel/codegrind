@@ -8,7 +8,7 @@
 // Settings "AI reviews" toggle. POST /api/today/debrief still works on click.
 
 import type { Topic } from '../../shared/types.js';
-import { MOCK_KINDS, isMockKind, mockKindInfo } from '../../shared/mock-kinds.js';
+import { MOCK_KINDS, ROTATION_MOCK_KINDS, isMockKind, mockKindInfo } from '../../shared/mock-kinds.js';
 import { costOf } from '../../shared/mock.js';
 import {
   QUICK_ENVELOPE_REPS,
@@ -51,6 +51,13 @@ import { runStepReview, type StepReviewInput } from './llm.review.js';
 import { todayRecognize } from './recognize.service.js';
 import { envelopeDigest, todayEnvelope } from './envelope.service.js';
 import { conceptDigest, readinessReps, todayConcept } from './concept.service.js';
+import { forgeDigest, isForgeDayNow, todayForge } from './forge.service.js';
+
+/** Phase H4: whether today's concept step is a story forge, and what it did. Never throws. */
+function forgeStep(now: Date): { day: boolean; doneToday: number; last: { title: string; status: string } | null } {
+  const f = todayForge(now);
+  return { day: isForgeDayNow(todayConcept(now).doneToday > 0, now), ...f };
+}
 import * as store from './today.store.js';
 import { runDebrief, type DebriefInput } from './llm.debrief.js';
 
@@ -94,6 +101,7 @@ function dayContext(now: Date): DayContext {
     const focusRow = store.lastDebriefBefore(date);
     const kind = pickMockKind({
       kinds: MOCK_KINDS,
+      rotation: ROTATION_MOCK_KINDS,
       lastKind: last?.mockKind ?? null,
       grades: store.gradeHistory(),
       focusKind: focusRow?.debrief?.tomorrowFocus.mockKind ?? null,
@@ -172,6 +180,7 @@ export function getToday(now = new Date()): TodayState {
     debriefVerdict: row.debrief?.verdict ?? null,
     quick: row.quick,
     concept: todayConcept(now),
+    forge: forgeStep(now),
     finalReview: nextLoop?.isFinalReviewDay ? { company: nextLoop.company, daysLeft: nextLoop.daysLeft } : null,
   });
 
@@ -355,6 +364,7 @@ export function buildDebriefInput(now = new Date()): DebriefInput {
     stepNotes: applicableNotes(row.stepNotes, 'debrief'),
     // Phase H3: '' → absent, so a day without a rep renders as before.
     ...(conceptDigest(now).length ? { conceptReps: conceptDigest(now) } : {}),
+    ...(forgeDigest(now).length ? { storyForge: forgeDigest(now) } : {}),
   };
 }
 
@@ -461,7 +471,7 @@ export function stepDigest(id: StepNoteId, now = new Date()): string[] {
           }${r.approach.trim() ? `; approach: "${r.approach.trim().replace(/\s+/g, ' ').slice(0, 160)}"` : ''}`
       );
   }
-  if (id === 'concept') return conceptDigest(now);
+  if (id === 'concept') return [...conceptDigest(now), ...forgeDigest(now)];
   if (id === 'problem1' || id === 'problem2') {
     const p = newProblemsToday({ attempts, dayStart })[id === 'problem1' ? 0 : 1];
     if (!p) return [];

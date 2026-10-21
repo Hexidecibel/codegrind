@@ -164,6 +164,27 @@ const TOOL_RESULTS: Record<string, Record<string, unknown>> = {
     drawOn: ['You could draw on the per-call-site model comparison in your practice app.'],
     staffAnswer: 'I would start from real traffic and the failures we already know about.',
   },
+  emit_forge_turn: {
+    covered: ['situation'],
+    nextBeat: 'role',
+    pushback: [{ kind: 'i-vs-we', note: 'Said "we decided" — whose call was it?' }],
+    draft: {
+      title: 'Getting two teams onto one test runner',
+      question: 'Tell me about a time you got others to adopt a change you could not mandate.',
+      situation: 'Local and CI test runs disagreed across four platforms.',
+      task: '',
+      action: '',
+      result: '',
+      complication: '',
+      beats: [],
+      numbers: ['four platforms'],
+      caveats: [],
+      unconfirmed: [],
+      fits: ['influence without authority'],
+    },
+    done: false,
+    say: 'Whose decision was the single entry point — yours, or the team lead\'s?',
+  },
   emit_translations: {
     translations: [
       { id: 'primer:arrays', code: 'i = 0' },
@@ -202,6 +223,7 @@ const reviewLlm = await import('./llm.review.js');
 const envelopeLlm = await import('./llm.envelope.js');
 // Phase H3's concept-rep grade and AI-systems lesson; same seam.
 const conceptLlm = await import('./llm.concept.js');
+const forgeLlm = await import('./llm.forge.js');
 const RUBRIC = {
   keyPoints: ['Cache-aside with delete-on-write', 'TTL as the safety net', 'Stampede on a hot key'],
   mistake: 'Updating the cache on write with no ordering.',
@@ -429,6 +451,20 @@ const CAPTURED: Record<string, unknown> = {
       rubric: RUBRIC,
     })
   ),
+  runForgeTurn: await capture(() =>
+    forgeLlm.runForgeTurn({
+      competency: 'influence-without-authority',
+      seed: '',
+      seedConfirmed: '',
+      knownFacts: 'CONFIRMED FACTS ABOUT THE CANDIDATE: (fixture)',
+      turns: [
+        { role: 'coach', content: 'Start with the situation: where were you, what was going on?' },
+        { role: 'you', content: 'so um we had test runs on four platforms and local never matched CI and we decided to fix it' },
+      ],
+      answers: 1,
+      maxTurns: 12,
+    })
+  ),
 };
 
 if (UPDATE) {
@@ -449,8 +485,9 @@ describe('the request body of every LLM call site', () => {
     // Envelope miss note (llm.envelope.ts). A seventeenth site belongs here
     // before it ships.
     // Phase H3 adds the eighteenth and nineteenth: the concept-rep grade and
-    // the AI-systems lesson (llm.concept.ts).
-    expect(Object.keys(CAPTURED)).toHaveLength(21);
+    // the AI-systems lesson (llm.concept.ts). Phase H4 the twentieth: the
+    // story-forge coach turn (llm.forge.ts).
+    expect(Object.keys(CAPTURED)).toHaveLength(22);
     expect(Object.keys(GOLDEN)).toEqual(Object.keys(CAPTURED));
   });
 
@@ -466,8 +503,9 @@ describe('the request body of every LLM call site', () => {
   });
 
   it('every call reached the usage recorder exactly once, named by its tool', () => {
-    // 21 captures + nothing else: the ledger sees each call once.
-    expect(usageEvents).toHaveLength(21);
+    // 22 captures + nothing else: the ledger sees each call once.
+    expect(usageEvents).toHaveLength(22);
+    expect(usageEvents.filter((e) => e.source === 'emit_forge_turn')).toEqual([{ source: 'emit_forge_turn', role: 'workhorse' }]);
     expect(usageEvents.filter((e) => e.source === 'emit_concept_grade')).toEqual([{ source: 'emit_concept_grade', role: 'workhorse' }]);
     expect(usageEvents.filter((e) => e.source === 'emit_envelope_note')).toEqual([{ source: 'emit_envelope_note', role: 'small' }]);
     expect(usageEvents.filter((e) => e.source === 'emit_card_grade')).toEqual([{ source: 'emit_card_grade', role: 'small' }]);

@@ -97,6 +97,20 @@ export function ensureConceptRepsAnchor(): void {
   ).run(CONCEPT_REPS_ANCHOR, JSON.stringify(emptyUsage()));
 }
 
+/**
+ * Phase H4: the hidden anchor the story forge's "2-minute retell" cards hang
+ * off (mock_gaps.mockId is NOT NULL), exactly like the concept-rep anchor:
+ * created in 2000, abandoned, filtered from the mock list.
+ */
+export const STORY_FORGE_ANCHOR = 'story-forge';
+
+export function ensureStoryForgeAnchor(): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO mocks (id, kind, level, promptId, prompt, status, context, digest, state, usage, turnCount, createdAt, updatedAt, endedAt)
+     VALUES (?, 'behavioral', 'staff', NULL, 'Story forge', 'abandoned', '', NULL, '{}', ?, 0, '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z', NULL)`
+  ).run(STORY_FORGE_ANCHOR, JSON.stringify(emptyUsage()));
+}
+
 let stmts: ReturnType<typeof prepare> | null = null;
 function prepare() {
   return {
@@ -114,7 +128,7 @@ function prepare() {
     listMocks: db.prepare(`
       SELECT m.*, g.verdict AS verdict FROM mocks m
       LEFT JOIN mock_grades g ON g.mockId = m.id
-      WHERE m.id <> '${CONCEPT_REPS_ANCHOR}'
+      WHERE m.id NOT IN ('${CONCEPT_REPS_ANCHOR}', '${STORY_FORGE_ANCHOR}')
       ORDER BY m.createdAt DESC LIMIT ?
     `),
     recentPromptIds: db.prepare(`

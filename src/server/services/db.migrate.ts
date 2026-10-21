@@ -612,6 +612,28 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
       if (tableExists(db, 'daily_sessions')) addColumnIfMissing(db, 'daily_sessions', 'conceptPick', 'TEXT');
       if (tableExists(db, 'interview_loops')) addColumnIfMissing(db, 'interview_loops', 'aiFocus', 'INTEGER NOT NULL DEFAULT 0');
 
+      // Phase H4 (story forge). Additive, always-run: one row per forge session —
+      // the seed, the coach/candidate turns, the latest STAR draft, and what was
+      // saved to resume-builder (the story id) and minted (the retell card).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS story_forge_sessions (
+          id            TEXT PRIMARY KEY,
+          day           TEXT NOT NULL,              -- local YYYY-MM-DD
+          seed          TEXT NOT NULL,              -- JSON ForgeSeed
+          status        TEXT NOT NULL,              -- active | drafted | saved | abandoned
+          turns         TEXT NOT NULL,              -- JSON ForgeTurn[]
+          covered       TEXT NOT NULL DEFAULT '[]', -- JSON ForgeBeat[]
+          draft         TEXT,                       -- JSON StoryDraft
+          savedStoryId  TEXT,
+          cardId        INTEGER,
+          costUsd       REAL NOT NULL DEFAULT 0,
+          calls         INTEGER NOT NULL DEFAULT 0,
+          createdAt     TEXT NOT NULL,
+          updatedAt     TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_forge_day ON story_forge_sessions (day);
+      `);
+
       // --- VERSIONED ----------------------------------------------------------
       // Expensive or destructive. Gated on the version marker so a warm database
       // doesn't pay on every boot — but each step still asks the DATABASE

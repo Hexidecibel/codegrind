@@ -3,6 +3,7 @@
 // =============================================================================
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter } from 'react-router-dom';
 import { GradeReport } from './GradeReport';
 import { SD_STAGES, SD_STAGE_META } from '@/shared/sd';
 import type { MockGrade } from '@/shared/mock';
@@ -100,11 +101,13 @@ describe('a behavioral grade', () => {
   };
   const out = (bank?: { loaded: boolean; error?: string }) =>
     renderToStaticMarkup(
-      <GradeReport
-        grade={B}
-        kind="behavioral"
-        storyBank={bank ? { stories: 0, confirmed: 0, openGaps: [], ...bank } : undefined}
-      />
+      <MemoryRouter>
+        <GradeReport
+          grade={B}
+          kind="behavioral"
+          storyBank={bank ? { stories: 0, confirmed: 0, openGaps: [], ...bank } : undefined}
+        />
+      </MemoryRouter>
     );
 
   it('renders each question with STAR, I-vs-we, numbers, length, story fit and fidelity', () => {
@@ -123,6 +126,8 @@ describe('a behavioral grade', () => {
     const h = out({ loaded: false, error: 'resume-builder unreachable' });
     expect(h).toContain('Stories to capture');
     expect(h).toContain('https://resume.cush.rocks');
+    // Phase H4: each gap links into the story forge, pre-set to its competency.
+    expect(h).toContain('href="/stories?competency=conflict"');
     expect(h).toContain('story bank was unavailable');
     expect(out({ loaded: true })).not.toContain('story bank was unavailable');
   });
@@ -159,5 +164,26 @@ describe('the coding grade report', () => {
     expect(h).toContain('never ran');
     expect(h).toContain('found it yourself');
     expect(h).not.toContain('review queue');
+  });
+});
+
+describe('the project deep-dive grade report (Phase H4)', () => {
+  it('shows the rubric dimensions and every fidelity flag', () => {
+    const h = renderToStaticMarkup(
+      <GradeReport
+        grade={{
+          ...GRADE,
+          stages: [],
+          dimensions: [{ concept: 'dd-tradeoffs', score: 2, note: 'No alternative named (#6).' }],
+          fidelity: [{ claim: 'sharded by tenant id', status: 'unverified', note: 'Not in the bank or resume.' }],
+        }}
+        kind="project-deep-dive"
+      />
+    );
+    expect(h).toContain('Deep-dive rubric');
+    expect(h).toContain('Trade-off reasoning');
+    expect(h).toContain('2/4');
+    expect(h).toContain('sharded by tenant id');
+    expect(h).toContain('unverified');
   });
 });

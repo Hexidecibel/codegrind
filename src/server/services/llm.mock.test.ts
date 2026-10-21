@@ -213,6 +213,44 @@ await gradeMock({
 const codingGradeBody = mocks.create.mock.calls[0][0];
 mocks.create.mockReset();
 
+// Project deep-dive (Phase H4): the interviewer gets the project line only; the
+// grader gets the bank + master resume after the rubric.
+const { DEEP_DIVE_SPEC, buildDeepDiveContext, renderDeepDiveGraderContext } = await import('./mock-kinds/project-deep-dive.js');
+const D_PROJECT = { source: 'story' as const, id: 'story-saas-rebuild', title: 'Rebuilding as multi-tenant SaaS', line: 'Rebuilding as multi-tenant SaaS (Sitehound)' };
+const D_RESUME = {
+  ok: true as const,
+  resume: { summary: 'Principal engineer.', experience: [{ id: 'exp-a', company: 'Sitehound Inc.', title: 'CTO', start: '2019', end: '2026', highlights: ['Owned a greenfield multi-tenant SaaS platform: 50+ tenants.'] }], projects: [] },
+};
+const D_GRADER = renderDeepDiveGraderContext(D_PROJECT, { ok: true, bank: B_BANK }, D_RESUME);
+const D_CONTEXT = buildDeepDiveContext('staff', D_PROJECT);
+mocks.create.mockResolvedValueOnce(answer({ ...REPLY, observations: [], stage: 'architecture', say: 'Why org nodes rather than one database per tenant?' }));
+await interviewerTurn(
+  buildMessages(D_CONTEXT, [
+    { seq: 1, role: 'interviewer', rendered: 'Walk me through it.' },
+    { seq: 2, role: 'candidate', rendered: 'We built a new multi-tenant product to replace the per-customer Oracle installs.\n\n[server: 2 of 40 min]' },
+    { seq: 3, role: 'interviewer', rendered: 'What were the main components?' },
+  ], 'A central node and org nodes that many orgs share.\n\n[server: 5 of 40 min]'),
+  'architecture',
+  'project-deep-dive'
+);
+const deepDiveInterviewerBody = mocks.create.mock.calls[0][0];
+mocks.create.mockReset();
+mocks.create.mockResolvedValueOnce(answer({ ...GRADE, stages: [], gapsTaught: [], conceptObservations: [], drills: [], dimensions: [], fidelity: [] }, 'tool_use', 'emit_mock_grade'));
+await gradeMock({
+  kind: 'project-deep-dive',
+  level: 'staff',
+  promptTitle: 'Project deep-dive',
+  brief: D_PROJECT.title,
+  transcript: '--- stage: architecture (Architecture) ---\n#3 INTERVIEWER: What were the main components?\n#4 CANDIDATE (11 words): A central node and org nodes that many orgs share.',
+  skipped: [],
+  taught: [],
+  recordedGaps: [],
+  graderContext: D_GRADER,
+});
+const deepDiveGradeBody = mocks.create.mock.calls[0][0];
+mocks.create.mockReset();
+void DEEP_DIVE_SPEC;
+
 const CAPTURED = {
   interviewerTurn: interviewerBody,
   gradeMock: gradeBody,
@@ -220,6 +258,8 @@ const CAPTURED = {
   behavioralGradeMock: behavioralGradeBody,
   codingInterviewerTurn: codingInterviewerBody,
   codingGradeMock: codingGradeBody,
+  deepDiveInterviewerTurn: deepDiveInterviewerBody,
+  deepDiveGradeMock: deepDiveGradeBody,
 };
 if (UPDATE) {
   mkdirSync(dirname(FIXTURE), { recursive: true });

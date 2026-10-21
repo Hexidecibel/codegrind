@@ -4,12 +4,13 @@
 //   GET  /api/mocks                 list            free
 //   GET  /api/mock/prompts?kind=    the prompt bank free (kind absent = system design)
 //   GET  /api/mock/plan?kind=       a planned kind's preview   free (behavioral reads the story bank; no model)
+//   GET  /api/mock/projects         deep-dive project options  free (story bank + master resume; no model)
 //   GET  /api/mock/cards            due drill cards free
 //   POST /api/mock/cards/:id/grade  {grade: got|shaky|missed}      free (the user's grade, no model)
 //   POST /api/mock/cards/:id/check  {answer}                       ONE small call (AI grade, moves nothing;
 //                                                                  "I don't know" = missed, free)
 //   GET  /api/mock/:id              one mock        free
-//   POST /api/mock/start            {kind?, level?, promptId?}     ONE model call
+//   POST /api/mock/start            {kind?, level?, promptId?, project?}  ONE model call
 //   POST /api/mock/:id/turn         {expectedSeq, content, action?} ONE model call
 //   POST /api/mock/:id/end          {code?} NDJSON: wrapup → grade  ONE model call (two on a retry)
 //                                   (coding: the final code runs against the hidden tests first —
@@ -31,6 +32,7 @@ import {
   getMockView,
   gradeGapCard,
   checkGapCard,
+  deepDiveProjects,
   parseEnd,
   parseKind,
   prepareEnd,
@@ -78,6 +80,15 @@ mockRoutes.get('/mock/plan', async (c) => {
     return c.json(await previewPlan(c.req.query('kind'), c.req.query('level')));
   } catch (err) {
     return fail(c, 'mock-plan', err);
+  }
+});
+
+// Phase H4. Registered BEFORE /mock/:id, which would otherwise read "projects" as a mock id.
+mockRoutes.get('/mock/projects', async (c) => {
+  try {
+    return c.json(await deepDiveProjects());
+  } catch (err) {
+    return fail(c, 'mock-projects', err);
   }
 });
 
