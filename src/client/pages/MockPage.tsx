@@ -13,7 +13,7 @@
 // and the text stays where it was so pressing Send again is the whole recovery.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -50,6 +50,7 @@ import { DEFAULT_MOCK_LEVEL, MOCK_LEVELS, MOCK_LEVEL_LABEL, type MockLevel } fro
 import {
   DEFAULT_MOCK_KIND,
   MOCK_KINDS,
+  isMockKind,
   UPCOMING_MOCK_KINDS,
   mockKindInfo,
   mockPromptTitle,
@@ -58,6 +59,8 @@ import {
 import { Button } from '@/client/components/ui/button';
 import { GradeReport } from '@/client/components/GradeReport';
 import { GapCards } from '@/client/components/GapCards';
+import { TodayNextBar } from '@/client/components/TodayNextBar';
+import { todayStepFrom } from '@/client/lib/today-flow';
 import { cn } from '@/lib/utils';
 
 function ErrorBar({ error, onClose }: { error: ApiError | Error; onClose?: () => void }) {
@@ -99,7 +102,16 @@ function Markdown({ children }: { children: string }) {
 
 function StartCard() {
   const navigate = useNavigate();
-  const [kind, setKind] = useState<MockKind>(DEFAULT_MOCK_KIND);
+  const location = useLocation();
+  // Opened from Today: today's kind preselected, the drill cards first on the
+  // warm-up, and the started mock keeps `?from=today` so its grade links on.
+  const todayStep = todayStepFrom(location.search);
+  const kindParam = new URLSearchParams(location.search).get('kind');
+  const [kind, setKind] = useState<MockKind>(isMockKind(kindParam) ? kindParam : DEFAULT_MOCK_KIND);
+  const [cardsKey, setCardsKey] = useState(0);
+  useEffect(() => {
+    if (location.hash === '#cards') document.getElementById('cards')?.scrollIntoView();
+  }, [location.hash]);
   const [level, setLevel] = useState<MockLevel>(DEFAULT_MOCK_LEVEL);
   const [promptId, setPromptId] = useState('');
   const [prompts, setPrompts] = useState<MockPromptOption[]>([]);
@@ -129,7 +141,7 @@ function StartCard() {
     setError(null);
     try {
       const view = await startMock({ kind, level, ...(promptId ? { promptId } : {}) });
-      navigate(`/mock/${view.id}`);
+      navigate(`/mock/${view.id}${todayStep ? '?from=today&step=mock' : ''}`);
     } catch (err) {
       setError(err as Error);
       setBusy(false);
@@ -144,6 +156,9 @@ function StartCard() {
         </h1>
         <p className="text-sm text-muted-foreground">{info.start.blurb}</p>
       </div>
+
+      {todayStep && <TodayNextBar here={todayStep} screenPath="/mock" refreshKey={cardsKey} />}
+      {todayStep === 'warmup' && <GapCards onGraded={() => setCardsKey((k) => k + 1)} />}
 
       {active && (
         <Link
@@ -246,7 +261,7 @@ function StartCard() {
         </Button>
       </div>
 
-      <GapCards />
+      {todayStep !== 'warmup' && <GapCards />}
 
       {mocks && mocks.length > 0 && (
         <section className="space-y-2">
@@ -548,8 +563,10 @@ function Interview({ view, onView }: { view: MockView; onView: (v: MockView) => 
 
 function Graded({ view }: { view: MockView }) {
   const [showTranscript, setShowTranscript] = useState(false);
+  const todayStep = todayStepFrom(useLocation().search);
   return (
     <div className="mx-auto max-w-3xl space-y-5 p-4 sm:p-6">
+      {todayStep && <TodayNextBar here={todayStep} screenPath={`/mock/${view.id}`} refreshKey={view.status} />}
       <div className="space-y-1">
         <Link to="/mock" className="text-sm text-muted-foreground hover:text-foreground">
           ← Mocks

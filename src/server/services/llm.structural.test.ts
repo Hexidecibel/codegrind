@@ -24,6 +24,8 @@ const SOURCE = readFileSync(SERVICE, 'utf8');
 // The mock interviewer's two calls live in their own file and are held to the
 // same rules — a second file is the obvious way for the rule to stop applying.
 const MOCK_SOURCE = readFileSync(fileURLToPath(new URL('./llm.mock.ts', import.meta.url)), 'utf8');
+// The Today debrief's one call, same rules.
+const DEBRIEF_SOURCE = readFileSync(fileURLToPath(new URL('./llm.debrief.ts', import.meta.url)), 'utf8');
 // The per-kind specs (mock-kinds/) hold the mock prompts and schemas — the same
 // "what to ask" half — so they are held to the same rules, every file of them.
 const KIND_DIR = fileURLToPath(new URL('./mock-kinds/', import.meta.url));
@@ -98,6 +100,25 @@ describe('llm.mock.ts stays vendor-free too', () => {
       expect(call).toMatch(/role: 'workhorse'/);
       expect(call).toMatch(/maxTokens: \d+/);
     }
+  });
+});
+
+describe('llm.debrief.ts stays vendor-free too', () => {
+  const h = (p: RegExp) => hits(p, DEBRIEF_SOURCE);
+
+  it('has no "provider", no SDK, no wire format and no model name', () => {
+    expect(h(/provider/i)).toEqual([]);
+    expect(h(/@anthropic-ai\/sdk|openai|from '\.\/llm\.anthropic/)).toEqual([]);
+    expect(h(/messages\.create|input_schema|cache_control|type: 'ephemeral'/)).toEqual([]);
+    expect(h(/claude-|ANTHROPIC_MODEL|ANTHROPIC_API_KEY/)).toEqual([]);
+  });
+
+  it('makes exactly one call, small role, thinking off, explicit budget', () => {
+    const calls = DEBRIEF_SOURCE.match(/await structured\(\{[\s\S]*?\n\s*\}\);/g) ?? [];
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatch(/role: 'small'/);
+    expect(calls[0]).toMatch(/thinking: 'off'/);
+    expect(calls[0]).toMatch(/maxTokens: \d+/);
   });
 });
 

@@ -9,6 +9,7 @@ import { StudyPage } from '@/client/pages/StudyPage';
 import { SettingsPage } from '@/client/pages/SettingsPage';
 import { HelpPage } from '@/client/pages/HelpPage';
 import { MockPage } from '@/client/pages/MockPage';
+import { TodayPage } from '@/client/pages/TodayPage';
 import { SetupWizard } from '@/client/components/setup/SetupWizard';
 import { getSetupState } from '@/client/lib/api';
 import type { SetupState } from '@/shared/types';
@@ -71,7 +72,11 @@ function App() {
           <SetupWizard state={setup} onDone={() => setFinished(true)} />
         ) : (
           <Routes>
-            <Route path="/" element={<GrindPage />} />
+            {/* Today — the guided daily routine — is the landing page. Grind
+                moved to /grind; the routine deep-links into it. */}
+            <Route path="/" element={<Navigate to="/today" replace />} />
+            <Route path="/today" element={<TodayPage />} />
+            <Route path="/grind" element={<GrindPage />} />
             <Route path="/manual" element={<WorkspacePage />} />
             <Route path="/progress" element={<ProgressPage />} />
             <Route path="/study" element={<StudyPage />} />

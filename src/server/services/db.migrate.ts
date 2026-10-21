@@ -348,6 +348,26 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
         );
       `);
 
+      // The "Today" routine. One row per LOCAL day, holding only what cannot be
+      // derived from real rows: skips, "end day early", the day's chosen mock
+      // kind, and the debrief. Step state itself is recomputed from attempts,
+      // mocks, cards and the review queue on every GET (today.service.ts), so
+      // nothing here can drift from what actually happened. A new table, no
+      // backfill → always-run, no version bump.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS daily_sessions (
+          date          TEXT PRIMARY KEY,          -- local YYYY-MM-DD (CODEGRIND_TZ)
+          mockKind      TEXT,                      -- the day's mock kind, frozen on first read
+          skips         TEXT NOT NULL DEFAULT '[]',-- JSON TodayStepId[]
+          endedEarlyAt  TEXT,
+          debrief       TEXT,                      -- JSON Debrief
+          debriefUsage  TEXT,                      -- JSON DebriefUsage
+          debriefAt     TEXT,
+          createdAt     TEXT NOT NULL,
+          updatedAt     TEXT NOT NULL
+        );
+      `);
+
       // --- VERSIONED ----------------------------------------------------------
       // Expensive or destructive. Gated on the version marker so a warm database
       // doesn't pay on every boot — but each step still asks the DATABASE

@@ -45,6 +45,7 @@ import type {
   MockView,
 } from '@/shared/mock';
 import type { GapCard, GapCardGrade, GapCardsResponse } from '@/shared/gap-cards';
+import type { TodayState, TodayStepId } from '@/shared/today';
 
 /** Shape returned by GET /api/session/:id (resume). */
 export interface SessionState {
@@ -544,4 +545,28 @@ export function gradeGapCard(id: number, grade: GapCardGrade): Promise<GapCard> 
 /** POST /api/mock/:id/abandon — free. */
 export function abandonMock(id: string): Promise<MockView> {
   return request<MockView>(`/api/mock/${encodeURIComponent(id)}/abandon`, { method: 'POST' });
+}
+
+// ---------------------------------------------------------------------------
+// Today — the guided daily routine
+// ---------------------------------------------------------------------------
+
+/** GET /api/today — the day, derived from real rows. Free. */
+export function getToday(): Promise<TodayState> {
+  return request<TodayState>('/api/today');
+}
+
+/** POST /api/today/skip — skip (or un-skip) a step. Free. */
+export function skipTodayStep(step: TodayStepId, skip = true): Promise<TodayState> {
+  return request<TodayState>('/api/today/skip', { method: 'POST', body: JSON.stringify({ step, skip }) });
+}
+
+/** POST /api/today/end — end the day early (or undo it). Free. */
+export function endTodayEarly(ended = true): Promise<TodayState> {
+  return request<TodayState>('/api/today/end', { method: 'POST', body: JSON.stringify({ ended }) });
+}
+
+/** POST /api/today/debrief — ONE small model call, cached per day; `regenerate` pays again. */
+export function runTodayDebrief(regenerate = false): Promise<TodayState> {
+  return request<TodayState>('/api/today/debrief', { method: 'POST', body: JSON.stringify({ regenerate }) });
 }

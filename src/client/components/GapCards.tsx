@@ -114,7 +114,7 @@ export function CardFace({
   );
 }
 
-export function GapCards() {
+export function GapCards({ onGraded }: { onGraded?: () => void } = {}) {
   const [data, setData] = useState<GapCardsResponse | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -141,6 +141,7 @@ export function GapCards() {
     try {
       await gradeGapCard(card.id, g);
       load();
+      onGraded?.();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -149,7 +150,7 @@ export function GapCards() {
   };
 
   return (
-    <section className="space-y-2" aria-label="Drill cards">
+    <section id="cards" className="scroll-mt-4 space-y-2" aria-label="Drill cards">
       <h2 className="flex flex-wrap items-center gap-2 text-sm font-semibold">
         <Layers className="h-4 w-4" /> Drill cards from your mocks
         <span className="font-normal text-muted-foreground">

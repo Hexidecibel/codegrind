@@ -310,7 +310,7 @@ export function StudyPage() {
       <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div className="mx-auto flex max-w-3xl items-center gap-1 px-2 py-2 sm:px-4">
           <Link
-            to="/"
+            to="/grind"
             aria-label="Back to grind"
             title="Back to grind"
             className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
