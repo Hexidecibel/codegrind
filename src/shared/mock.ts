@@ -7,16 +7,10 @@
 // `conceptObservations` are the raw events that fold will read.
 
 import type { MockGap } from './gap-cards.js';
-import type {
-  ConceptSignal,
-  GapType,
-  InterviewerMode,
-  MockLevel,
-  SdConcept,
-  SdStage,
-} from './sd.js';
+import type { ConceptSignal, GapType, InterviewerMode, MockLevel } from './sd.js';
+import { MOCK_KIND_INFO, type MockConcept, type MockKind, type MockStage } from './mock-kinds.js';
 
-export type MockKind = 'system-design';
+export type { MockConcept, MockKind, MockStage } from './mock-kinds.js';
 
 /**
  * `grading` is held only while POST /end is in flight. `grade_failed` keeps the
@@ -45,7 +39,7 @@ export const MOCK_ACTIONS = ['answer', 'teach_me', 'stuck', 'move_on', 'keep_goi
 export type MockAction = (typeof MOCK_ACTIONS)[number];
 
 export interface MockObservation {
-  concept: SdConcept;
+  concept: MockConcept;
   signal: ConceptSignal;
   note: string;
 }
@@ -57,30 +51,30 @@ export interface MockTurn {
   /** What was said. For a candidate turn, what they typed (may be '' for a button). */
   content: string;
   /** The stage this turn belongs to. */
-  stage: SdStage;
+  stage: MockStage;
   createdAt: string;
   /** Interviewer turns only. */
   mode?: InterviewerMode;
   /** A teach turn's lesson subject, or an offer's. */
-  teach?: { concept: SdConcept; gapSummary: string } | null;
+  teach?: { concept: MockConcept; gapSummary: string } | null;
   /** Candidate turns only: which button, if any. */
   action?: MockAction;
 }
 
 export interface MockState {
-  stage: SdStage;
-  covered: SdStage[];
-  skipped: SdStage[];
+  stage: MockStage;
+  covered: MockStage[];
+  skipped: MockStage[];
   /** ISO; the 45-minute clock runs from here. */
   startedAt: string;
   /** Candidate turns taken. The cap counts these. */
   candidateTurns: number;
   /** The concept the interviewer last offered to teach, until answered. */
-  pendingOffer: SdConcept | null;
+  pendingOffer: MockConcept | null;
   /** Concepts taught so far, in order. */
-  taught: SdConcept[];
+  taught: MockConcept[];
   /** A skip the next user message must announce, then clear. */
-  pendingSkipNote: SdStage[];
+  pendingSkipNote: MockStage[];
   /** Set once the END control note has been sent. */
   endNoteSent: boolean;
 }
@@ -98,7 +92,7 @@ export interface MockUsage {
 }
 
 export interface MockStageGrade {
-  stage: SdStage;
+  stage: MockStage;
   /** 1..4 against the rubric anchors. 0 = not reached. */
   score: number;
   evidence: string;
@@ -108,7 +102,7 @@ export interface MockStageGrade {
 }
 
 export interface MockDrill {
-  concept: SdConcept;
+  concept: MockConcept;
   prompt: string;
   why: string;
 }
@@ -121,7 +115,7 @@ export type MockVerdict = 'below' | 'at' | 'above';
  * as a drill card like any other gap.
  */
 export interface MockGradeGap {
-  concept: SdConcept;
+  concept: MockConcept;
   type: GapType;
   title: string;
   answer: string;
@@ -134,8 +128,8 @@ export interface MockGrade {
   verdict: MockVerdict;
   summary: string;
   stages: MockStageGrade[];
-  skipped: SdStage[];
-  gapsTaught: { concept: SdConcept; summary: string }[];
+  skipped: MockStage[];
+  gapsTaught: { concept: MockConcept; summary: string }[];
   conceptObservations: MockObservation[];
   drills: MockDrill[];
   /** Gaps the grader added on top of the recorded ones. Absent on Phase-1 grades. */
@@ -179,6 +173,8 @@ export interface MockListResponse {
 }
 
 export interface MockStartRequest {
+  /** Absent = system design. */
+  kind?: MockKind;
   level?: MockLevel;
   /** A prompt-bank id. Absent = the server picks. */
   promptId?: string;
@@ -190,7 +186,7 @@ export interface MockTurnRequest {
   content: string;
   action?: MockAction;
   /** For teach_me: which concept, when the client knows it (an offer). */
-  concept?: SdConcept;
+  concept?: MockConcept;
 }
 
 /** NDJSON lines from POST /api/mock/:id/end. */
@@ -203,10 +199,13 @@ export type MockEndEvent =
 // Limits
 // -----------------------------------------------------------------------------
 
-/** Candidate turns per mock. A cap, not a target — real mocks end well before it. */
-export const MOCK_TURN_CAP = 40;
-/** The interview clock. Past it the interviewer is told to wrap up. */
-export const MOCK_MINUTES = 45;
+/**
+ * Candidate turns per SYSTEM-DESIGN mock. A cap, not a target — real mocks end
+ * well before it. Per kind in MOCK_KIND_INFO; these are the system-design values.
+ */
+export const MOCK_TURN_CAP = MOCK_KIND_INFO['system-design'].turnCap;
+/** The system-design interview clock. Past it the interviewer is told to wrap up. */
+export const MOCK_MINUTES = MOCK_KIND_INFO['system-design'].minutes;
 /** How long before the end the interviewer is warned. */
 export const MOCK_WARN_MINUTES = 5;
 /** The longest answer accepted in one turn, in characters. */

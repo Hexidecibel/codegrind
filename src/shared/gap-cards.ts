@@ -16,7 +16,8 @@
 //
 // Pure — `now` is always passed in — so the whole schedule is unit-tested.
 
-import type { GapType, SdConcept } from './sd.js';
+import type { GapType } from './sd.js';
+import type { MockConcept } from './mock-kinds.js';
 
 export const GAP_CARD_LADDER_DAYS = [0, 2, 5, 10] as const;
 export const GAP_CARD_GRADES = ['got', 'shaky', 'missed'] as const;
@@ -37,7 +38,7 @@ export interface MockGap {
   mockId: string;
   /** The turn it surfaced on; null when the grader found it with no turn to cite. */
   seq: number | null;
-  concept: SdConcept;
+  concept: MockConcept;
   type: GapType;
   /** The card front: a self-contained question. '' on gaps recorded before cards existed. */
   title: string;

@@ -39,6 +39,7 @@ import type { Language } from '@/shared/languages';
 import type {
   MockEndEvent,
   MockListResponse,
+  MockKind,
   MockStartRequest,
   MockTurnRequest,
   MockView,
@@ -493,9 +494,9 @@ export function listMocks(): Promise<MockListResponse> {
   return request<MockListResponse>('/api/mocks');
 }
 
-/** GET /api/mock/prompts — the static prompt bank. Free. */
-export function getMockPrompts(): Promise<{ prompts: MockPromptOption[] }> {
-  return request<{ prompts: MockPromptOption[] }>('/api/mock/prompts');
+/** GET /api/mock/prompts?kind= — a kind's static prompt bank. Free. */
+export function getMockPrompts(kind: MockKind = 'system-design'): Promise<{ prompts: MockPromptOption[] }> {
+  return request<{ prompts: MockPromptOption[] }>(`/api/mock/prompts?kind=${encodeURIComponent(kind)}`);
 }
 
 /** GET /api/mock/:id — one mock, with its transcript and grade. Free. */

@@ -8,10 +8,11 @@
 // Mock tab (GapCards), so this section says so rather than offering a button.
 
 import { AlertTriangle, CheckCircle2, GraduationCap, Layers, ListChecks, XCircle } from 'lucide-react';
-import type { MockGrade, MockUsage, MockVerdict } from '@/shared/mock';
+import type { MockGrade, MockKind, MockUsage, MockVerdict } from '@/shared/mock';
 import type { MockGap } from '@/shared/gap-cards';
 import { GAP_TYPE_META, cardFront } from '@/client/components/GapCards';
-import { MOCK_LEVEL_LABEL, SD_STAGE_META, conceptLabel } from '@/shared/sd';
+import { MOCK_LEVEL_LABEL } from '@/shared/sd';
+import { mockKindInfo, stageLabel } from '@/shared/mock-kinds';
 import { cn } from '@/lib/utils';
 
 const VERDICT_META: Record<MockVerdict, { label: string; className: string }> = {
@@ -58,7 +59,18 @@ function GapList({ gaps, type }: { gaps: MockGap[]; type: MockGap['type'] }) {
   );
 }
 
-export function GradeReport({ grade, usage, gaps = [] }: { grade: MockGrade; usage?: MockUsage; gaps?: MockGap[] }) {
+export function GradeReport({
+  grade,
+  usage,
+  gaps = [],
+  kind = 'system-design',
+}: {
+  grade: MockGrade;
+  usage?: MockUsage;
+  gaps?: MockGap[];
+  kind?: MockKind;
+}) {
+  const { conceptLabel } = mockKindInfo(kind);
   const verdict = VERDICT_META[grade.verdict];
   const signals = { nailed: [] as string[], weak: [] as string[], missing: [] as string[] };
   for (const o of grade.conceptObservations) signals[o.signal].push(conceptLabel(o.concept));
@@ -90,7 +102,7 @@ export function GradeReport({ grade, usage, gaps = [] }: { grade: MockGrade; usa
           {grade.stages.map((s) => (
             <li key={s.stage} className="rounded-lg border border-border bg-card p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{SD_STAGE_META[s.stage].label}</span>
+                <span className="font-medium">{stageLabel(kind, s.stage)}</span>
                 <ScoreDots score={s.score} />
                 {s.score === 0 ? (
                   <span className="text-xs text-muted-foreground">not reached</span>

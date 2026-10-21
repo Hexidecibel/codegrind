@@ -18,7 +18,8 @@ import type {
   MockUsage,
   MockVerdict,
 } from '../../shared/mock.js';
-import type { GapType, MockLevel, SdConcept } from '../../shared/sd.js';
+import type { GapType, MockLevel } from '../../shared/sd.js';
+import { mockPromptTitle, type MockConcept } from '../../shared/mock-kinds.js';
 import {
   gapKey,
   newCardSchedule,
@@ -29,7 +30,6 @@ import {
   type MockGap,
 } from '../../shared/gap-cards.js';
 import type { StoredTurn } from './mock.state.js';
-import { sdPrompt } from '../../shared/sd-prompts.js';
 
 export interface MockRow {
   id: string;
@@ -97,7 +97,7 @@ function prepare() {
       ORDER BY m.createdAt DESC LIMIT ?
     `),
     recentPromptIds: db.prepare(`
-      SELECT promptId FROM mocks WHERE promptId IS NOT NULL ORDER BY createdAt DESC LIMIT ?
+      SELECT promptId FROM mocks WHERE promptId IS NOT NULL AND kind = ? ORDER BY createdAt DESC LIMIT ?
     `),
     insertTurn: db.prepare(`
       INSERT INTO mock_turns (mockId, seq, role, kind, content, rendered, stage, meta, createdAt)
@@ -112,11 +112,11 @@ function prepare() {
     `),
     getGaps: db.prepare(`SELECT * FROM mock_gaps WHERE mockId = ? ORDER BY COALESCE(seq, 1e9), id`),
     getCard: db.prepare(`
-      SELECT g.*, m.promptId AS mockPromptId, m.prompt AS mockPrompt
+      SELECT g.*, m.kind AS mockKind, m.promptId AS mockPromptId, m.prompt AS mockPrompt
       FROM mock_gaps g JOIN mocks m ON m.id = g.mockId WHERE g.id = ?
     `),
     dueCards: db.prepare(`
-      SELECT g.*, m.promptId AS mockPromptId, m.prompt AS mockPrompt
+      SELECT g.*, m.kind AS mockKind, m.promptId AS mockPromptId, m.prompt AS mockPrompt
       FROM mock_gaps g JOIN mocks m ON m.id = g.mockId
       WHERE g.retiredAt IS NULL AND g.dueAt <= ?
       ORDER BY g.dueAt ASC, g.id ASC LIMIT ?
@@ -165,8 +165,9 @@ export function updateMock(
   });
 }
 
-export function recentPromptIds(limit = 5): string[] {
-  return (S().recentPromptIds.all(limit) as { promptId: string }[]).map((r) => r.promptId);
+/** The kind's most recent prompt ids, newest first (prompt ids are per kind). */
+export function recentPromptIds(kind: MockKind = 'system-design', limit = 5): string[] {
+  return (S().recentPromptIds.all(kind, limit) as { promptId: string }[]).map((r) => r.promptId);
 }
 
 export function listMocks(limit = 30): MockSummary[] {
@@ -177,7 +178,7 @@ export function listMocks(limit = 30): MockSummary[] {
       id: m.id,
       kind: m.kind,
       level: m.level,
-      promptTitle: (m.promptId && sdPrompt(m.promptId)?.title) || m.prompt.slice(0, 80),
+      promptTitle: mockPromptTitle(m.kind, m.promptId) || m.prompt.slice(0, 80),
       status: m.status,
       candidateTurns: m.state.candidateTurns,
       verdict: r.verdict ?? null,
@@ -259,7 +260,7 @@ export const appendExchange = db.transaction(
 
 export interface NewGap {
   seq: number | null;
-  concept: SdConcept;
+  concept: MockConcept;
   type: GapType;
   title: string;
   summary: string;
@@ -284,6 +285,7 @@ export function insertGap(mockId: string, g: NewGap, now: Date): void {
 }
 
 interface RawGap extends Omit<GapCard, 'mockTitle'> {
+  mockKind?: string;
   mockPromptId?: string | null;
   mockPrompt?: string;
 }
@@ -313,7 +315,7 @@ function toCard(r: RawGap): GapCard {
     lastGrade: (r.lastGrade as GapCardGrade | null) ?? null,
     lastReviewedAt: r.lastReviewedAt ?? null,
     retiredAt: r.retiredAt ?? null,
-    mockTitle: (r.mockPromptId && sdPrompt(r.mockPromptId)?.title) || (r.mockPrompt ?? '').slice(0, 80),
+    mockTitle: mockPromptTitle(r.mockKind, r.mockPromptId) || (r.mockPrompt ?? '').slice(0, 80),
   };
 }
 

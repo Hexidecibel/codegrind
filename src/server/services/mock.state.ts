@@ -14,33 +14,34 @@
 // the turn is taken, stored as `rendered`, and replayed verbatim forever after.
 // The clock in particular would otherwise re-render every past turn on every
 // request and the cache would never hit. mock.state.test.ts pins this.
+//
+// KINDS. Every function that needs the kind's stages, clock or labels takes a
+// `kind`, defaulting to system design — the kind every stored mock before the
+// registry was. The text each one renders for system design is unchanged.
 
+import type { GapType, InterviewerMode } from '../../shared/sd.js';
 import {
-  SD_STAGES,
-  SD_STAGE_META,
-  MOCK_LEVEL_LABEL,
-  conceptLabel,
-  type GapType,
-  type InterviewerMode,
-  type MockLevel,
-  type SdConcept,
-  type SdStage,
-} from '../../shared/sd.js';
+  mockKindInfo,
+  type MockConcept,
+  type MockKind,
+  type MockStage,
+} from '../../shared/mock-kinds.js';
 import {
-  MOCK_MINUTES,
-  MOCK_TURN_CAP,
   MOCK_WARN_MINUTES,
   type MockAction,
   type MockState,
   type MockTurn,
   type MockTurnKind,
 } from '../../shared/mock.js';
-import type { SdPrompt } from '../../shared/sd-prompts.js';
 import type { LlmMessage } from './llm.types.js';
+import { mockKindSpec } from './mock-kinds/index.js';
 
-export function initialState(now: Date): MockState {
+/** The system-design setup message. Other kinds build theirs through their spec. */
+export { buildSdContext as buildContext } from './mock-kinds/system-design.js';
+
+export function initialState(now: Date, kind: MockKind = 'system-design'): MockState {
   return {
-    stage: 'requirements',
+    stage: mockKindInfo(kind).stages[0],
     covered: [],
     skipped: [],
     startedAt: now.toISOString(),
@@ -52,28 +53,8 @@ export function initialState(now: Date): MockState {
   };
 }
 
-const stageIndex = (s: SdStage) => SD_STAGES.indexOf(s);
-
 export function minutesElapsed(state: MockState, now: Date): number {
   return Math.max(0, Math.floor((now.getTime() - new Date(state.startedAt).getTime()) / 60_000));
-}
-
-/** The frozen setup message — the first user turn, stored on the mock row. */
-export function buildContext(prompt: SdPrompt, level: MockLevel): string {
-  return [
-    'MOCK SETUP',
-    `Level the candidate is interviewing for: ${MOCK_LEVEL_LABEL[level]}`,
-    `Prompt: ${prompt.title}`,
-    `Brief to open with: ${prompt.brief}`,
-    `Twists you may introduce once a happy path exists (one at a time, only if time allows):`,
-    ...prompt.twists.map((t) => `- ${t}`),
-    `Time budget: ${MOCK_MINUTES} minutes, at most ${MOCK_TURN_CAP} candidate turns.`,
-    prompt.familiar
-      ? 'This is a system the candidate has built before. Let them use that.'
-      : 'This is not a system the candidate has built.',
-    '',
-    'Begin: give your opening (mode interview, stage requirements).',
-  ].join('\n');
 }
 
 // -----------------------------------------------------------------------------
@@ -84,13 +65,16 @@ export interface CandidateInput {
   content: string;
   action: MockAction;
   /** teach_me only: the concept to teach, when the client knows it. */
-  concept?: SdConcept | null;
+  concept?: MockConcept | null;
 }
 
-const ACTION_NOTE: Record<Exclude<MockAction, 'answer'>, (concept: SdConcept | null) => string> = {
-  teach_me: (c) =>
+const ACTION_NOTE: Record<
+  Exclude<MockAction, 'answer'>,
+  (concept: MockConcept | null, label: (c: MockConcept) => string) => string
+> = {
+  teach_me: (c, label) =>
     `[control: TEACH ME — the candidate pressed "Teach me"${
-      c ? ` about ${conceptLabel(c)}` : ''
+      c ? ` about ${label(c)}` : ''
     }. Switch to teach mode: explain ${
       c ? 'it' : 'the concept they most recently struggled with (or the one they just named)'
     } plainly, with one concrete example, then end with "Back to the interview:" and the resume point.]`,
@@ -109,8 +93,11 @@ const ACTION_NOTE: Record<Exclude<MockAction, 'answer'>, (concept: SdConcept | n
 export function renderCandidateMessage(
   input: CandidateInput,
   state: MockState,
-  now: Date
+  now: Date,
+  kind: MockKind = 'system-design'
 ): { rendered: string; endNote: boolean } {
+  const spec = mockKindSpec(kind);
+  const { minutes: MINUTES, turnCap: TURN_CAP } = spec.info;
   const parts: string[] = [];
   const text = input.content.trim();
   if (text) parts.push(text);
@@ -125,25 +112,25 @@ export function renderCandidateMessage(
 
   if (input.action !== 'answer') {
     const concept = input.action === 'teach_me' ? input.concept ?? state.pendingOffer : null;
-    parts.push(ACTION_NOTE[input.action](concept ?? null));
+    parts.push(ACTION_NOTE[input.action](concept ?? null, spec.info.conceptLabel));
   }
 
   const minutes = minutesElapsed(state, now);
   const turn = state.candidateTurns + 1;
   parts.push(
-    `[server: ${minutes} of ${MOCK_MINUTES} min · candidate turn ${turn} of ${MOCK_TURN_CAP} · stage: ${state.stage} · covered: ${
+    `[server: ${minutes} of ${MINUTES} min · candidate turn ${turn} of ${TURN_CAP} · stage: ${state.stage} · covered: ${
       state.covered.length ? state.covered.join(', ') : 'none yet'
     }]`
   );
 
-  const timeUp = minutes >= MOCK_MINUTES || turn >= MOCK_TURN_CAP;
+  const timeUp = minutes >= MINUTES || turn >= TURN_CAP;
   const endNote = timeUp && !state.endNoteSent;
   if (endNote) {
     parts.push(
       `[control: END — time is up. Reply in wrap_up mode: one or two sentences closing the interview. Do not ask another question.]`
     );
-  } else if (!timeUp && (minutes >= MOCK_MINUTES - MOCK_WARN_MINUTES || turn >= MOCK_TURN_CAP - 4)) {
-    parts.push(`[server: nearly out of time — steer toward trade-offs and start wrapping up.]`);
+  } else if (!timeUp && (minutes >= MINUTES - MOCK_WARN_MINUTES || turn >= TURN_CAP - 4)) {
+    parts.push(spec.nearlyOutNote);
   }
   return { rendered: parts.join('\n\n'), endNote };
 }
@@ -153,10 +140,10 @@ export function renderCandidateMessage(
 // -----------------------------------------------------------------------------
 
 export interface InterviewerReply {
-  stage: SdStage;
-  stagesCovered: SdStage[];
+  stage: MockStage;
+  stagesCovered: MockStage[];
   mode: InterviewerMode;
-  teach: { concept: SdConcept; gapSummary: string } | null;
+  teach: { concept: MockConcept; gapSummary: string } | null;
   resumePoint: string;
   /**
    * Every fact or reasoning move the interviewer handed over in THIS reply —
@@ -169,7 +156,7 @@ export interface InterviewerReply {
 }
 
 export interface SuppliedGap {
-  concept: SdConcept;
+  concept: MockConcept;
   type: GapType;
   /** The card front: a self-contained question. */
   title: string;
@@ -185,7 +172,7 @@ export interface SuppliedGap {
 export function gapsForReply(
   reply: InterviewerReply,
   seq: number
-): { seq: number; concept: SdConcept; type: GapType; title: string; summary: string; answer: string }[] {
+): { seq: number; concept: MockConcept; type: GapType; title: string; summary: string; answer: string }[] {
   const out = (reply.gaps ?? []).map((g) => ({
     seq,
     concept: g.concept,
@@ -220,17 +207,20 @@ export function applyReply(
   state: MockState,
   reply: InterviewerReply,
   candidateTookTurn: boolean,
-  endNoteSent: boolean
+  endNoteSent: boolean,
+  kind: MockKind = 'system-design'
 ): MockState {
-  const covered = SD_STAGES.filter(
+  const stages = mockKindInfo(kind).stages;
+  const stageIndex = (s: MockStage) => stages.indexOf(s);
+  const covered = stages.filter(
     (s) => state.covered.includes(s) || reply.stagesCovered.includes(s)
   );
   const from = stageIndex(state.stage);
   const to = stageIndex(reply.stage);
-  const newlySkipped: SdStage[] = [];
+  const newlySkipped: MockStage[] = [];
   if (to > from) {
     for (let i = from; i < to; i++) {
-      const s = SD_STAGES[i];
+      const s = stages[i];
       if (!covered.includes(s) && !state.skipped.includes(s)) newlySkipped.push(s);
     }
   }
@@ -271,8 +261,8 @@ export function kindForMode(mode: InterviewerMode): MockTurnKind {
 }
 
 /** Is another candidate turn allowed? */
-export function turnAllowed(state: MockState): boolean {
-  return state.candidateTurns < MOCK_TURN_CAP;
+export function turnAllowed(state: MockState, kind: MockKind = 'system-design'): boolean {
+  return state.candidateTurns < mockKindInfo(kind).turnCap;
 }
 
 // -----------------------------------------------------------------------------
@@ -331,12 +321,13 @@ export function buildMessages(
  * Plain text with every teach turn marked, so the grader can do the one thing
  * the rubric depends on: not score an answer the interviewer just taught.
  */
-export function renderTranscript(turns: readonly MockTurn[]): string {
+export function renderTranscript(turns: readonly MockTurn[], kind: MockKind = 'system-design'): string {
+  const meta = mockKindInfo(kind).stageMeta;
   const lines: string[] = [];
-  let lastStage: SdStage | null = null;
+  let lastStage: MockStage | null = null;
   for (const t of [...turns].sort((a, b) => a.seq - b.seq)) {
     if (t.stage !== lastStage) {
-      lines.push(`--- stage: ${t.stage} (${SD_STAGE_META[t.stage].label}) ---`);
+      lines.push(`--- stage: ${t.stage} (${meta[t.stage]?.label ?? t.stage}) ---`);
       lastStage = t.stage;
     }
     if (t.role === 'interviewer') {

@@ -15,7 +15,8 @@
 // greps for is the one that shows up first when that stops being true.
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SERVICE = fileURLToPath(new URL('./llm.service.ts', import.meta.url));
@@ -23,6 +24,12 @@ const SOURCE = readFileSync(SERVICE, 'utf8');
 // The mock interviewer's two calls live in their own file and are held to the
 // same rules — a second file is the obvious way for the rule to stop applying.
 const MOCK_SOURCE = readFileSync(fileURLToPath(new URL('./llm.mock.ts', import.meta.url)), 'utf8');
+// The per-kind specs (mock-kinds/) hold the mock prompts and schemas — the same
+// "what to ask" half — so they are held to the same rules, every file of them.
+const KIND_DIR = fileURLToPath(new URL('./mock-kinds/', import.meta.url));
+const KIND_SOURCES = readdirSync(KIND_DIR)
+  .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+  .map((f) => ({ file: f, source: readFileSync(path.join(KIND_DIR, f), 'utf8') }));
 
 /** Lines matching a pattern, reported with their numbers so a failure is actionable. */
 function hits(pattern: RegExp, source = SOURCE): string[] {
@@ -92,4 +99,22 @@ describe('llm.mock.ts stays vendor-free too', () => {
       expect(call).toMatch(/maxTokens: \d+/);
     }
   });
+});
+
+describe('mock-kinds/ stays vendor-free, and never calls a model itself', () => {
+  it('finds the spec files (an empty scan would pass vacuously)', () => {
+    expect(KIND_SOURCES.map((k) => k.file)).toContain('system-design.ts');
+  });
+
+  for (const { file, source } of KIND_SOURCES) {
+    it(`${file}: no "provider", no SDK, no wire format, no model name, no model call`, () => {
+      const h = (p: RegExp) => hits(p, source).map((l) => `${file}:${l}`);
+      expect(h(/provider/i)).toEqual([]);
+      expect(h(/@anthropic-ai\/sdk|openai|from '\.\.\/llm\.anthropic/)).toEqual([]);
+      expect(h(/messages\.create|input_schema|cache_control|type: 'ephemeral'/)).toEqual([]);
+      expect(h(/claude-|ANTHROPIC_MODEL|ANTHROPIC_API_KEY/)).toEqual([]);
+      // Specs hold prompts and schemas; llm.mock.ts is the one place that calls.
+      expect(h(/\b(structured|textCall)\(|from '\.\.\/llm\.client/)).toEqual([]);
+    });
+  }
 });

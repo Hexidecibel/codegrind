@@ -121,6 +121,25 @@ describe('start', () => {
     expect(fake.interviewerTurn).not.toHaveBeenCalled();
   });
 
+  it('takes an explicit kind, and stores and threads it', async () => {
+    const view = await start({ kind: 'system-design', promptId: 'url-shortener' });
+    expect(view.kind).toBe('system-design');
+    expect(view.limits).toEqual({ turnCap: 40, minutes: 45 });
+    // The kind reaches the model call, so its spec (prompts, tools) is used.
+    expect(fake.interviewerTurn.mock.calls[0][2]).toBe('system-design');
+    const list = await (await app.request('/api/mocks')).json();
+    expect(list.mocks[0]).toMatchObject({ kind: 'system-design', promptTitle: 'A URL shortener' });
+  });
+
+  it('rejects an unknown kind with a 400 before spending anything', async () => {
+    for (const kind of ['behavioral-ish', 42, 'SYSTEM-DESIGN']) {
+      const res = await post('/api/mock/start', { kind });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/kind must be one of/);
+    }
+    expect(fake.interviewerTurn).not.toHaveBeenCalled();
+  });
+
   it('leaves no mock behind when the opening call fails', async () => {
     fake.interviewerTurn.mockRejectedValueOnce(new Error('boom'));
     expect((await post('/api/mock/start', {})).status).toBe(502);
@@ -139,6 +158,20 @@ describe('reads are free', () => {
     expect((await app.request('/api/mock/missing')).status).toBe(404);
     expect(fake.interviewerTurn).not.toHaveBeenCalled();
     expect(fake.gradeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/mock/prompts', () => {
+  it('serves the system-design bank with no kind and with kind=system-design', async () => {
+    const plain = await (await app.request('/api/mock/prompts')).json();
+    const explicit = await (await app.request('/api/mock/prompts?kind=system-design')).json();
+    expect(explicit).toEqual(plain);
+    expect(plain.prompts.map((p: { id: string }) => p.id)).toContain('event-ticketing');
+    expect(Object.keys(plain.prompts[0])).toEqual(['id', 'title', 'brief', 'familiar']);
+  });
+
+  it('is a 400 for an unknown kind', async () => {
+    expect((await app.request('/api/mock/prompts?kind=nope')).status).toBe(400);
   });
 });
 
