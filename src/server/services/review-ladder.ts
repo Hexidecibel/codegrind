@@ -16,9 +16,12 @@
 //   * a lapse (miss on a live item, on a later day) drops ONE rung, not to the
 //     bottom; several misses on one day count as one lapse
 //   * a cleared item that is missed again re-enters at rung 0
+//   * (Phase H2) with an interview loop ahead, no due date lands past the loop's
+//     final-review day: `deadlineMs` caps it (shared/loops.capDueAtMs)
 // No database and no clock it is not handed, like today.compute.
 
 import { localDay } from './today.compute.js';
+import { capDueAtMs } from '../../shared/loops.js';
 
 /** Days until due, per rung: a success climbs 1 → 3 → 7 → 14. */
 export const RUNG_DAYS = [1, 3, 7, 14] as const;
@@ -42,7 +45,9 @@ export interface LadderMove {
 }
 
 const clampRung = (r: number) => Math.max(0, Math.min(TOP_RUNG, Math.floor(Number.isFinite(r) ? r : 0)));
-const dueIn = (rung: number, nowMs: number) => new Date(nowMs + RUNG_DAYS[clampRung(rung)] * DAY_MS).toISOString();
+/** Due `RUNG_DAYS[rung]` days from now, capped at the loop deadline (null = no loop). */
+const dueIn = (rung: number, nowMs: number, deadlineMs: number | null = null) =>
+  new Date(capDueAtMs(nowMs + RUNG_DAYS[clampRung(rung)] * DAY_MS, nowMs, deadlineMs)).toISOString();
 
 function sameLocalDay(iso: string | null, nowMs: number, tz: string): boolean {
   if (!iso) return false;
@@ -51,17 +56,22 @@ function sameLocalDay(iso: string | null, nowMs: number, tz: string): boolean {
 }
 
 /** A miss (failed, or solved only with help). `row` null = not queued yet. */
-export function ladderOnMiss(row: LadderRow | null, nowMs: number, tz: string): LadderMove {
+export function ladderOnMiss(row: LadderRow | null, nowMs: number, tz: string, deadlineMs: number | null = null): LadderMove {
   const now = new Date(nowMs).toISOString();
-  if (!row || row.clearedAt !== null) return { rung: 0, dueAt: dueIn(0, nowMs), clearedAt: null, lastMissAt: now };
+  if (!row || row.clearedAt !== null) return { rung: 0, dueAt: dueIn(0, nowMs, deadlineMs), clearedAt: null, lastMissAt: now };
   // A second miss the same day is the same lapse — it must not walk the item
   // down the ladder one submit at a time.
   const rung = sameLocalDay(row.lastMissAt, nowMs, tz) ? clampRung(row.rung) : clampRung(row.rung - 1);
-  return { rung, dueAt: dueIn(rung, nowMs), clearedAt: null, lastMissAt: now };
+  return { rung, dueAt: dueIn(rung, nowMs, deadlineMs), clearedAt: null, lastMissAt: now };
 }
 
 /** A clean, unaided solve of a queued item. Null = nothing to change. */
-export function ladderOnCleanSolve(row: LadderRow | null, nowMs: number, tz: string): LadderMove | null {
+export function ladderOnCleanSolve(
+  row: LadderRow | null,
+  nowMs: number,
+  tz: string,
+  deadlineMs: number | null = null
+): LadderMove | null {
   if (!row || row.clearedAt !== null) return null;
   // Same day as the miss: recall of the last few minutes, not spaced recall.
   if (sameLocalDay(row.lastMissAt, nowMs, tz)) return null;
@@ -72,12 +82,12 @@ export function ladderOnCleanSolve(row: LadderRow | null, nowMs: number, tz: str
     return { rung: TOP_RUNG, dueAt: row.dueAt, clearedAt: now, lastMissAt: row.lastMissAt };
   }
   const rung = clampRung(row.rung) + 1;
-  return { rung, dueAt: dueIn(rung, nowMs), clearedAt: null, lastMissAt: row.lastMissAt };
+  return { rung, dueAt: dueIn(rung, nowMs, deadlineMs), clearedAt: null, lastMissAt: row.lastMissAt };
 }
 
 /** A skip of a due item: push it out by its rung, change nothing else. */
-export function ladderSnoozeDue(row: LadderRow, nowMs: number): string {
-  return dueIn(row.rung, nowMs);
+export function ladderSnoozeDue(row: LadderRow, nowMs: number, deadlineMs: number | null = null): string {
+  return dueIn(row.rung, nowMs, deadlineMs);
 }
 
 /**

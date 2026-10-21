@@ -21,10 +21,10 @@ import {
 import type { Language } from '../../shared/languages.js';
 import { TIER_REQUIREMENT, WEAK_SCORE, tierProgress } from '../services/curriculum.js';
 import { planSession, type SessionSnapshotTopic } from '../services/llm.service.js';
-import { nextIntent, peekUpNext, type SchedulerIntent } from '../services/scheduler.service.js';
+import { breadthIntent, nextIntent, peekUpNext, type SchedulerIntent } from '../services/scheduler.service.js';
 import { getAdaptiveProblem } from '../services/bank.service.js';
 import { errorBody } from '../services/explain.service.js';
-import { dailyFocus, todayMissTopics } from '../services/today.service.js';
+import { breadthSlot, dailyFocus, todayMissTopics } from '../services/today.service.js';
 
 export const sessionRoutes = new Hono();
 
@@ -96,7 +96,11 @@ sessionRoutes.post('/session/start', async (c) => {
     const focus = dailyFocus();
     // Today's Recognize / drill-card misses: a smaller same-day lean.
     const misses = todayMissTopics();
-    const intent = nextIntent({ language, plan, dailyFocus: focus, missFocus: misses });
+    // Phase H2: the day's Problem 2 is the breadth floor's pick.
+    const slot = breadthSlot();
+    const intent =
+      (slot ? breadthIntent(language, slot.avoidTopic) : null) ??
+      nextIntent({ language, plan, dailyFocus: focus, missFocus: misses });
     const record = await getAdaptiveProblem(intent);
 
     createSession(language, sessionId, plan);
@@ -140,7 +144,8 @@ sessionRoutes.post('/session/:id/next', async (c) => {
 
     const focus = dailyFocus();
     const misses = todayMissTopics();
-    const intent = nextIntent({
+    const slot = breadthSlot();
+    const intent = (slot ? breadthIntent(session.language, slot.avoidTopic) : null) ?? nextIntent({
       // The language the sitting STARTED in — see createSession above.
       language: session.language,
       plan: session.plan,

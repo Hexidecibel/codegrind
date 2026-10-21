@@ -77,6 +77,10 @@ import {
   topicWeakness,
 } from './recognize.compute.js';
 import * as store from './recognize.store.js';
+import * as todayStore from './today.store.js';
+import { RECOGNIZE_STOCK_PER_DAY, recognizeStockTopic } from './breadth.compute.js';
+import { generateAndStore } from './bank.service.js';
+import type { Language } from '../../shared/languages.js';
 
 export class RecognizeError extends Error {
   constructor(
@@ -148,7 +152,46 @@ export function startSession(n: unknown, now = new Date()): RecognizeSession {
       codeFree: r.used || r.attempted || r.revealed,
     });
   }
+  stockEmptyTopic(rows, language, now);
   return { cards, dueLeft: sel.dueLeft };
+}
+
+// -----------------------------------------------------------------------------
+// Phase H2 breadth floor: a topic with no bank problem never shows up here. A
+// session start may stock ONE such topic per local day (breadth.compute
+// RECOGNIZE_STOCK_PER_DAY): an easy problem through the normal generation path
+// (leak filter included), in the background, unused (the grind can serve it).
+// Bounded three ways: the day's budget is claimed on daily_sessions BEFORE the
+// call (so a failure still spends it — no retries), one in flight at a time,
+// and only with the "AI reviews" toggle on. No loop: one call, then done.
+// -----------------------------------------------------------------------------
+let stockInFlight: Promise<void> | null = null;
+
+/** Exported for tests: resolves when a background stock call (if any) is done. */
+export function recognizeStockIdle(): Promise<void> {
+  return stockInFlight ?? Promise.resolve();
+}
+
+function stockEmptyTopic(rows: readonly { topic: string }[], language: Language, now: Date): void {
+  try {
+    if (stockInFlight || !aiReviewsEnabled()) return;
+    const counts = new Map<string, number>();
+    for (const r of rows) counts.set(r.topic, (counts.get(r.topic) ?? 0) + 1);
+    const topic = recognizeStockTopic(counts);
+    if (!topic) return;
+    const date = localDay(now.getTime(), todayTz());
+    const day = todayStore.getDay(date);
+    if (!day || day.recognizeStocked >= RECOGNIZE_STOCK_PER_DAY) return;
+    todayStore.bumpRecognizeStocked(date, now);
+    stockInFlight = generateAndStore(language, topic, 'easy')
+      .then((p) => console.log(`[recognize] stocked ${topic}: "${p.title}"`))
+      .catch((err) => console.error(`[recognize] stocking ${topic} failed:`, err instanceof Error ? err.message : err))
+      .finally(() => {
+        stockInFlight = null;
+      });
+  } catch (err) {
+    console.error('[recognize] stock check failed:', err instanceof Error ? err.message : err);
+  }
 }
 
 /** Primer generations in flight, per topic: concurrent reveals share one call. */

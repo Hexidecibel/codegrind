@@ -1418,7 +1418,7 @@ const EMIT_PRIMER_TOOL: ToolSpec = {
 /** Generate a durable primer card for one topic/pattern (caller caches it). */
 export async function generatePrimer(topic: Topic): Promise<Primer> {
   const { input } = await structured({
-    role: 'small',
+    role: 'workhorse',
     // 2500: 1500 plus headroom for the new tokenizer (~30% more tokens for the
     // same text) — a truncated primer card is cached forever.
     maxTokens: 2500,
@@ -1505,7 +1505,7 @@ function coerceLessonKind(raw: unknown, fallback: LessonKind): LessonKind {
  */
 export async function generateTrackOutline(topic: Topic): Promise<TrackOutlineItem[]> {
   const { input } = await structured({
-    role: 'small',
+    role: 'workhorse',
     // 2500: 1500 plus tokenizer headroom; a truncated outline is cached forever.
     maxTokens: 2500,
     // Off: 6-8 {kind,title,brief} triples in a forced tool call.
@@ -1611,7 +1611,7 @@ export async function generateLessonBody(
   primer: Primer
 ): Promise<Lesson> {
   const { input } = await structured({
-    role: 'small',
+    role: 'workhorse',
     // 3000: 2000 plus tokenizer headroom — a lesson body is cached forever, so
     // a truncated one is permanent.
     maxTokens: 3000,
@@ -1661,7 +1661,7 @@ Use that as the concrete example.`
     : 'You have no specific problem to anchor to — use a canonical example instead.';
 
   const { input } = await structured({
-    role: 'small',
+    role: 'workhorse',
     // 3000: 2000 plus tokenizer headroom — a lesson body is cached forever, so
     // a truncated one is permanent.
     maxTokens: 3000,
@@ -1697,7 +1697,7 @@ export async function generateWalkthroughLesson(
   seq: number
 ): Promise<Lesson> {
   const { input } = await structured({
-    role: 'small',
+    role: 'workhorse',
     // 3000: 2000 plus tokenizer headroom — a lesson body is cached forever, so
     // a truncated one is permanent.
     maxTokens: 3000,

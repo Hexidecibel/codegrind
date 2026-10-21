@@ -34,6 +34,12 @@ export interface DailySessionRow {
   stepNotes: StepNotes;
   /** Failed automatic attempts per target: the retry budget (today.compute.pendingReviews). */
   aiFailures: AiFailures;
+  /** Phase H2: the "30-min day" toggle. */
+  quick: boolean;
+  /** When the final review pulled every open item due (once per day). */
+  finalReviewAt: string | null;
+  /** Bank problems generated today so Recognize reaches an empty topic. */
+  recognizeStocked: number;
 }
 
 export type AiFailures = Partial<Record<AiReviewTarget, { n: number; at: string }>>;
@@ -63,6 +69,28 @@ function prepare() {
     ),
     setStepNotes: db.prepare(`UPDATE daily_sessions SET stepNotes = @notes, updatedAt = @now WHERE date = @date`),
     setAiFailures: db.prepare(`UPDATE daily_sessions SET aiFailures = @failures, updatedAt = @now WHERE date = @date`),
+    setQuick: db.prepare(`UPDATE daily_sessions SET quick = @quick, updatedAt = @now WHERE date = @date`),
+    bumpRecognizeStocked: db.prepare(
+      `UPDATE daily_sessions SET recognizeStocked = COALESCE(recognizeStocked, 0) + 1, updatedAt = @now WHERE date = @date`
+    ),
+    // The final review: claim the day (only the first caller wins), then pull
+    // every open review problem and drill card due at local midnight.
+    claimFinalReview: db.prepare(
+      `UPDATE daily_sessions SET finalReviewAt = @now, updatedAt = @now WHERE date = @date AND finalReviewAt IS NULL`
+    ),
+    pullReviews: db.prepare(`UPDATE review_queue SET dueAt = @dayStart WHERE clearedAt IS NULL AND dueAt > @dayStart`),
+    pullCards: db.prepare(`UPDATE mock_gaps SET dueAt = @dayStart WHERE retiredAt IS NULL AND dueAt > @dayStart`),
+    readinessAttempts: db.prepare(`
+      SELECT a.problemId, a.difficulty, a.solved, a.hintsUsed, a.createdAt, a.prediction, n.time AS refTime
+      FROM attempts a LEFT JOIN recognize_notes n ON n.problemId = a.problemId
+      WHERE a.language = @language AND a.createdAt >= @since
+      ORDER BY a.createdAt ASC
+    `),
+    cardReviews: db.prepare(`
+      SELECT COALESCE(m.kind, '') AS kind, r.grade, r.intervalDays
+      FROM card_reviews r LEFT JOIN mock_gaps g ON g.id = r.cardId LEFT JOIN mocks m ON m.id = g.mockId
+      WHERE r.at >= @since
+    `),
     recognizeSince: db.prepare(`
       SELECT r.problemId, COALESCE(p.title, '') AS title, r.topic, r.picked, r.patternCorrect, r.approach, r.grade, r.aiVerdict
       FROM recognize_attempts r LEFT JOIN problems p ON p.id = r.problemId
@@ -91,7 +119,7 @@ function prepare() {
       ORDER BY m.createdAt ASC
     `),
     gradeHistory: db.prepare(`
-      SELECT m.kind AS kind, g.verdict AS verdict FROM mock_grades g JOIN mocks m ON m.id = g.mockId
+      SELECT m.kind AS kind, g.verdict AS verdict, g.createdAt AS createdAt FROM mock_grades g JOIN mocks m ON m.id = g.mockId
       ORDER BY g.createdAt DESC LIMIT ?
     `),
     cardsDueBefore: db.prepare(`
@@ -128,6 +156,9 @@ interface RawDay {
   debriefRegens?: number | null;
   stepNotes?: string | null;
   aiFailures?: string | null;
+  quick?: number | null;
+  finalReviewAt?: string | null;
+  recognizeStocked?: number | null;
 }
 
 function safeJson<T>(s: string | null): T | null {
@@ -153,6 +184,9 @@ function parseDay(r: RawDay | undefined): DailySessionRow | null {
     debriefRegens: r.debriefRegens ?? 0,
     stepNotes: parseNotes(safeJson<Record<string, unknown>>(r.stepNotes ?? null)),
     aiFailures: safeJson<AiFailures>(r.aiFailures ?? null) ?? {},
+    quick: r.quick === 1,
+    finalReviewAt: r.finalReviewAt ?? null,
+    recognizeStocked: r.recognizeStocked ?? 0,
   };
 }
 
@@ -310,8 +344,70 @@ export function mocksSince(iso: string): TodayMockFull[] {
   return rows.map((r) => ({ ...r, grade: safeJson(r.grade) }));
 }
 
-export function gradeHistory(limit = 30): { kind: string; verdict: MockVerdict }[] {
-  return S().gradeHistory.all(limit) as { kind: string; verdict: MockVerdict }[];
+export function gradeHistory(limit = 30): { kind: string; verdict: MockVerdict; createdAt: string }[] {
+  return S().gradeHistory.all(limit) as { kind: string; verdict: MockVerdict; createdAt: string }[];
+}
+
+export function setQuick(date: string, quick: boolean, now: Date): void {
+  S().setQuick.run({ date, quick: quick ? 1 : 0, now: now.toISOString() });
+}
+
+export function bumpRecognizeStocked(date: string, now: Date): void {
+  S().bumpRecognizeStocked.run({ date, now: now.toISOString() });
+}
+
+/**
+ * The final review, once per day: claim it on the day's row, and only if this
+ * call won the claim pull every open review problem and drill card due at
+ * `dayStart`. Returns how many items moved (null = already done today).
+ */
+export const runFinalReview = (date: string, dayStart: string, now: Date): { reviews: number; cards: number } | null =>
+  db.transaction(() => {
+    if (S().claimFinalReview.run({ date, now: now.toISOString() }).changes === 0) return null;
+    return {
+      reviews: S().pullReviews.run({ dayStart }).changes,
+      cards: S().pullCards.run({ dayStart }).changes,
+    };
+  })();
+
+export interface ReadinessAttemptRow {
+  problemId: string;
+  difficulty: string;
+  solved: boolean;
+  hintsUsed: number;
+  createdAt: string;
+  confidence: number | null;
+  predTime: string | null;
+  refTime: string | null;
+}
+
+export function readinessAttempts(language: Language, since: string): ReadinessAttemptRow[] {
+  const rows = S().readinessAttempts.all({ language, since }) as Array<{
+    problemId: string;
+    difficulty: string;
+    solved: number;
+    hintsUsed: number;
+    createdAt: string;
+    prediction: string | null;
+    refTime: string | null;
+  }>;
+  return rows.map((r) => {
+    const p = safeJson<{ predTime?: unknown; confidence?: unknown }>(r.prediction);
+    return {
+      problemId: r.problemId,
+      difficulty: r.difficulty,
+      solved: r.solved === 1,
+      hintsUsed: r.hintsUsed,
+      createdAt: r.createdAt,
+      confidence: typeof p?.confidence === 'number' ? p.confidence : null,
+      predTime: typeof p?.predTime === 'string' ? p.predTime : null,
+      refTime: r.refTime,
+    };
+  });
+}
+
+export function cardReviews(since: string): { kind: string; grade: string; intervalDays: number }[] {
+  return S().cardReviews.all({ since }) as { kind: string; grade: string; intervalDays: number }[];
 }
 
 export function cardsDueBefore(dayStart: string, now: Date): number {

@@ -130,6 +130,9 @@ function prepare() {
         MIN(CASE WHEN retiredAt IS NULL AND dueAt > @now THEN dueAt END) AS nextDueAt
       FROM mock_gaps
     `),
+    logCardReview: db.prepare(`
+      INSERT INTO card_reviews (cardId, grade, intervalDays, at) VALUES (@cardId, @grade, @intervalDays, @at)
+    `),
     updateSchedule: db.prepare(`
       UPDATE mock_gaps SET step = @step, dueAt = @dueAt, reps = @reps, lapses = @lapses,
         lastGrade = @lastGrade, lastReviewedAt = @lastReviewedAt, retiredAt = @retiredAt
@@ -352,6 +355,16 @@ export function cardCounts(now: Date): { upcoming: number; retired: number; next
     nextDueAt: string | null;
   };
   return { upcoming: r.upcoming ?? 0, retired: r.retired ?? 0, nextDueAt: r.nextDueAt ?? null };
+}
+
+/**
+ * One self-grade into the retention log (Phase H2 readiness): the interval is
+ * the time since the card's last review, or since it was made.
+ */
+export function logCardReview(cardId: number, grade: string, sinceIso: string, now: Date): void {
+  const since = Date.parse(sinceIso);
+  const intervalDays = Number.isFinite(since) ? Math.max(0, (now.getTime() - since) / 86_400_000) : 0;
+  S().logCardReview.run({ cardId, grade, intervalDays, at: now.toISOString() });
 }
 
 export function updateCardSchedule(id: number, s: GapCardSchedule): void {

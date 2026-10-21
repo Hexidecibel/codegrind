@@ -7,10 +7,12 @@
 // each at most once per day, deduped, with a failure budget, and gated by the
 // Settings "AI reviews" toggle. POST /api/today/debrief still works on click.
 
-import { TOPICS, type Topic } from '../../shared/types.js';
+import type { Topic } from '../../shared/types.js';
 import { MOCK_KINDS, isMockKind, mockKindInfo } from '../../shared/mock-kinds.js';
 import { costOf } from '../../shared/mock.js';
 import {
+  QUICK_ENVELOPE_REPS,
+  QUICK_OFF_STEPS,
   SKIPPABLE_STEPS,
   STEP_NOTE_LABEL,
   TODAY_STEPS,
@@ -24,20 +26,15 @@ import {
   type TodayState,
   type TodayStepId,
 } from '../../shared/today.js';
-import {
-  getActiveLanguage,
-  getAttemptsByProblem,
-  getCleanSolvesByTopic,
-  getSkillState,
-  getTaggedAttempts,
-} from './db.js';
-import { tierProgress } from './curriculum.js';
+import { getActiveLanguage, getAttemptsByProblem, getProblem, getTaggedAttempts, listLoops } from './db.js';
+import type { Language } from '../../shared/languages.js';
+import { biasKinds, loopCountdown, type LoopCountdown } from '../../shared/loops.js';
+import { computeReadiness } from './readiness.compute.js';
 import { computeTrend, splitMistakes } from './reflect.compute.js';
 import {
   MAX_DEBRIEF_REGENS,
   MAX_NOTE_REFRESHES,
   bumpFailure,
-  computeReadiness,
   dayStartMs,
   deriveSteps,
   localDay,
@@ -76,6 +73,15 @@ interface DayContext {
   row: store.DailySessionRow;
 }
 
+/** The nearest upcoming interview loop for a local day. Never throws. */
+export function nextLoopFor(date: string): LoopCountdown | null {
+  try {
+    return loopCountdown(listLoops(), date);
+  } catch {
+    return null;
+  }
+}
+
 /** The local day, with its row (created on first touch, mock kind frozen then). */
 function dayContext(now: Date): DayContext {
   const tz = todayTz();
@@ -90,10 +96,40 @@ function dayContext(now: Date): DayContext {
       lastKind: last?.mockKind ?? null,
       grades: store.gradeHistory(),
       focusKind: focusRow?.debrief?.tomorrowFocus.mockKind ?? null,
+      // Phase H2: within LOOP_BIAS_DAYS of an interview, rehearse its rounds.
+      loopKinds: biasKinds(nextLoopFor(date)),
     });
     row = store.ensureDay(date, kind, now);
   }
+  // Phase H2: the loop's final-review day pulls every open item due — once.
+  const loop = nextLoopFor(date);
+  if (loop?.isFinalReviewDay && !row.finalReviewAt) {
+    try {
+      if (store.runFinalReview(date, dayStart, now)) row = store.getDay(date)!;
+    } catch (err) {
+      console.error('[today] final review failed:', err instanceof Error ? err.message : err);
+    }
+  }
   return { date, dayStart, row };
+}
+
+/**
+ * Phase H2 breadth floor: is the next grind problem the day's Problem 2? True
+ * when exactly one NEW problem was attempted today and Problem 2 is still
+ * wanted (not skipped, not a 30-min day, the day not ended). Returns Problem 1's
+ * topic so the pick avoids it. Never throws — a broken read means "no".
+ */
+export function breadthSlot(now = new Date()): { avoidTopic: string | null } | null {
+  try {
+    const { dayStart, row } = dayContext(now);
+    if (row.quick || row.endedEarlyAt || row.skips.includes('problem2')) return null;
+    const attempts = store.attemptsSince(dayStart);
+    const fresh = newProblemsToday({ attempts, dayStart });
+    if (fresh.length !== 1) return null;
+    return { avoidTopic: getProblem(fresh[0].problemId)?.topic ?? null };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -117,7 +153,8 @@ export function getToday(now = new Date()): TodayState {
 
   const attempts = store.attemptsSince(dayStart);
   const mocks = store.mocksSince(dayStart);
-  const envelope = todayEnvelope(dayStart, now);
+  const envelope = todayEnvelope(dayStart, now, row.quick ? QUICK_ENVELOPE_REPS : undefined);
+  const nextLoop = nextLoopFor(date);
   const derived = deriveSteps({
     dayStart,
     attempts,
@@ -132,17 +169,11 @@ export function getToday(now = new Date()): TodayState {
     mockKindLabel: mockKindInfo(mockKind).label,
     hasDebrief: !!row.debrief,
     debriefVerdict: row.debrief?.verdict ?? null,
+    quick: row.quick,
+    finalReview: nextLoop?.isFinalReviewDay ? { company: nextLoop.company, daysLeft: nextLoop.daysLeft } : null,
   });
 
-  const skill = new Map(getSkillState(language).map((s) => [s.topic, s]));
-  const clean = getCleanSolvesByTopic(language);
-  const readiness = computeReadiness({
-    topics: TOPICS.map((t) => {
-      const tier = tierProgress(clean.get(t));
-      return { topic: t, attempts: skill.get(t)?.attempts ?? 0, score: tier.score, tiered: tier.level !== 'none' };
-    }),
-    grades: store.gradeHistory(),
-  });
+  const readiness = readinessNow(language, nextLoop, now);
 
   const monthStart = new Date(dayStartMs(`${date.slice(0, 7)}-01`, todayTz())).toISOString();
   return {
@@ -171,7 +202,28 @@ export function getToday(now = new Date()): TodayState {
     aiPending: [...(running.get(date) ?? [])],
     aiReviews: aiReviewsEnabled(),
     spend: aiSpend(dayStart, monthStart),
+    quick: row.quick,
+    nextLoop,
   };
+}
+
+/** The readiness strip (readiness.compute), from the last 120 days of evidence. */
+function readinessNow(language: Language, nextLoop: LoopCountdown | null, now: Date) {
+  const since = new Date(now.getTime() - 120 * 86_400_000).toISOString();
+  return computeReadiness({
+    now: now.getTime(),
+    attempts: store.readinessAttempts(language, since),
+    grades: store.gradeHistory(60),
+    cardReviews: store.cardReviews(since),
+    nextLoop: nextLoop ? { company: nextLoop.company, daysLeft: nextLoop.daysLeft, rounds: nextLoop.rounds } : null,
+  });
+}
+
+/** Turn the day's "30-min day" mode on or off. */
+export function setQuick(on: boolean, now = new Date()): TodayState {
+  const { date } = dayContext(now);
+  store.setQuick(date, on, now);
+  return getToday(now);
 }
 
 /**
@@ -266,7 +318,21 @@ export function buildDebriefInput(now = new Date()): DebriefInput {
           gaps: (graded.grade?.gaps ?? []).map((g) => g.title).filter(Boolean).slice(0, 6),
         }
       : null,
-    skipped: state.steps.filter((s) => s.status === 'skipped').map((s) => s.label),
+    // A 30-min day's Problem 2 and mock were planned off, not skipped.
+    skipped: state.steps
+      .filter((s) => s.status === 'skipped' && !(state.quick && QUICK_OFF_STEPS.includes(s.id)))
+      .map((s) => s.label),
+    ...(state.quick ? { quick: true } : {}),
+    ...(state.nextLoop
+      ? {
+          nextLoop: {
+            company: state.nextLoop.company,
+            date: state.nextLoop.date,
+            daysLeft: state.nextLoop.daysLeft,
+            rounds: state.nextLoop.rounds,
+          },
+        }
+      : {}),
     cards: {
       reviewed: cards.length,
       got: cards.filter((c) => c.lastGrade === 'got').length,

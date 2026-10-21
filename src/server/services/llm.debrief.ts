@@ -45,6 +45,10 @@ export interface DebriefInput {
   week: { activeDays: number; attempts: number; solved: number; firstSubmitPassPct: number | null; topMistakes: string[] };
   /** Today's step notes (Phase F). Absent/empty renders nothing, byte-identical to before. */
   stepNotes?: CarryNote[];
+  /** Phase H2: a planned "30-min day" (warm-up, one problem, debrief). Absent = a normal day. */
+  quick?: boolean;
+  /** Phase H2: the nearest interview loop. Absent renders nothing. */
+  nextLoop?: { company: string; date: string; daysLeft: number; rounds: string[] };
 }
 
 export const DEBRIEF_SYSTEM = `You are a blunt, specific interview-prep coach reviewing ONE day of practice for a candidate targeting Staff engineer roles. The day's routine: a warm-up of drill cards and review problems, two adaptive algorithm problems (predict complexity before solving), and one mock interview.
@@ -102,6 +106,18 @@ export const EMIT_DEBRIEF_TOOL: ToolSpec = {
 /** The digest as the model reads it. Pure; exported for tests and the fixture. */
 export function renderDebriefInput(d: DebriefInput): string {
   const lines: string[] = [`Day: ${d.date}`, ''];
+  // Phase H2 lines: only when set, so a day without a loop or a 30-min toggle
+  // renders byte-identically to before (llm.golden.test.ts).
+  if (d.nextLoop) {
+    const when = d.nextLoop.daysLeft <= 0 ? 'TODAY' : d.nextLoop.daysLeft === 1 ? 'TOMORROW' : `in ${d.nextLoop.daysLeft} days`;
+    lines.push(
+      `Next interview: ${d.nextLoop.company} ${when} (${d.nextLoop.date}); rounds: ${d.nextLoop.rounds.join(', ') || 'unknown'}. The verdict line must mention this countdown, and tomorrowFocus should serve these rounds.`,
+      ''
+    );
+  }
+  if (d.quick) {
+    lines.push('This was a planned 30-minute day (warm-up, one problem, debrief): Problem 2 and the mock were off by design, not skipped. Keep the debrief short.', '');
+  }
   lines.push('Problems today:');
   if (!d.attempts.length) lines.push('- none');
   for (const a of d.attempts) {

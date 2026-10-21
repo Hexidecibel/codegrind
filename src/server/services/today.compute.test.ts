@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   DAILY_FOCUS_BIAS,
   coerceDebrief,
-  computeReadiness,
   dailyFocusBias,
   dayStartMs,
   deriveSteps,
@@ -18,7 +17,6 @@ import {
   FAILURE_COOLDOWN_MS,
   MAX_DEBRIEF_REGENS,
   MAX_NOTE_REFRESHES,
-  READINESS_MIN_MOCKS,
   type PendingReviewsInput,
   type DeriveInput,
   type TodayAttemptRow,
@@ -216,42 +214,6 @@ describe('pickMockKind', () => {
   });
 });
 
-describe('computeReadiness', () => {
-  it('shows every area, "not started" without data', () => {
-    const r = computeReadiness({ topics: [{ topic: 'arrays', attempts: 0, score: 0, tiered: false }], grades: [] });
-    expect(r.map((a) => [a.id, a.pct, a.note])).toEqual([
-      ['algos', null, 'not started'],
-      ['system-design', null, 'not started'],
-      ['behavioral', null, 'not started'],
-      ['coding', null, 'not started'],
-    ]);
-  });
-
-  it('algos from tier scores, mocks from the last three verdicts', () => {
-    const r = computeReadiness({
-      topics: [
-        { topic: 'arrays', attempts: 3, score: 0.5, tiered: true },
-        { topic: 'hashing', attempts: 0, score: 0, tiered: false },
-      ],
-      grades: [
-        { kind: 'system-design', verdict: 'at' },
-        { kind: 'system-design', verdict: 'below' },
-        { kind: 'system-design', verdict: 'above' },
-        { kind: 'system-design', verdict: 'below' }, // 4th: ignored
-      ],
-    });
-    expect(r[0]).toMatchObject({ pct: 25, note: '1/2 topics tiered' });
-    expect(r[1]).toMatchObject({ pct: 50, note: '4 mocks · last: at level' });
-  });
-
-  it('shows an evidence count, not a percentage, until there are READINESS_MIN_MOCKS grades (Phase H)', () => {
-    const r = computeReadiness({ topics: [], grades: [{ kind: 'behavioral', verdict: 'above' }] });
-    const b = r.find((a) => a.id === 'behavioral')!;
-    expect(b.pct).toBeNull();
-    expect(b.note).toBe(`1 of ${READINESS_MIN_MOCKS} mocks · last: above level`);
-  });
-});
-
 describe('coerceDebrief', () => {
   it('keeps the good parts and drops the rest', () => {
     const d = coerceDebrief({
@@ -401,5 +363,63 @@ describe('miss focus (Phase F)', () => {
     expect(missFocusBias('heap', [])).toBe(0);
     expect(missFocusBias('heap', undefined)).toBe(0);
     expect(MISS_FOCUS_BIAS).toBeLessThan(DAILY_FOCUS_BIAS);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Phase H2
+// -----------------------------------------------------------------------------
+describe('pickMockKind — interview-loop bias (Phase H2)', () => {
+  const kinds = ['system-design', 'behavioral', 'coding'] as const;
+  it('a loop with one known round type wins over the debrief focus and rotation', () => {
+    expect(pickMockKind({ kinds, lastKind: 'system-design', grades: [], focusKind: 'behavioral', loopKinds: ['coding'] })).toBe('coding');
+  });
+  it('rotates among the loop kinds: not yesterday\'s, weakest first', () => {
+    const grades = [
+      { kind: 'coding', verdict: 'above' as const },
+      { kind: 'system-design', verdict: 'below' as const },
+    ];
+    // yesterday was coding → system design (the only other loop kind)
+    expect(pickMockKind({ kinds, lastKind: 'coding', grades, focusKind: null, loopKinds: ['coding', 'system-design'] })).toBe('system-design');
+    // yesterday was behavioral (not in the loop) → the weaker loop kind
+    expect(pickMockKind({ kinds, lastKind: 'behavioral', grades, focusKind: null, loopKinds: ['coding', 'system-design'] })).toBe('system-design');
+    // never graded counts as weakest
+    expect(pickMockKind({ kinds, lastKind: null, grades: [{ kind: 'system-design', verdict: 'at' }], focusKind: null, loopKinds: ['system-design', 'behavioral'] })).toBe('behavioral');
+  });
+  it('no loop kinds (no loop, too far, or only unbuilt rounds) = the old rule', () => {
+    expect(pickMockKind({ kinds, lastKind: 'system-design', grades: [], focusKind: null, loopKinds: [] })).toBe('behavioral');
+  });
+});
+
+describe('deriveSteps — 30-min day (Phase H2)', () => {
+  const at = (h: number) => new Date(Date.parse(DAY_START) + h * 3600_000).toISOString();
+  it('turns Problem 2 and the mock off, keeps review problems out of the warm-up', () => {
+    const d = deriveSteps(input({ quick: true, reviewsDue: 2, cardsDue: 0 }));
+    const byId = Object.fromEntries(d.steps.map((s) => [s.id, s]));
+    expect(byId.warmup.status).toBe('done'); // reviews stay due, but are not the warm-up's on a short day
+    expect(byId.problem2.status).toBe('skipped');
+    expect(byId.problem2.detail).toMatch(/30-min day/);
+    expect(byId.mock.status).toBe('skipped');
+    expect(d.current).toBe('problem1');
+    // the debrief is not locked: the mock is settled (off)
+    expect(byId.debrief.status).not.toBe('locked');
+  });
+  it('a due review re-solve counts as the one problem', () => {
+    const attempts: TodayAttemptRow[] = [
+      { problemId: 'r1', title: 'Old one', solved: true, hintsUsed: 0, createdAt: at(1), firstAt: '2026-10-01T00:00:00.000Z' },
+    ];
+    const quick = deriveSteps(input({ quick: true, attempts }));
+    expect(quick.steps.find((s) => s.id === 'problem1')!.status).toBe('done');
+    expect(quick.current).toBe('debrief');
+    const full = deriveSteps(input({ attempts }));
+    expect(full.steps.find((s) => s.id === 'problem1')!.status).not.toBe('done');
+  });
+  it('an open mock on a short day still shows as in progress', () => {
+    const d = deriveSteps(input({ quick: true, mocks: [{ id: 'm', kind: 'coding', status: 'active', verdict: null, createdAt: at(1) }] }));
+    expect(d.steps.find((s) => s.id === 'mock')!.status).toBe('in-progress');
+  });
+  it('says when the warm-up is a final review', () => {
+    const d = deriveSteps(input({ cardsDue: 3, finalReview: { company: 'Acme', daysLeft: 2 } }));
+    expect(d.steps[0].detail).toMatch(/^Final review before Acme \(in 2 days\)/);
   });
 });

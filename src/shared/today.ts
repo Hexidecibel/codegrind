@@ -18,6 +18,7 @@ import type { MockKind } from './mock-kinds.js';
 import type { Topic } from './types.js';
 import type { TodayRecognize } from './recognize.js';
 import type { TodayEnvelope } from './envelope.js';
+import type { LoopCountdown } from './loops.js';
 
 export const TODAY_STEPS = ['warmup', 'problem1', 'problem2', 'mock', 'debrief'] as const;
 export type TodayStepId = (typeof TODAY_STEPS)[number];
@@ -28,6 +29,11 @@ export function isTodayStep(x: unknown): x is TodayStepId {
 
 /** The steps a user may skip. The debrief is the end of the day, not a step to skip. */
 export const SKIPPABLE_STEPS: readonly TodayStepId[] = ['warmup', 'problem1', 'problem2', 'mock'];
+
+/** Envelope reps in a "30-min day" (Phase H2), instead of the daily setting. */
+export const QUICK_ENVELOPE_REPS = 3;
+/** The steps a "30-min day" turns off. */
+export const QUICK_OFF_STEPS: readonly TodayStepId[] = ['problem2', 'mock'];
 
 export const TODAY_STEP_LABEL: Readonly<Record<TodayStepId, string>> = {
   warmup: 'Warm-up',
@@ -61,14 +67,44 @@ export interface TodayStep {
   ok: boolean | null;
 }
 
-/** One readiness area in the header strip. */
+/**
+ * Readiness verdict for one area against the next interview (Phase H2):
+ *   ready       the evidence says you would pass this round now
+ *   close       one or two signals short
+ *   not-yet     the evidence says you would not
+ *   not-enough  too little evidence to say either way
+ */
+export type ReadinessVerdict = 'ready' | 'close' | 'not-yet' | 'not-enough';
+
+export const READINESS_VERDICT_LABEL: Readonly<Record<ReadinessVerdict, string>> = {
+  ready: 'ready',
+  close: 'close',
+  'not-yet': 'not yet',
+  'not-enough': 'not enough evidence',
+};
+
+/** One measured signal behind a verdict ("first-try pass 62% (n=8)"). */
+export interface ReadinessSignal {
+  id: 'pass' | 'trend' | 'retention' | 'calibration' | 'level';
+  label: string;
+  /** Display value, e.g. "62%", "+1", "n/a". */
+  value: string;
+  /** Data points behind it. */
+  n: number;
+}
+
+/** One readiness area in the header strip. Deterministic — no model call. */
 export interface ReadinessArea {
   id: 'algos' | 'system-design' | 'behavioral' | 'coding';
   label: string;
-  /** 0..100, or null when there is no data yet ("not started"). */
-  pct: number | null;
-  /** A short explanation: "6/14 topics tiered", "last: at level". */
-  note: string;
+  verdict: ReadinessVerdict;
+  /** How much evidence there is, in words: "8 unseen mediums", "2 of 3 mocks". */
+  evidence: string;
+  signals: ReadinessSignal[];
+  /** One line: what would move this verdict. */
+  hint: string;
+  /** Whether the next loop has this round; null with no loop ahead. */
+  inLoop: boolean | null;
 }
 
 export interface DebriefFix {
@@ -143,6 +179,10 @@ export interface TodayState {
   aiReviews: boolean;
   /** AI spend from the usage ledger: every model call the app makes. */
   spend: AiSpend;
+  /** Phase H2: the day's "30-min day" toggle. */
+  quick: boolean;
+  /** The nearest upcoming interview loop, or null. */
+  nextLoop: LoopCountdown | null;
 }
 
 /** The finished things a step review can be written for. `recognize` is the add-on, not a step. */

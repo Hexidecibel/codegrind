@@ -31,6 +31,7 @@ process.env.CODEGRIND_TZ = 'America/Los_Angeles';
 const { todayRoutes } = await import('./today.js');
 const { db, setSetting } = await import('../services/db.js');
 const todaySvc = await import('../services/today.service.js');
+const loopsMod = await import('./loops.js');
 
 const app = new Hono();
 app.route('/api', todayRoutes);
@@ -89,7 +90,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   fake.runDebrief.mockReset();
   review.runStepReview.mockReset();
-  for (const t of ['daily_sessions', 'mock_gaps', 'mock_grades', 'mocks', 'attempts', 'review_queue', 'problems', 'recognize_attempts', 'ai_usage']) {
+  for (const t of ['daily_sessions', 'mock_gaps', 'mock_grades', 'mocks', 'attempts', 'review_queue', 'problems', 'recognize_attempts', 'ai_usage', 'interview_loops', 'card_reviews']) {
     db.prepare(`DELETE FROM ${t}`).run();
   }
   // The pre-Phase-F tests pin click-only behaviour; Phase F's own block turns reviews on.
@@ -485,5 +486,84 @@ describe('smarter picks: today\'s misses bias problem1/2 (Phase F)', () => {
     const top = [...biased].sort((a, b) => b.score - a.score)[0];
     expect(top.topic).toBe('heap');
     expect(MISS_FOCUS_BIAS).toBeLessThan(DAILY_FOCUS_BIAS);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Phase H2: interview loops, the final review, the 30-min day, the breadth slot
+// -----------------------------------------------------------------------------
+describe('Phase H2 — loops, final review, 30-min day', () => {
+  const { loopsRoutes } = loopsMod;
+  const loopsApp = new Hono();
+  loopsApp.route('/api', loopsRoutes);
+  const addLoop = (body: unknown) =>
+    loopsApp.request('/api/loops', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+  it('a loop shows as a countdown and is validated', async () => {
+    expect((await addLoop({ company: 'Acme', date: 'soon', rounds: ['coding'] })).status).toBe(400);
+    const res = await addLoop({ company: 'Acme', date: '2026-10-30', rounds: ['coding', 'project-deep-dive'] });
+    expect(res.status).toBe(200);
+    const body = await (await app.request('/api/today')).json();
+    expect(body.nextLoop).toMatchObject({ company: 'Acme', daysLeft: 9, finalReviewDay: '2026-10-28', isFinalReviewDay: false });
+    expect(body.readiness.find((a: { id: string }) => a.id === 'algos').inLoop).toBe(true);
+    expect(body.readiness.find((a: { id: string }) => a.id === 'behavioral').inLoop).toBe(false);
+  });
+
+  it('the spacing cap: a review miss is never due past the final-review day', async () => {
+    const { enqueueReview, clearReview, getReviewRow } = await import('../services/db.js');
+    await addLoop({ company: 'Gamma', date: '2026-10-25', rounds: ['coding'] }); // final review 10-23
+    insertProblem('cap1');
+    enqueueReview('cap1', 'failed', NOW.getTime() - 3 * 86_400_000);
+    // on rung 2, its miss long ago: a clean solve now climbs to rung 3 (14 days)
+    db.prepare(`UPDATE review_queue SET rung = 2, lastMissAt = '2026-10-01T00:00:00.000Z' WHERE problemId = 'cap1'`).run();
+    clearReview('cap1', NOW.getTime()); // rung 3 = 14 days, capped at 2026-10-23 local midnight
+    expect(getReviewRow('cap1')!.dueAt).toBe('2026-10-23T07:00:00.000Z');
+  });
+
+  it('the final-review day pulls every open review problem and drill card due, once', async () => {
+    await addLoop({ company: 'Acme', date: '2026-10-23', rounds: ['system-design'] }); // final review = today
+    insertProblem('fr1');
+    db.prepare(
+      `INSERT INTO review_queue (problemId, reason, dueAt, attempts, clearedAt, createdAt, rung) VALUES ('fr1', 'failed', '2026-11-05T00:00:00.000Z', 1, NULL, '2026-10-01T00:00:00.000Z', 2)`
+    ).run();
+    insertMock('mfr', 'graded', '2026-10-10T00:00:00.000Z', 'at');
+    insertCard('mfr', '2026-10-10T00:00:00.000Z', '2026-11-01T00:00:00.000Z');
+    const body = await (await app.request('/api/today')).json();
+    expect(body.nextLoop.isFinalReviewDay).toBe(true);
+    const warm = body.steps[0];
+    expect(warm.detail).toMatch(/^Final review before Acme \(in 2 days\)/);
+    expect(warm.detail).toMatch(/1 drill card \+ 1 review problem due/);
+    // once: a later push-out is not pulled back on the next GET
+    db.prepare(`UPDATE review_queue SET dueAt = '2026-11-09T00:00:00.000Z'`).run();
+    const again = await (await app.request('/api/today')).json();
+    expect(again.steps[0].detail).not.toMatch(/review problem/);
+  });
+
+  it('within 3 days of a loop the day\'s mock comes from its rounds', async () => {
+    await addLoop({ company: 'Acme', date: '2026-10-24', rounds: ['behavioral', 'project-deep-dive'] });
+    const body = await (await app.request('/api/today')).json();
+    expect(body.mockKind).toBe('behavioral');
+  });
+
+  it('the 30-min day: toggled, Problem 2 + mock off, debrief unlocks after one problem', async () => {
+    insertProblem('q1');
+    const on = await (await post('/api/today/quick', { on: true })).json();
+    expect(on.quick).toBe(true);
+    expect(on.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'current', 'skipped', 'skipped', 'todo']);
+    insertAttempt('qa', 'q1', '2026-10-21T19:00:00.000Z');
+    const after = await (await app.request('/api/today')).json();
+    expect(after.current).toBe('debrief');
+    const off = await (await post('/api/today/quick', { on: false })).json();
+    expect(off.quick).toBe(false);
+    expect(off.current).toBe('problem2');
+  });
+
+  it('the breadth slot opens after exactly one new problem, not on a 30-min day', async () => {
+    expect(todaySvc.breadthSlot(NOW)).toBeNull();
+    insertProblem('b1');
+    insertAttempt('ba', 'b1', '2026-10-21T19:00:00.000Z');
+    expect(todaySvc.breadthSlot(NOW)).toEqual({ avoidTopic: 'arrays' });
+    await post('/api/today/quick', { on: true });
+    expect(todaySvc.breadthSlot(NOW)).toBeNull();
   });
 });

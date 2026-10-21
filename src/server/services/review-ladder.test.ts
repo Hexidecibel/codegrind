@@ -54,3 +54,27 @@ describe('the review ladder (Phase H)', () => {
     expect(days(T0, ladderSnoozeDue({ rung: 2, lastMissAt: null, clearedAt: null, dueAt: '' }, T0))).toBe(7);
   });
 });
+
+describe('the review ladder — capped by the next interview loop (Phase H2)', () => {
+  it('a rung interval past the loop deadline lands ON the deadline', () => {
+    const deadline = T0 + 4 * DAY; // the final-review day starts in 4 days
+    const row: LadderRow = { rung: 1, lastMissAt: '2026-10-01T00:00:00.000Z', clearedAt: null, dueAt: new Date(T0).toISOString() };
+    const m = ladderOnCleanSolve(row, T0, TZ, deadline)!; // rung 2 = 7 days, capped
+    expect(m.rung).toBe(2);
+    expect(Date.parse(m.dueAt)).toBe(deadline);
+    // without a loop it is the full interval
+    expect(days(T0, ladderOnCleanSolve(row, T0, TZ, null)!.dueAt)).toBe(7);
+  });
+  it('an interval already inside the deadline is untouched', () => {
+    const m = ladderOnMiss(null, T0, TZ, T0 + 4 * DAY);
+    expect(days(T0, m.dueAt)).toBe(1);
+  });
+  it('a deadline already passed caps nothing (the final review covers it)', () => {
+    const m = ladderOnMiss(null, T0, TZ, T0 - DAY);
+    expect(days(T0, m.dueAt)).toBe(1);
+  });
+  it('a skip is capped too', () => {
+    const row: LadderRow = { rung: 3, lastMissAt: null, clearedAt: null, dueAt: new Date(T0).toISOString() };
+    expect(Date.parse(ladderSnoozeDue(row, T0, T0 + 2 * DAY))).toBe(T0 + 2 * DAY);
+  });
+});

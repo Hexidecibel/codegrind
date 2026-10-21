@@ -9,12 +9,13 @@
 //   (skip / end kick them too: ending the day early is a completion event)
 //   POST /api/today/skip             {step, skip?: boolean}                free
 //   POST /api/today/end              {ended?: boolean}  end day early      free
+//   POST /api/today/quick            {on?: boolean}  the "30-min day" toggle free
 //   POST /api/today/debrief          {regenerate?: boolean}                ONE small model call
 //                                    (cached per local day: a repeat without
 //                                    `regenerate` is a free read)
 
 import { Hono, type Context } from 'hono';
-import { TodayError, debrief, getTodayAndKick, kickAiReviews, setEndedEarly, setSkip } from '../services/today.service.js';
+import { TodayError, debrief, getTodayAndKick, kickAiReviews, setEndedEarly, setQuick, setSkip } from '../services/today.service.js';
 import type { TodayState } from '../../shared/today.js';
 import { errorBody } from '../services/explain.service.js';
 
@@ -52,6 +53,15 @@ todayRoutes.post('/today/end', async (c) => {
     return c.json(kicked(setEndedEarly(body.ended !== false)));
   } catch (err) {
     return fail(c, 'today-end', err);
+  }
+});
+
+todayRoutes.post('/today/quick', async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { on?: unknown };
+    return c.json(kicked(setQuick(body.on !== false)));
+  } catch (err) {
+    return fail(c, 'today-quick', err);
   }
 });
 
