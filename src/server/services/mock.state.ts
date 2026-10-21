@@ -29,12 +29,15 @@ import {
 import {
   MOCK_WARN_MINUTES,
   type MockAction,
+  type MockCodingState,
+  type MockRunSummary,
   type MockState,
   type MockTurn,
   type MockTurnKind,
 } from '../../shared/mock.js';
 import type { LlmMessage } from './llm.types.js';
 import { mockKindSpec } from './mock-kinds/index.js';
+import { codingTurnExtras } from './mock-kinds/coding.js';
 
 /** The system-design setup message. Other kinds build theirs through their spec. */
 export { buildSdContext as buildContext } from './mock-kinds/system-design.js';
@@ -66,6 +69,10 @@ export interface CandidateInput {
   action: MockAction;
   /** teach_me only: the concept to teach, when the client knows it. */
   concept?: MockConcept | null;
+  /** Editor kinds (coding): the editor right now. */
+  code?: string;
+  /** Editor kinds: the newest Run/Submit result, validated. */
+  lastRun?: MockRunSummary | null;
 }
 
 const ACTION_NOTE: Record<
@@ -95,12 +102,32 @@ export function renderCandidateMessage(
   state: MockState,
   now: Date,
   kind: MockKind = 'system-design'
-): { rendered: string; endNote: boolean } {
+): {
+  rendered: string;
+  endNote: boolean;
+  /** Editor kinds: what the interviewer now has seen (fold into state.coding). */
+  coding?: Partial<MockCodingState>;
+  /** Editor kinds: the [editor]/[run] text added this turn, for the grader's transcript. */
+  editor?: string;
+} {
   const spec = mockKindSpec(kind);
   const { minutes: MINUTES, turnCap: TURN_CAP } = spec.info;
   const parts: string[] = [];
   const text = input.content.trim();
   if (text) parts.push(text);
+
+  // Coding: the editor (only when it changed since the interviewer last saw it)
+  // and the latest run, rendered HERE, once, like every other note.
+  let coding: Partial<MockCodingState> | undefined;
+  let editor: string | undefined;
+  if (spec.info.editor && state.coding) {
+    const extras = codingTurnExtras({ code: input.code, lastRun: input.lastRun }, state.coding);
+    if (extras.parts.length) {
+      parts.push(...extras.parts);
+      editor = extras.parts.join('\n\n');
+    }
+    coding = extras.patch;
+  }
 
   if (state.pendingSkipNote.length) {
     parts.push(
@@ -132,7 +159,12 @@ export function renderCandidateMessage(
   } else if (!timeUp && (minutes >= MINUTES - MOCK_WARN_MINUTES || turn >= TURN_CAP - 4)) {
     parts.push(spec.nearlyOutNote);
   }
-  return { rendered: parts.join('\n\n'), endNote };
+  return {
+    rendered: parts.join('\n\n'),
+    endNote,
+    ...(coding ? { coding } : {}),
+    ...(editor ? { editor } : {}),
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -321,7 +353,10 @@ export function buildMessages(
  * Plain text with every teach turn marked, so the grader can do the one thing
  * the rubric depends on: not score an answer the interviewer just taught.
  */
-export function renderTranscript(turns: readonly MockTurn[], kind: MockKind = 'system-design'): string {
+export function renderTranscript(
+  turns: readonly (MockTurn & { editor?: string })[],
+  kind: MockKind = 'system-design'
+): string {
   const { stageMeta: meta, wordCounts } = mockKindInfo(kind);
   const lines: string[] = [];
   let lastStage: MockStage | null = null;
@@ -345,6 +380,8 @@ export function renderTranscript(turns: readonly MockTurn[], kind: MockKind = 's
       // Behavioral answers are judged on length; the count is computed, not left to the grader.
       const words = wordCounts && t.content ? ` (${countWords(t.content)} words)` : '';
       lines.push(`#${t.seq} CANDIDATE${button}${words}: ${t.content || '(no text)'}`);
+      // Coding: the editor snapshot / run line this turn carried, verbatim.
+      if (t.editor) lines.push(t.editor);
     }
   }
   return lines.join('\n');

@@ -12,7 +12,15 @@
 // only together with the reply to it, so a failed send means nothing happened —
 // and the text stays where it was so pressing Send again is the whole recovery.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode,
+} from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -32,6 +40,7 @@ import {
   abandonMock,
   endMock,
   getMock,
+  getProblemById,
   getMockPlan,
   getMockPrompts,
   listMocks,
@@ -41,8 +50,10 @@ import {
   type MockPromptOption,
 } from '@/client/lib/api';
 import {
+  MOCK_MAX_ANSWER_CHARS,
   estimateMockCost,
   type MockAction,
+  type MockRunSummary,
   type MockPlanPreview,
   type MockSummary,
   type MockTurn,
@@ -58,6 +69,10 @@ import {
   mockPromptTitle,
   type MockKind,
 } from '@/shared/mock-kinds';
+import { DIFFICULTIES, TOPICS, type Difficulty, type Problem, type RunResult, type Topic } from '@/shared/types';
+import { DEFAULT_CODING_DIFFICULTY } from '@/shared/coding-mock';
+import { presetToOverrides, type AssistanceSettings } from '@/client/lib/assistance';
+import { SolveSurface } from '@/client/components/SolveSurface';
 import { Button } from '@/client/components/ui/button';
 import { GradeReport } from '@/client/components/GradeReport';
 import { GapCards } from '@/client/components/GapCards';
@@ -87,7 +102,81 @@ function ErrorBar({ error, onClose }: { error: ApiError | Error; onClose?: () =>
 }
 
 function titleOf(view: MockView): string {
+  if (view.state.coding) return `Coding: ${view.state.coding.title}`;
   return mockPromptTitle(view.kind, view.promptId) || mockKindInfo(view.kind).label;
+}
+
+/** The coding mock's editor: Minimal (highlighting + line numbers), closest to CoderPad. */
+const CODING_ASSISTANCE: AssistanceSettings = { level: 2, overrides: presetToOverrides(2) };
+
+/** The coding start card's problem choice: the weakest topic, or a picked one. */
+function CodingOptions({
+  mode,
+  topic,
+  difficulty,
+  onChange,
+}: {
+  mode: 'weakest' | 'pick';
+  topic: Topic;
+  difficulty: Difficulty;
+  onChange: (next: { mode: 'weakest' | 'pick'; topic: Topic; difficulty: Difficulty }) => void;
+}) {
+  const select = 'rounded-md border border-input bg-background px-2 py-1.5 text-sm';
+  return (
+    <div className="space-y-1.5">
+      <div className="text-sm font-medium">Problem</div>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex rounded-md border border-border p-0.5" role="radiogroup" aria-label="Problem choice">
+          {(['weakest', 'pick'] as const).map((m) => (
+            <button
+              key={m}
+              role="radio"
+              aria-checked={mode === m}
+              onClick={() => onChange({ mode: m, topic, difficulty })}
+              className={cn(
+                'min-h-9 rounded px-3 text-sm',
+                mode === m ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {m === 'weakest' ? 'Weakest topic' : 'Pick a topic'}
+            </button>
+          ))}
+        </div>
+        {mode === 'pick' && (
+          <select
+            aria-label="Topic"
+            value={topic}
+            onChange={(e) => onChange({ mode, topic: e.target.value as Topic, difficulty })}
+            className={select}
+          >
+            {TOPICS.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        )}
+        <select
+          aria-label="Difficulty"
+          value={difficulty}
+          onChange={(e) => onChange({ mode, topic, difficulty: e.target.value as Difficulty })}
+          className={select}
+        >
+          {DIFFICULTIES.map((d) => (
+            <option key={d} value={d}>
+              {d}
+            </option>
+          ))}
+        </select>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {mode === 'weakest'
+          ? 'Picked from your skill state in the active language. '
+          : ''}
+        From your bank when one is waiting; otherwise a fresh one is generated (that can take a minute).
+      </p>
+    </div>
+  );
 }
 
 function Markdown({ children }: { children: string }) {
@@ -177,6 +266,11 @@ function StartCard() {
   const [plan, setPlan] = useState<MockPlanPreview | null>(null);
   const [planKey, setPlanKey] = useState(0);
   const [mocks, setMocks] = useState<MockSummary[] | null>(null);
+  const [coding, setCoding] = useState<{ mode: 'weakest' | 'pick'; topic: Topic; difficulty: Difficulty }>({
+    mode: 'weakest',
+    topic: 'arrays',
+    difficulty: DEFAULT_CODING_DIFFICULTY,
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
@@ -218,6 +312,15 @@ function StartCard() {
         level,
         ...(promptId ? { promptId } : {}),
         ...(info.planned && plan?.concepts.length ? { plan: { concepts: plan.concepts } } : {}),
+        ...(info.editor
+          ? {
+              coding: {
+                mode: coding.mode,
+                difficulty: coding.difficulty,
+                ...(coding.mode === 'pick' ? { topic: coding.topic } : {}),
+              },
+            }
+          : {}),
       });
       navigate(`/mock/${view.id}${todayStep ? '?from=today&step=mock' : ''}`);
     } catch (err) {
@@ -305,6 +408,8 @@ function StartCard() {
 
         {info.planned && <PlanPreview kind={kind} plan={plan} onReroll={() => setPlanKey((k) => k + 1)} />}
 
+        {info.editor && <CodingOptions {...coding} onChange={setCoding} />}
+
         {prompts.length > 1 && (
           <label className="block space-y-1.5">
             <span className="text-sm font-medium">Prompt</span>
@@ -339,7 +444,11 @@ function StartCard() {
 
         <Button onClick={start} disabled={busy} className="w-full sm:w-auto">
           {busy ? <Loader2 className="animate-spin" /> : <ArrowRight />}
-          {busy ? 'The interviewer is getting ready…' : 'Start the interview'}
+          {busy
+            ? info.editor
+              ? 'Picking a problem and getting the interviewer ready…'
+              : 'The interviewer is getting ready…'
+            : 'Start the interview'}
         </Button>
       </div>
 
@@ -451,7 +560,23 @@ function Bubble({ turn, kind, children }: { turn: MockTurn; kind: MockKind; chil
   );
 }
 
-function Interview({ view, onView }: { view: MockView; onView: (v: MockView) => void }) {
+/** What a coding mock's chat reads from the editor beside it at send time. */
+interface EditorLink {
+  codeRef: MutableRefObject<string>;
+  /** The newest Run/Submit summary, and whether the interviewer has had it. */
+  runRef: MutableRefObject<{ summary: MockRunSummary | null; sent: boolean }>;
+}
+
+function Interview({
+  view,
+  onView,
+  editor,
+}: {
+  view: MockView;
+  onView: (v: MockView) => void;
+  /** Coding: every message carries the editor (the server shows it only when it changed). */
+  editor?: EditorLink;
+}) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState<MockAction | 'end' | null>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -476,13 +601,19 @@ function Interview({ view, onView }: { view: MockView; onView: (v: MockView) => 
     if (action === 'answer' && !text.trim()) return;
     setSending(action);
     setError(null);
+    const run = editor?.runRef.current;
+    const lastRun = run && run.summary && !run.sent ? run.summary : null;
     try {
       const next = await sendMockTurn(view.id, {
         expectedSeq: lastSeq,
         content: action === 'answer' ? text : text.trim() ? text : '',
         action,
         ...(action === 'teach_me' && offer ? { concept: offer.concept } : {}),
+        ...(editor ? { code: editor.codeRef.current } : {}),
+        ...(lastRun ? { lastRun } : {}),
       });
+      // Only once the turn is stored has the interviewer actually seen it.
+      if (run && lastRun && run.summary === lastRun) run.sent = true;
       setText('');
       onView(next);
     } catch (err) {
@@ -495,13 +626,25 @@ function Interview({ view, onView }: { view: MockView; onView: (v: MockView) => 
   };
 
   const end = async () => {
-    if (!window.confirm('End the interview and grade it? This is one model call, usually 30–90 seconds.')) return;
+    if (
+      !window.confirm(
+        editor
+          ? 'End the interview and grade it? Your current code runs against the hidden tests (unless you just submitted it), then one model call grades it — usually 30–90 seconds.'
+          : 'End the interview and grade it? This is one model call, usually 30–90 seconds.',
+      )
+    )
+      return;
     setSending('end');
     setError(null);
     try {
-      await endMock(view.id, (event) => {
-        if (event.type === 'error') setError(new ApiError(event.error, event.detail));
-      });
+      await endMock(
+        view.id,
+        (event) => {
+          if (event.type === 'error') setError(new ApiError(event.error, event.detail));
+        },
+        // Coding: the final editor runs against the hidden tests unless it was just submitted.
+        editor ? { code: editor.codeRef.current } : {},
+      );
     } catch (err) {
       setError(err as Error);
     } finally {
@@ -579,6 +722,11 @@ function Interview({ view, onView }: { view: MockView; onView: (v: MockView) => 
       {(view.status === 'active' || view.status === 'grade_failed') && (
         <div className="space-y-2 border-t border-border bg-card px-4 py-3">
           {error && <ErrorBar error={error} onClose={() => setError(null)} />}
+          {text.length > MOCK_MAX_ANSWER_CHARS * 0.8 && (
+            <p className="text-xs text-muted-foreground">
+              {text.length} / {MOCK_MAX_ANSWER_CHARS} characters — send this part and keep going in the next message.
+            </p>
+          )}
           {atCap && view.status === 'active' && (
             <p className="text-sm text-amber-300">That was the last turn. Press End &amp; grade.</p>
           )}
@@ -594,8 +742,15 @@ function Interview({ view, onView }: { view: MockView; onView: (v: MockView) => 
                   }
                 }}
                 disabled={!canTalk || !!sending}
-                rows={3}
-                placeholder={canTalk ? 'Answer, ask a question, or say "wait, explain …"  (Ctrl+Enter sends)' : ''}
+                rows={editor ? 5 : 3}
+                maxLength={MOCK_MAX_ANSWER_CHARS}
+                placeholder={
+                  canTalk
+                    ? editor
+                      ? 'Think out loud — type or dictate as much as you like; your editor goes with every message (Ctrl+Enter sends)'
+                      : 'Answer, ask a question, or say "wait, explain …"  (Ctrl+Enter sends)'
+                    : ''
+                }
                 className="min-h-[4.5rem] flex-1 resize-y rounded-md border border-input bg-background px-3 py-2 text-sm"
               />
               <Button
@@ -640,6 +795,98 @@ function Interview({ view, onView }: { view: MockView; onView: (v: MockView) => 
         </div>
       )}
     </div>
+  );
+}
+
+/** A Run/Submit result in one line, for the interviewer. Hidden tests never carry values. */
+function summarize(kind: 'run' | 'submit', r: RunResult): MockRunSummary {
+  const first = r.results.find((t) => !t.passed);
+  let firstFailure: string | undefined;
+  if (first && kind === 'run') {
+    firstFailure = `${first.name}: expected ${first.expected ?? '?'}, got ${first.actual ?? '(nothing)'}${
+      first.stderr ? ` — ${first.stderr.split('\n')[0]}` : ''
+    }`;
+  } else if (first) {
+    firstFailure = first.stderr ? `${first.name} — ${first.stderr.split('\n')[0]}` : first.name;
+  }
+  return { kind, verdict: r.verdict, passed: r.passed, total: r.total, ...(firstFailure ? { firstFailure } : {}) };
+}
+
+/**
+ * The coding mock: the solve surface (problem, editor, Run/Submit) with the
+ * interview chat as its side panel. The editor's draft survives a reload
+ * (localStorage, then the code the interviewer last saw).
+ */
+function CodingInterview({ view, onView }: { view: MockView; onView: (v: MockView) => void }) {
+  const coding = view.state.coding!;
+  const [problem, setProblem] = useState<Problem | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  const draftKey = `codegrind.mock.code.${view.id}`;
+  const [initialCode] = useState<string | undefined>(() => {
+    try {
+      return window.localStorage.getItem(draftKey) ?? coding.lastCode ?? undefined;
+    } catch {
+      return coding.lastCode ?? undefined;
+    }
+  });
+  const codeRef = useRef<string>(initialCode ?? '');
+  const runRef = useRef<{ summary: MockRunSummary | null; sent: boolean }>({ summary: null, sent: true });
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    getProblemById(coding.problemId)
+      .then((p) => live && setProblem(p))
+      .catch((err) => live && setError(err));
+    return () => {
+      live = false;
+    };
+  }, [coding.problemId]);
+
+  const onCodeChange = useCallback(
+    (code: string) => {
+      codeRef.current = code;
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => {
+        try {
+          window.localStorage.setItem(draftKey, code);
+        } catch {
+          /* private window: the server's last-seen copy is the fallback */
+        }
+      }, 500);
+    },
+    [draftKey],
+  );
+  const onResult = useCallback((kind: 'run' | 'submit', r: RunResult) => {
+    runRef.current = { summary: summarize(kind, r), sent: false };
+  }, []);
+  const editor = useMemo<EditorLink>(() => ({ codeRef, runRef }), []);
+
+  if (error) {
+    return (
+      <div className="mx-auto max-w-2xl space-y-3 p-6">
+        <ErrorBar error={error} />
+      </div>
+    );
+  }
+  if (!problem) {
+    return (
+      <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading the problem…
+      </div>
+    );
+  }
+  return (
+    <SolveSurface
+      problem={problem}
+      mockId={view.id}
+      initialCode={initialCode}
+      sessionAssistance={CODING_ASSISTANCE}
+      onCodeChange={onCodeChange}
+      onResult={onResult}
+      sidePanelLabel="Interview"
+      sidePanel={<Interview view={view} onView={onView} editor={editor} />}
+    />
   );
 }
 
@@ -716,8 +963,12 @@ export function MockPage() {
       );
     }
     if (view.status === 'graded') return <Graded view={view} />;
+    // Coding: the editor and the chat side by side (also when opened from Today).
+    if (view.kind === 'coding' && view.state.coding) return <CodingInterview view={view} onView={setView} />;
     return <Interview view={view} onView={setView} />;
   }, [id, view, error]);
 
-  return <div className="h-full overflow-y-auto">{content}</div>;
+  // The coding layout manages its own scrolling panes; everything else scrolls here.
+  const fixed = !!view && view.kind === 'coding' && view.status !== 'graded' && !!id;
+  return <div className={cn('h-full', fixed ? 'overflow-hidden' : 'overflow-y-auto')}>{content}</div>;
 }

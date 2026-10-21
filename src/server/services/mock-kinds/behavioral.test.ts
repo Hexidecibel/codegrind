@@ -67,7 +67,7 @@ describe('who sees the stories', () => {
   it('the interviewer context carries the plan and NOTHING from the bank', async () => {
     const p = await prep();
     const ctx = BEHAVIORAL_SPEC.buildContext(BEHAVIORAL_SPEC.info.pickPrompt([]), 'staff', p);
-    for (const i of p.plan.items) expect(ctx).toContain(`- ${i.stage}: competency ${i.concept}`);
+    for (const i of p.plan!.items) expect(ctx).toContain(`- ${i.stage}: competency ${i.concept}`);
     for (const secret of ['story-secret', 'SITUATION-TEXT', 'NUMBER-42', 'CAVEAT-TEXT', 'UNCONFIRMED-TEXT']) {
       expect(ctx).not.toContain(secret);
     }
@@ -80,20 +80,20 @@ describe('who sees the stories', () => {
     expect(g).toContain('<story id="story-secret">');
     expect(g.indexOf('UNCONFIRMED-TEXT')).toBeGreaterThan(g.indexOf('OPEN QUESTIONS (NOT facts'));
     expect(g).toContain('CAVEAT-TEXT');
-    expect(p.plan.storyBank).toMatchObject({ loaded: true, stories: 1, confirmed: 1 });
+    expect(p.plan!.storyBank).toMatchObject({ loaded: true, stories: 1, confirmed: 1 });
   });
 
   it('starts without a bank when resume-builder is down', async () => {
     const p = await prep(downFetch);
-    expect(p.plan.items).toHaveLength(4);
-    expect(p.plan.storyBank).toMatchObject({ loaded: false, error: expect.stringMatching(/ECONNREFUSED/) });
+    expect(p.plan!.items).toHaveLength(4);
+    expect(p.plan!.storyBank).toMatchObject({ loaded: false, error: expect.stringMatching(/ECONNREFUSED/) });
     expect(p.graderContext).toMatch(/^STORY BANK: UNAVAILABLE/);
   });
 
   it('builds the same context bytes from the same plan (frozen prefix)', async () => {
     const p = await prep(okFetch, { concepts: ['conflict', 'ownership', 'ambiguity', 'cross-team'] });
     expect(buildBehavioralContext('staff', p)).toBe(buildBehavioralContext('staff', JSON.parse(JSON.stringify(p))));
-    expect(p.plan.items.map((i) => i.concept)).toEqual(['conflict', 'ownership', 'ambiguity', 'cross-team']);
+    expect(p.plan!.items.map((i) => i.concept)).toEqual(['conflict', 'ownership', 'ambiguity', 'cross-team']);
   });
 });
 

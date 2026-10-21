@@ -53,6 +53,8 @@ export interface StoredMockTurn extends MockTurn {
   rendered: string;
   /** Interviewer turns: what the reply observed. Phase 2 folds these. */
   observations?: unknown[];
+  /** Coding candidate turns: the [editor]/[run] text this turn carried (the grader reads it). */
+  editor?: string;
 }
 
 export function emptyUsage(): MockUsage {
@@ -220,6 +222,7 @@ export function getTurns(mockId: string): StoredMockTurn[] {
       ...(meta.teach !== undefined ? { teach: meta.teach as MockTurn['teach'] } : {}),
       ...(meta.action ? { action: meta.action as MockTurn['action'] } : {}),
       ...(meta.observations ? { observations: meta.observations as unknown[] } : {}),
+      ...(typeof meta.editor === 'string' ? { editor: meta.editor } : {}),
     };
   });
 }

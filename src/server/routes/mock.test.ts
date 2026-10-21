@@ -588,3 +588,130 @@ describe('behavioral', () => {
     expect(p.concepts).toHaveLength(4);
   });
 });
+
+describe('coding', () => {
+  const STARTER = 'function twoSum(nums, target) {\n}\n';
+  const runHidden = vi.fn();
+  let svc: typeof import('../services/mock.service.js');
+
+  beforeEach(async () => {
+    svc = await import('../services/mock.service.js');
+    svc.setHiddenRunnerForTest(runHidden);
+    runHidden.mockReset();
+    db.exec(`DELETE FROM review_queue; DELETE FROM attempts; DELETE FROM skill_state; DELETE FROM problems;`);
+    const { insertProblem } = await import('../services/db.js');
+    // No skill rows → the weakest topic is `arrays`; medium is the default.
+    insertProblem({
+      id: 'p-mock-1', language: 'javascript', title: 'Two Sum', prompt: 'Find the pair.', examples: [], constraints: [],
+      difficulty: 'medium', topic: 'arrays', pattern: 'hash map', starterCode: STARTER, functionName: 'twoSum',
+      sampleTests: [], hiddenTests: [{ name: 'hidden 1', args: [], expected: 1 }],
+      referenceSolution: 'function twoSum(){ /* REF */ }', canonicalized: true, used: false, createdAt: new Date().toISOString(),
+    });
+  });
+
+  async function startC(body: Record<string, unknown> = {}) {
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'clarify', say: 'Talk me through the problem.' }));
+    const res = await post('/api/mock/start', { kind: 'coding', ...body });
+    expect(res.status).toBe(200);
+    return (await res.json()) as Record<string, any>;
+  }
+
+  it('starts with kind=coding on a bank problem: state.coding, the reference in the context only', async () => {
+    const view = await startC();
+    expect(view.kind).toBe('coding');
+    expect(view.prompt).toBe('Two Sum (medium)');
+    expect(view.limits).toEqual({ turnCap: 40, minutes: 45 });
+    expect(view.state.stage).toBe('clarify');
+    expect(view.state.coding).toMatchObject({ problemId: 'p-mock-1', chosenBy: 'weakest', submits: 0 });
+    expect(view.state.plan).toBeUndefined();
+    // The reference (frozen into graderContext and the context) never crosses the wire.
+    expect(JSON.stringify(view)).not.toContain('REF');
+    const [messages, , kind] = fake.interviewerTurn.mock.calls[0];
+    expect(kind).toBe('coding');
+    expect(messages[0].content).toContain('/* REF */');
+    // Marked used, like any served problem.
+    const { getProblem } = await import('../services/db.js');
+    expect(getProblem('p-mock-1')!.used).toBe(true);
+    // The list shows the problem title.
+    const list = await (await app.request('/api/mocks')).json();
+    expect(list.mocks[0].promptTitle).toBe('Two Sum (medium)');
+  });
+
+  it('shows the interviewer the editor only when it changed, and keeps the snapshot for the grader', async () => {
+    const view = await startC();
+    const code = 'function twoSum(nums, target) {\n  return [0, 1];\n}\n';
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'clarify', say: 'Duplicates are allowed.' }));
+    let res = await post(`/api/mock/${view.id}/turn`, { expectedSeq: 1, content: 'Can there be duplicates?', code: STARTER });
+    expect(res.status).toBe(200);
+    expect(fake.interviewerTurn.mock.calls[1][0].at(-1).content).not.toContain('[editor');
+
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'code', say: 'Walk me through it.' }));
+    res = await post(`/api/mock/${view.id}/turn`, {
+      expectedSeq: 3, content: 'Here is a first cut.', code,
+      lastRun: { kind: 'run', verdict: 'wrong_answer', passed: 0, total: 2, firstFailure: 'sample 1: expected 1, got 2' },
+    });
+    const last = fake.interviewerTurn.mock.calls[2][0].at(-1).content as string;
+    expect(last).toContain('[editor');
+    expect(last).toContain('return [0, 1];');
+    expect(last).toContain('[run: Run (sample tests): 0/2 passed, wrong answer');
+    const v = await res.json();
+    expect(v.state.coding.lastCode).toBe(code);
+    // The snapshot is server-side only.
+    expect(JSON.stringify(v.turns)).not.toContain('[editor');
+
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'code', say: 'OK.' }));
+    await post(`/api/mock/${view.id}/turn`, { expectedSeq: 5, content: 'No changes yet.', code });
+    expect(fake.interviewerTurn.mock.calls[3][0].at(-1).content).not.toContain('[editor');
+
+    // End: the code was never submitted → it runs against the hidden tests now.
+    runHidden.mockResolvedValueOnce({ verdict: 'accepted', passed: 1, total: 1, results: [{ name: 'hidden 1', passed: true, timeMs: 1 }] });
+    fake.gradeMock.mockResolvedValueOnce({
+      grade: { ...GRADE, coding: { patternMissed: false, patternNote: 'found it', complexityStated: 'O(n)', complexityOptimal: 'O(n)', tests: null, reviewQueued: false } },
+      metas: [META],
+    });
+    const events = await readEvents(await post(`/api/mock/${view.id}/end`, { code }));
+    expect(runHidden).toHaveBeenCalledWith('p-mock-1', code);
+    const input = fake.gradeMock.mock.calls[0][0];
+    expect(input.kind).toBe('coding');
+    expect(input.transcript).toContain('[editor');
+    expect(input.graderContext).toContain('/* REF */');
+    expect(input.graderContext).toMatch(/1\/1 passed, accepted — the final editor contents, run at End/);
+    const graded = events.find((e: any) => e.type === 'grade');
+    expect(graded.grade.coding.tests).toMatchObject({ passed: 1, total: 1, source: 'end' });
+    expect(graded.grade.coding.reviewQueued).toBe(false);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM review_queue').get()).toEqual({ n: 0 });
+  });
+
+  it('a missed pattern puts the problem on the review queue — the one grind side effect', async () => {
+    const view = await startC();
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'approach', say: 'Hm.' }));
+    await post(`/api/mock/${view.id}/turn`, { expectedSeq: 1, content: 'Two loops?', code: STARTER });
+    fake.gradeMock.mockResolvedValueOnce({
+      grade: { ...GRADE, coding: { patternMissed: true, patternNote: 'never saw the map', complexityStated: 'O(n^2)', complexityOptimal: 'O(n)', tests: null, reviewQueued: false } },
+      metas: [META],
+    });
+    const events = await readEvents(await post(`/api/mock/${view.id}/end`, { code: STARTER }));
+    // Untouched starter code: nothing ran.
+    expect(runHidden).not.toHaveBeenCalled();
+    const graded = events.find((e: any) => e.type === 'grade');
+    expect(graded.grade.coding).toMatchObject({ reviewQueued: true, tests: null });
+    expect(db.prepare('SELECT problemId, reason FROM review_queue').all()).toEqual([{ problemId: 'p-mock-1', reason: 'failed' }]);
+    // …and nothing else in the grind.
+    expect(db.prepare('SELECT COUNT(*) AS n FROM attempts').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM skill_state').get()).toEqual({ n: 0 });
+  });
+
+  it('does not preview a plan (that would fetch or generate a problem)', async () => {
+    const p = await (await app.request('/api/mock/plan?kind=coding')).json();
+    expect(p).toEqual({ kind: 'coding', concepts: [], reasons: {}, storyBank: null });
+    const { getProblem } = await import('../services/db.js');
+    expect(getProblem('p-mock-1')!.used).toBe(false);
+  });
+
+  it('refuses an oversized editor before spending anything', async () => {
+    const view = await startC();
+    const res = await post(`/api/mock/${view.id}/turn`, { expectedSeq: 1, content: 'hi', code: 'x'.repeat(50_001) });
+    expect(res.status).toBe(400);
+    expect(fake.interviewerTurn).toHaveBeenCalledTimes(1);
+  });
+});

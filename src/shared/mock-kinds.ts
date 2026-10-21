@@ -1,8 +1,7 @@
 // =============================================================================
 // mock-kinds — what each KIND of mock interview is, as the client may know it
 // =============================================================================
-// A mock interview is a kind (system design today; behavioral and live coding
-// next) run through ONE set of plumbing: turns, the clock, End & grade, gaps →
+// A mock interview is a kind (system design, behavioral, live coding) run through ONE set of plumbing: turns, the clock, End & grade, gaps →
 // drill cards. Everything that differs per kind and is safe to ship to the
 // browser lives here — the stages and their chips, the concept vocabulary and
 // its labels, the prompt catalog, the clock and the turn cap, the start-card
@@ -31,9 +30,16 @@ import {
   BQ_STAGE_META,
   competencyLabel,
 } from './behavioral-questions.js';
+import {
+  CODING_CONCEPTS,
+  CODING_PROMPTS,
+  CODING_STAGES,
+  CODING_STAGE_META,
+  codingConceptLabel,
+} from './coding-mock.js';
 
 /** The kinds a mock can be started as. */
-export const MOCK_KINDS = ['system-design', 'behavioral'] as const;
+export const MOCK_KINDS = ['system-design', 'behavioral', 'coding'] as const;
 export type MockKind = (typeof MOCK_KINDS)[number];
 export const DEFAULT_MOCK_KIND: MockKind = 'system-design';
 
@@ -42,9 +48,7 @@ export function isMockKind(x: unknown): x is MockKind {
 }
 
 /** Kinds the start card shows, disabled, until they ship. */
-export const UPCOMING_MOCK_KINDS: readonly { id: string; label: string }[] = [
-  { id: 'coding', label: 'Coding' },
-];
+export const UPCOMING_MOCK_KINDS: readonly { id: string; label: string }[] = [];
 
 /** A stage id, closed per kind (MockKindInfo.stages). */
 export type MockStage = string;
@@ -96,6 +100,11 @@ export interface MockKindInfo {
   planned?: boolean;
   /** The grader's transcript shows each candidate turn's word count (behavioral: answer length). */
   wordCounts?: boolean;
+  /**
+   * Coding: the mock runs inside the solve surface (editor + Run/Submit) with
+   * the chat beside it, and each turn carries the editor.
+   */
+  editor?: boolean;
   /** Start-card copy. */
   start: {
     blurb: string;
@@ -161,9 +170,43 @@ const BEHAVIORAL: MockKindInfo = {
   },
 };
 
+const CODING_PROMPT = CODING_PROMPTS[0];
+
+const CODING: MockKindInfo = {
+  kind: 'coding',
+  label: 'Coding',
+  stages: CODING_STAGES,
+  stageMeta: CODING_STAGE_META,
+  concepts: CODING_CONCEPTS,
+  conceptLabel: codingConceptLabel,
+  prompts: CODING_PROMPTS,
+  promptById: (id) => CODING_PROMPTS.find((p) => p.id === id) ?? null,
+  pickPrompt: () => CODING_PROMPT,
+  minutes: 45,
+  turnCap: 40,
+  // ~3 clarify/examples, ~3 approach/complexity, ~8 while coding, ~4 testing, ~3 follow-up.
+  typicalTurns: 22,
+  // The frozen prefix carries the problem AND the reference solution (dry run:
+  // ~3.3k for a short sample; generated statements run longer). An exchange
+  // that changed the code adds an [editor] snapshot (capped at 8k chars, ~2.5k
+  // tokens; the dry run measured 150-250 per exchange for a 12-14 line
+  // solution), so 450 per exchange leaves room for longer code and replies —
+  // cache reads soften it to a tenth of the price. The grader reads every
+  // snapshot, the reference and the hidden-test result. ~$0.29 typical.
+  cost: { prefix: 4500, perExchange: 450, replyOut: 350, gradeFixed: 5000, gradeOut: 8000 },
+  editor: true,
+  start: {
+    blurb:
+      'A CoderPad-style coding interview: the problem and an editor on one side, the interviewer on the other. Talk it through — clarify, brute force, the pattern, complexity — then code, Run, test and Submit. The interviewer sees your editor each time you send a message (never the answer key to you), and after a passing solution asks one Staff-style follow-up. Submit here runs the hidden tests but records nothing in your grind stats; the grade does.',
+    pickHint: 'Weakest topic: picked from your skill state in the active language.',
+    familiarTag: '',
+  },
+};
+
 export const MOCK_KIND_INFO: Readonly<Record<MockKind, MockKindInfo>> = {
   'system-design': SYSTEM_DESIGN,
   behavioral: BEHAVIORAL,
+  coding: CODING,
 };
 
 /** The registry entry for a kind. An unknown kind (an old or hand-edited row) reads as system design. */

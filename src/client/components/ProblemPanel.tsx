@@ -22,8 +22,14 @@ const DIFFICULTY_STYLES: Record<Difficulty, string> = {
 export function ProblemPanel({
   problem,
   footer,
+  hidePattern = false,
 }: {
   problem: Problem;
+  /**
+   * A mock interview: no topic or pattern badge. Recognising the pattern is
+   * part of what the interview grades, and a real one never prints it.
+   */
+  hidePattern?: boolean;
   /**
    * Rendered at the end of the scrolling column. The phone layout parks the
    * session/stats context down here so the problem statement comes first.
@@ -50,13 +56,17 @@ export function ProblemPanel({
             >
               {problem.difficulty}
             </Badge>
-            <Badge variant="secondary">{humanize(problem.topic)}</Badge>
-            <Badge
-              variant="outline"
-              className="border-primary/40 bg-primary/10 text-primary"
-            >
-              {humanize(problem.pattern)}
-            </Badge>
+            {!hidePattern && (
+              <>
+                <Badge variant="secondary">{humanize(problem.topic)}</Badge>
+                <Badge
+                  variant="outline"
+                  className="border-primary/40 bg-primary/10 text-primary"
+                >
+                  {humanize(problem.pattern)}
+                </Badge>
+              </>
+            )}
             {/*
               READ-ONLY on the solve surface, and that is the design rather than
               an omission. A problem's language is baked into its reference

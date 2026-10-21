@@ -128,7 +128,7 @@ function rubric(label: string, bar: string): string {
 
 /** The frozen setup message. The plan only — never the story bank. */
 export function buildBehavioralContext(level: MockLevel, prep?: MockPrep): string {
-  const items = prep?.plan.items ?? [];
+  const items = prep?.plan?.items ?? [];
   return [
     'MOCK SETUP',
     'Interview: behavioral',

@@ -25,6 +25,7 @@ import {
   IndentIncrease,
   IndentDecrease,
   BookOpen,
+  MessagesSquare,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -45,6 +46,7 @@ import {
   getHint,
   askCoach,
   revealSolution,
+  submitMockCode,
 } from '@/client/lib/api';
 import { useLocalStorage } from '@/client/hooks/useLocalStorage';
 import {
@@ -130,6 +132,26 @@ export interface SolveSurfaceProps {
    * approach and a time complexity.
    */
   requirePrediction?: boolean;
+  /**
+   * A coding mock interview. Submit runs the hidden tests through the MOCK
+   * (`mode: 'mock'`: nothing recorded in the grind — no attempt, skill, SRS or
+   * review row, no coaching) and the assistance that a real interview does not
+   * have is gone: Hint, Answer, the coach chat and the predict gate.
+   */
+  mockId?: string;
+  /** Every change to the buffer (a coding mock's chat turns carry the editor). */
+  onCodeChange?: (code: string) => void;
+  /** Every Run / Submit result as it lands (a coding mock tells the interviewer). */
+  onResult?: (kind: 'run' | 'submit', result: RunResult) => void;
+  /**
+   * A third column at `lg` and up, a third tab below it — the coding mock's
+   * interview chat. Absent, the layout is exactly the two-pane one.
+   */
+  sidePanel?: ReactNode;
+  /** The side panel's tab label on a phone. */
+  sidePanelLabel?: string;
+  /** The buffer to open with instead of the starter (a resumed coding mock). */
+  initialCode?: string;
 }
 
 const emptyPrediction = (): Prediction => ({
@@ -140,7 +162,7 @@ const emptyPrediction = (): Prediction => ({
 });
 
 /** Which pane the phone layout is showing; ignored at `lg` and up. */
-type Pane = 'problem' | 'code';
+type Pane = 'problem' | 'code' | 'side';
 
 /**
  * The shared solve loop: editor + Run/Submit/Hint + results/coach + Ask-the-coach.
@@ -159,6 +181,12 @@ export function SolveSurface({
   reviewMode = false,
   sessionAssistance,
   requirePrediction = false,
+  mockId,
+  onCodeChange,
+  onResult,
+  sidePanel,
+  sidePanelLabel = 'Chat',
+  initialCode,
 }: SolveSurfaceProps) {
   const [storedAssistance, setStoredAssistance] = useLocalStorage<AssistanceSettings>(
     'codegrind.assistance',
@@ -183,7 +211,14 @@ export function SolveSurface({
   // and iOS (which doesn't).
   const [typing, setTyping] = useState(false);
 
-  const [code, setCode] = useState(problem.starterCode);
+  const [code, setCode] = useState(initialCode ?? problem.starterCode);
+  // Read once per problem by the reset effect below (not a dependency: a host
+  // re-rendering with the same draft must not reset the buffer).
+  const initialCodeRef = useRef(initialCode);
+  initialCodeRef.current = initialCode;
+  useEffect(() => {
+    onCodeChange?.(code);
+  }, [code, onCodeChange]);
   /**
    * The buffer as it was at the instant `submit()` fired.
    *
@@ -258,13 +293,14 @@ export function SolveSurface({
     'codegrind.predict.gate',
     true,
   );
-  const [predictOpen, setPredictOpen] = useState(planGate || requirePrediction);
+  const [predictOpen, setPredictOpen] = useState((planGate || requirePrediction) && !mockId);
   // Read through a ref inside the problem-change effect: putting `planGate` in
   // that effect's deps would make flipping the preference re-run it, and it
   // resets `code` to the starter — one toggle would silently delete whatever
   // you had typed.
-  const planGateRef = useRef(planGate || requirePrediction);
-  planGateRef.current = planGate || requirePrediction;
+  const planGateRef = useRef((planGate || requirePrediction) && !mockId);
+  // A mock interview IS the prediction: the approach is said out loud to the interviewer.
+  planGateRef.current = (planGate || requirePrediction) && !mockId;
   const [prediction, setPrediction] = useState<Prediction>(emptyPrediction);
   const [submittedPrediction, setSubmittedPrediction] =
     useState<Prediction | null>(null);
@@ -475,7 +511,7 @@ export function SolveSurface({
 
   // Reset everything when the problem changes (grind "Next", manual "New", …).
   useEffect(() => {
-    setCode(problem.starterCode);
+    setCode(initialCodeRef.current ?? problem.starterCode);
     setPane('problem');
     setRunResult(null);
     setSubmitResult(null);
@@ -548,12 +584,13 @@ export function SolveSurface({
     try {
       const r = await runCode(problem.id, code);
       setRunResult(r);
+      onResult?.('run', r);
     } catch (err) {
       showError(err, 'Run failed');
     } finally {
       setRunning(false);
     }
-  }, [problem.id, code, running, isDesktop, showError]);
+  }, [problem.id, code, running, isDesktop, showError, onResult]);
 
   /**
    * Submit, and render each half the moment it lands.
@@ -577,7 +614,8 @@ export function SolveSurface({
     setRunResult(null);
     setSubmitResult(null);
     setCoaching(null);
-    setCoachPhase('pending');
+    // A mock Submit has no coaching half: the interview's grade is the coach.
+    setCoachPhase(mockId ? 'idle' : 'pending');
     // Freeze what is being sent. Every anchor in the brief that comes back is
     // an index into THIS text, and `code` keeps moving.
     setSubmitted(code);
@@ -585,6 +623,14 @@ export function SolveSurface({
     setMissedOpen(null);
     setMissedFixes({});
     try {
+      if (mockId) {
+        await submitMockCode(mockId, problem.id, code, (event) => {
+          if (event.type !== 'result') return;
+          setSubmitResult(event.result);
+          onResult?.('submit', event.result);
+        });
+        return;
+      }
       await submitCode(
         problem.id,
         code,
@@ -629,6 +675,8 @@ export function SolveSurface({
     submittedPrediction,
     isDesktop,
     showError,
+    mockId,
+    onResult,
   ]);
 
   const requestHint = useCallback(async () => {
@@ -771,7 +819,8 @@ export function SolveSurface({
   // actions), Hint keeps its natural width, Assist collapses to an icon. The
   // desktop toolbar passes false everywhere and renders exactly as it always has.
   const hintButton = (grow = false) =>
-    !reviewMode && (
+    !reviewMode &&
+    !mockId && (
       <Button
         variant="outline"
         size={controlSize}
@@ -792,7 +841,8 @@ export function SolveSurface({
   // Two taps, and the second one costs the clean solve; the server records the
   // reveal, so the price is charged whatever the client does afterwards.
   const answerButton = (compact = false) =>
-    !answer && (
+    !answer &&
+    !mockId && (
       <Button
         variant={confirmReveal ? 'destructive' : 'outline'}
         size={controlSize}
@@ -1033,7 +1083,7 @@ export function SolveSurface({
         />
       )}
 
-      {canAsk && (
+      {canAsk && !mockId && (
         <CoachChat
           problem={problem}
           code={code}
@@ -1120,9 +1170,14 @@ export function SolveSurface({
       <div className="flex h-full min-h-0 flex-col">
         {banner}
         <div className="flex min-h-0 flex-1 flex-row">
-          {/* Left — problem statement */}
-          <div className="min-h-0 w-[42%] border-r border-border">
-            <ProblemPanel problem={problem} />
+          {/* Left — problem statement (narrower when a side panel shares the row) */}
+          <div
+            className={cn(
+              'min-h-0 border-r border-border',
+              sidePanel ? 'w-[30%]' : 'w-[42%]',
+            )}
+          >
+            <ProblemPanel problem={problem} hidePattern={!!mockId} />
           </div>
 
           {/* Right — workspace */}
@@ -1139,6 +1194,13 @@ export function SolveSurface({
             {desktopResults}
             {footerBar}
           </div>
+
+          {/* Right — the host's side panel (a coding mock's interview chat) */}
+          {sidePanel && (
+            <div className="flex min-h-0 w-[min(30rem,32%)] shrink-0 flex-col border-l border-border">
+              {sidePanel}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1197,6 +1259,16 @@ export function SolveSurface({
             : undefined
         }
       />
+      {sidePanel && (
+        <PaneTab
+          pane="side"
+          active={pane === 'side'}
+          onSelect={setPane}
+          icon={<MessagesSquare className="h-4 w-4" />}
+          label={sidePanelLabel}
+          compact={isShort}
+        />
+      )}
     </>
   );
 
@@ -1271,7 +1343,7 @@ export function SolveSurface({
       {isShort && (
         <div className="flex shrink-0 items-center gap-1">
           {paneTabs}
-          {!onProblemTab && indentKeys}
+          {pane === 'code' && indentKeys}
         </div>
       )}
       {/* One non-wrapping row (a `Hint (1/3)` counter can squeeze but never
@@ -1309,7 +1381,7 @@ export function SolveSurface({
           className="flex shrink-0 gap-1 border-b border-border bg-card px-2 py-1"
         >
           {paneTabs}
-          {!onProblemTab && indentKeys}
+          {pane === 'code' && indentKeys}
         </div>
       )}
 
@@ -1323,7 +1395,7 @@ export function SolveSurface({
           aria-labelledby="tab-problem"
           className={cn('min-h-0 flex-1', pane !== 'problem' && 'hidden')}
         >
-          <ProblemPanel problem={problem} footer={contextFooter} />
+          <ProblemPanel problem={problem} footer={contextFooter} hidePattern={!!mockId} />
         </div>
         {/* overflow-hidden: belt and braces so the editor can never paint
             outside its slot, whatever the floor above resolves to. */}
@@ -1338,9 +1410,19 @@ export function SolveSurface({
         >
           {editorPane}
         </div>
+        {sidePanel && (
+          <div
+            id="pane-side"
+            role="tabpanel"
+            aria-labelledby="tab-side"
+            className={cn('flex min-h-0 flex-1 flex-col', pane !== 'side' && 'hidden')}
+          >
+            {sidePanel}
+          </div>
+        )}
       </div>
 
-      {phoneResults}
+      {pane !== 'side' && phoneResults}
       {/* "Next problem" is what you want when you're done, not a permanent band
           above the keyboard while you type — on the Code tab it appears once a
           submission is accepted. */}

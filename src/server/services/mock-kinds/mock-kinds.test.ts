@@ -21,6 +21,17 @@ describe('the spec registry', () => {
     }
   });
 
+  it('keeps every concept id unique across ALL kinds (drill cards carry a concept, not a kind)', () => {
+    const all = MOCK_KINDS.flatMap((k) => [...MOCK_KIND_INFO[k].concepts]);
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it('has nothing left in the “coming soon” list once coding shipped', async () => {
+    const { UPCOMING_MOCK_KINDS } = await import('../../../shared/mock-kinds.js');
+    expect(MOCK_KINDS).toContain('coding');
+    expect(UPCOMING_MOCK_KINDS.map((k) => k.id)).not.toContain('coding');
+  });
+
   it('reads an unknown kind as system design', () => {
     expect(mockKindSpec('nope')).toBe(SYSTEM_DESIGN_SPEC);
     expect(mockKindSpec(undefined)).toBe(SYSTEM_DESIGN_SPEC);

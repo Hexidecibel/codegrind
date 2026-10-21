@@ -569,3 +569,65 @@ suite('POST /api/ask', () => {
     expect(body.detail).toContain('ECONNREFUSED');
   });
 });
+
+suite('POST /api/submit — mode: mock (a Submit inside a coding mock interview)', () => {
+  async function codingMock(status: 'active' | 'graded' = 'active', problemId = PROBLEM_ID) {
+    const { insertMock, emptyUsage } = await import('../services/mock.store.js');
+    const { initialState } = await import('../services/mock.state.js');
+    const id = `mock-${Math.random().toString(36).slice(2)}`;
+    const now = new Date();
+    insertMock({
+      id, kind: 'coding', level: 'staff', promptId: null, prompt: 'Two Sum (easy)', status, context: 'ctx', digest: null,
+      state: {
+        ...initialState(now, 'coding'),
+        coding: {
+          problemId, title: 'Two Sum', topic: 'arrays', difficulty: 'easy', pattern: 'hash map', language: 'javascript',
+          chosenBy: 'weakest', starterHash: 'a', codeHash: 'a', lastCode: null, runHash: null, submits: 0, lastSubmit: null,
+        },
+      },
+      usage: emptyUsage(), turnCount: 1, createdAt: now.toISOString(), updatedAt: now.toISOString(), endedAt: null,
+    });
+    return id;
+  }
+  const count = (table: string) => (db.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+
+  it('runs the hidden tests and records them on the mock — and writes NO attempt, skill, SRS or review row', async () => {
+    mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
+    const mockId = await codingMock();
+    const { status, events } = await submit({ mode: 'mock', mockId, problemId: PROBLEM_ID, code: 'function twoSum(){}' });
+    expect(status).toBe(200);
+    expect(events.map((e) => e.type)).toEqual(['result']);
+    expect(events[0].result).toMatchObject({ passed: 1, total: 2, verdict: 'wrong_answer' });
+    // Hidden values stay off the wire, as on a normal submit.
+    expect(JSON.stringify(events)).not.toContain('"expected"');
+    expect(mocks.runTests).toHaveBeenCalledWith(expect.objectContaining({ tests: expect.arrayContaining([expect.objectContaining({ name: 'hidden 2' })]) }));
+    expect(mocks.coach).not.toHaveBeenCalled();
+    expect(count('attempts')).toBe(0);
+    expect(count('skill_state')).toBe(0);
+    expect(count('review_queue')).toBe(0);
+    const { getMock } = await import('../services/mock.store.js');
+    const coding = getMock(mockId)!.state.coding!;
+    expect(coding.submits).toBe(1);
+    expect(coding.lastSubmit).toMatchObject({ verdict: 'wrong_answer', passed: 1, total: 2, failing: ['hidden 2'] });
+  });
+
+  it('never hands back the reference solution, even on a pass', async () => {
+    mocks.runTests.mockResolvedValue(sandboxResult('accepted'));
+    const mockId = await codingMock();
+    const { events, raw } = await submit({ mode: 'mock', mockId, problemId: PROBLEM_ID, code: 'x' });
+    expect(events[0].result.verdict).toBe('accepted');
+    expect(events[0].referenceSolution).toBeUndefined();
+    expect(raw).not.toContain(REFERENCE);
+    expect(count('attempts')).toBe(0);
+  });
+
+  it('refuses a mock that is not active, an unknown mock, or another problem — before the sandbox runs', async () => {
+    const graded = await codingMock('graded');
+    expect((await submit({ mode: 'mock', mockId: graded, problemId: PROBLEM_ID, code: 'x' })).status).toBe(409);
+    expect((await submit({ mode: 'mock', mockId: 'nope', problemId: PROBLEM_ID, code: 'x' })).status).toBe(404);
+    const active = await codingMock();
+    expect((await submit({ mode: 'mock', mockId: active, problemId: 'p-other', code: 'x' })).status).toBe(400);
+    expect(mocks.runTests).not.toHaveBeenCalled();
+    expect(count('attempts')).toBe(0);
+  });
+});
