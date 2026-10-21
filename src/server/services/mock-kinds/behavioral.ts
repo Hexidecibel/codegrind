@@ -86,9 +86,10 @@ Rules:
   - ownership: "i" when the candidate's own actions are clear, "we" when they hid behind the team, "mixed".
   - quantified: whether the result had a number (time, money, people, users, incidents, percent).
   - words: the word count of the candidate's FIRST answer to the question, from the (N words) marks in the transcript. length: short under ~180 words, ok ~180–400, long over ~400 (aim: about two minutes spoken, 250–350 words).
-  - fidelity: against the bank — numbers the bank has that the answer left out, claims past a caveat (overclaiming), answers to an OPEN QUESTION stated as fact. Empty string when clean or when there is no bank story.
+  - fidelity: against the bank — numbers the bank has that the answer left out, claims past a caveat (overclaiming), answers to an OPEN QUESTION stated as fact, and FRAMING the bank contradicts (a project the bank records as a new product told as a "migration" or "rebuild", a team effort told as solo, a different role or company). Any concrete claim — a mechanism, a number, a design detail — that is NOT in the story's confirmed material is UNVERIFIED: name it ("'schema-per-customer clone' is not in the bank — unverified, possibly invented") and never credit it as evidence of scope or skill. Empty string only when the answer stayed inside the confirmed material, or when there is no bank story.
   - fix: the single change that would most improve this answer, as a sentence they could say ("Open with: 'We cut hosting cost about 90%, and here is how I got there.'").
 - TAUGHT MATERIAL IS NOT EVIDENCE. Turns marked [TAUGHT: …] are coaching; an answer improved right after it shows listening, not skill. List each taught competency in gapsTaught.
+- NEVER CREDIT UNVERIFIED CLAIMS. Score scope, ownership and quantified from what the candidate said that the bank confirms (or, for a story not in the bank, from what they said — and say in fidelity that nothing could be checked). An impressive detail the bank does not have earns nothing until confirmed.
 - I-vs-WE matters at Staff. A story where the candidate's own decisions and influence are invisible is below level however big the project was.
 - GAPS ARE NOT EQUAL. A fact gap (a number from the bank left out) is a cheap fix and weighs little. A skill gap (no result, no ownership, no buy-in story, rambling) is what the level is judged on.
 - verdict: below / at / above the stated level overall.
@@ -96,7 +97,7 @@ Rules:
 - drills: 3 to 6 short drills, most valuable first, each one competency — a prompt they can rehearse in a few minutes ("Tell the saas-rebuild story in 90 seconds, leading with the cost number"), plus why.
 - gaps: AT MOST ONE per question stage (the drill card for that question), and only when the answer fell short. type: skill or fact, whichever was the bigger miss. title: the question exactly as asked (the card front). answer: "Best story: <story id> (<title>)." then three beats — "1) … 2) … 3) …" — the result-first outline of how to tell it, using ONLY confirmed bank material (never an open question), then one line naming the fix. With no fitting bank story, write "Best story: none in the bank yet" and three beats of what such a story needs. turn: the interviewer turn that asked it. Do not repeat anything in RECORDED GAPS.
 - storyGaps: competencies the interview asked about (or the bank's coverage shows) where the candidate has NO good story — the bank has none that fits, or the one they told fits weakly. One short note each saying what kind of story to capture. Empty when the bank was unavailable.
-- summary: three or four sentences — the overall picture, the skill gaps as practice areas, the fact gaps as cheap fixes.
+- summary: three or four sentences — the overall picture, the skill gaps as practice areas, the fact gaps as cheap fixes. Write it as the verdict on a FINISHED interview, in the past tense ("The candidate told…"), never as advice mid-interview, and without retelling the stories' private details.
 
 Return the grade by calling emit_mock_grade exactly once.`;
 
@@ -164,8 +165,9 @@ async function prepareBehavioral(args: MockPrepareArgs): Promise<MockPrep> {
 // The grade tool: the shared shape plus `questions` and `storyGaps`
 // ===========================================================================
 
-function questionItem(lean: boolean) {
-  const closed = lean ? {} : { additionalProperties: false };
+function questionItem(_lean: boolean) {
+  // Strict in both shapes (the lean retry too — Phase H).
+  const closed = { additionalProperties: false };
   return {
     type: 'object',
     ...closed,
@@ -220,7 +222,7 @@ export function behavioralGradeTool(lean: boolean): ToolSpec {
         description: 'Competencies with no good story in the bank. Empty when the bank was unavailable.',
         items: {
           type: 'object',
-          ...(lean ? {} : { additionalProperties: false }),
+          additionalProperties: false,
           properties: {
             concept: { type: 'string', enum: [...INFO.concepts] },
             note: { type: 'string' },

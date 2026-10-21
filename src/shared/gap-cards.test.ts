@@ -7,6 +7,8 @@ import {
   describeOutcome,
   gapKey,
   isGapCardGrade,
+  isDoubleGrade,
+  DOUBLE_GRADE_MS,
   newCardSchedule,
   scheduleGapCard,
   type GapCardSchedule,
@@ -88,5 +90,15 @@ describe('gapKey', () => {
   it('ignores case, punctuation and spacing, so a re-worded duplicate is caught', () => {
     expect(gapKey('301 vs 302: which, and why?')).toBe(gapKey('  301 VS 302 — which and why '));
     expect(gapKey('')).toBe('');
+  });
+});
+
+describe('isDoubleGrade (Phase H)', () => {
+  const now = new Date('2026-10-21T20:00:00.000Z');
+  it('refuses a second grade inside the window, allows one after it', () => {
+    expect(isDoubleGrade(null, now)).toBe(false);
+    expect(isDoubleGrade(new Date(now.getTime() - 1_000).toISOString(), now)).toBe(true);
+    expect(isDoubleGrade(new Date(now.getTime() - DOUBLE_GRADE_MS).toISOString(), now)).toBe(false);
+    expect(isDoubleGrade(new Date(now.getTime() - 60_000).toISOString(), now)).toBe(false);
   });
 });

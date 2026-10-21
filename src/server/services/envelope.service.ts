@@ -11,7 +11,7 @@
 // scheduleRecognizeCard: a miss comes back TOMORROW, not now — you just read the
 // worked split, so "now" would test memory, not the method.
 
-import { newCardSchedule, describeOutcome, type GapCardGrade } from '../../shared/gap-cards.js';
+import { newCardSchedule, describeOutcome, isDoubleGrade, type GapCardGrade } from '../../shared/gap-cards.js';
 import {
   DEFAULT_ENVELOPE_SIZE,
   ENVELOPE_CAUSES,
@@ -101,6 +101,8 @@ export function check(body: unknown, now = new Date()): EnvelopeCheckResponse {
   const answer = str(b.answer, 200).trim();
   const working = str(b.working, 4000).trim();
   if (!answer) throw new EnvelopeError('Type an answer first (a number, with a unit if it has one).', 400);
+  // A double tap on Check answers the same item twice and moves its card twice.
+  if (isDoubleGrade(store.lastAttemptAt(item.key), now)) throw new EnvelopeError('That one was just answered.', 409);
   const v = checkAnswer(item, answer);
   if (!v) throw new EnvelopeError(`Couldn't read a number from "${answer}". Try "500", "30 million", "3e7" or "8 TB".`, 400);
 
@@ -284,7 +286,10 @@ export function envelopeCardsFromGaps(
       if (!isEstimationGap(g)) continue;
       const item = envelopeFromGapText(`mock:${g.id}`, `${g.title} ${g.answer}`);
       if (!item) continue;
-      if (store.insertCard({ key: item.key, item, source: 'mock', mockId }, newCardSchedule(now), now)) added++;
+      // Due TOMORROW, not now (Phase H): a card born from today's mock that is
+      // due at once reopened a finished warm-up and blocked the debrief.
+      const schedule = { ...newCardSchedule(now), dueAt: new Date(now.getTime() + 86_400_000).toISOString() };
+      if (store.insertCard({ key: item.key, item, source: 'mock', mockId }, schedule, now)) added++;
     }
   } catch (err) {
     console.error('[envelope] cards from mock gaps failed:', err instanceof Error ? err.message : err);

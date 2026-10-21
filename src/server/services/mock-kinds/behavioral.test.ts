@@ -113,11 +113,16 @@ function assertStrict(node: unknown, path = '$'): void {
 describe('the grade tool', () => {
   it('adds questions and storyGaps right after stages, required, strict all the way down', () => {
     const props = Object.keys(BEHAVIORAL_SPEC.gradeTool.schema.properties);
-    expect(props.slice(0, 5)).toEqual(['verdict', 'summary', 'stages', 'questions', 'storyGaps']);
+    expect(props.slice(0, 4)).toEqual(['verdict', 'stages', 'questions', 'storyGaps']);
+    // The summary is LAST: the leak sink (Phase H).
+    expect(props[props.length - 1]).toBe('summary');
+    expect(BEHAVIORAL_SPEC.gradeTool.leakSink).toBe('summary');
     expect(BEHAVIORAL_SPEC.gradeTool.schema.required).toEqual(expect.arrayContaining(['questions', 'storyGaps']));
     expect(BEHAVIORAL_SPEC.gradeTool.exactSchema).toBe(true);
     assertStrict(BEHAVIORAL_SPEC.gradeTool.schema);
-    expect(BEHAVIORAL_SPEC.gradeToolLean.exactSchema).toBe(false);
+    // The lean retry is strict too (Phase H).
+    expect(BEHAVIORAL_SPEC.gradeToolLean.exactSchema).toBe(true);
+    assertStrict(BEHAVIORAL_SPEC.gradeToolLean.schema);
     expect(Object.keys(BEHAVIORAL_SPEC.gradeToolLean.schema.properties)).toContain('questions');
   });
 

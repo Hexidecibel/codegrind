@@ -8,7 +8,7 @@
 // today.store.ts reads the rows; today.service.ts glues the two.
 
 import { TOPICS, type Topic } from '../../shared/types.js';
-import { MOCK_KINDS, isMockKind, type MockKind } from '../../shared/mock-kinds.js';
+import { MOCK_KINDS, isMockKind, mockKindInfo, type MockKind } from '../../shared/mock-kinds.js';
 import type { MockVerdict } from '../../shared/mock.js';
 import {
   SKIPPABLE_STEPS,
@@ -23,6 +23,7 @@ import {
 } from '../../shared/today.js';
 import { computeDayStreak } from './reflect.compute.js';
 import { cutToolCallFraming } from './llm.types.js';
+import { clipAtBoundary } from '../../shared/clip.js';
 
 // -----------------------------------------------------------------------------
 // The local day
@@ -150,6 +151,8 @@ export interface DerivedSteps {
 
 const from = (step: TodayStepId) => `from=today&step=${step}`;
 
+const mockKindLabelOf = (kind: string): string => (isMockKind(kind) ? mockKindInfo(kind).label : kind);
+
 interface ProblemOutcome {
   problemId: string;
   title: string;
@@ -257,15 +260,21 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
   const mocks = [...input.mocks].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const graded = mocks.find((m) => m.status === 'graded');
   const open = mocks.find((m) => m.status === 'active' || m.status === 'grading' || m.status === 'grade_failed');
+  // A skip wins over an open (active / grade_failed) mock: the user said they
+  // are done with it (Phase H: Skip did nothing while one was open).
+  const offRotation = graded && graded.kind !== input.mockKind;
   base.set('mock', {
-    status: graded ? 'done' : open ? 'in-progress' : skipped.has('mock') ? 'skipped' : 'todo',
+    status: graded ? 'done' : skipped.has('mock') ? 'skipped' : open ? 'in-progress' : 'todo',
     href: graded
       ? `/mock/${graded.id}?${from('mock')}`
       : open
         ? `/mock/${open.id}?${from('mock')}`
         : `/mock?${from('mock')}&kind=${input.mockKind}`,
     detail: `${input.mockKindLabel} — today's kind`,
-    result: graded ? `${graded.verdict ?? 'graded'} level` : null,
+    // A different kind than the day's pick is fine — but say so.
+    result: graded
+      ? `${graded.verdict ?? 'graded'} level${offRotation ? ` · ${mockKindLabelOf(graded.kind)} (today's pick was ${input.mockKindLabel})` : ''}`
+      : null,
     ok: graded ? graded.verdict !== 'below' : null,
   });
 
@@ -283,7 +292,9 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
     status: input.hasDebrief ? 'done' : 'todo',
     href: '/today#debrief',
     detail: 'One short AI read of the day: wins, fixes, tomorrow\'s focus.',
-    result: input.hasDebrief ? input.debriefVerdict : null,
+    // The verdict itself is the first line of the debrief panel right below;
+    // repeating it here printed it twice.
+    result: input.hasDebrief ? 'Written — read it below' : null,
     ok: null,
   });
 
@@ -371,6 +382,9 @@ const AREA_KINDS = [
   { id: 'coding', label: 'Coding' },
 ] as const;
 
+/** Graded mocks of a kind before its readiness shows as a percentage. */
+export const READINESS_MIN_MOCKS = 3;
+
 export function computeReadiness(input: ReadinessInput): ReadinessArea[] {
   const practiced = input.topics.filter((t) => t.attempts > 0);
   const algos: ReadinessArea = practiced.length
@@ -382,11 +396,18 @@ export function computeReadiness(input: ReadinessInput): ReadinessArea[] {
       }
     : { id: 'algos', label: 'Algorithms', pct: null, note: 'not started' };
 
+  // Evidence first (Phase H): one mock flipped an area between 100% and 0%.
+  // Until there are READINESS_MIN_MOCKS grades of a kind it shows the count,
+  // not a percentage.
   const mocks = AREA_KINDS.map(({ id, label }): ReadinessArea => {
-    const s = kindStrength(input.grades, id);
-    if (s === null) return { id, label, pct: null, note: 'not started' };
-    const latest = input.grades.find((g) => g.kind === id)!;
-    return { id, label, pct: Math.round((s / 2) * 100), note: `last: ${latest.verdict} level` };
+    const mine = input.grades.filter((g) => g.kind === id);
+    if (!mine.length) return { id, label, pct: null, note: 'not started' };
+    const latest = mine[0];
+    if (mine.length < READINESS_MIN_MOCKS) {
+      return { id, label, pct: null, note: `${mine.length} of ${READINESS_MIN_MOCKS} mocks · last: ${latest.verdict} level` };
+    }
+    const s = kindStrength(input.grades, id)!;
+    return { id, label, pct: Math.round((s / 2) * 100), note: `${mine.length} mocks · last: ${latest.verdict} level` };
   });
   return [algos, ...mocks];
 }
@@ -394,7 +415,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessArea[] {
 // -----------------------------------------------------------------------------
 // Debrief coercion
 // -----------------------------------------------------------------------------
-const str = (x: unknown, max = 400): string => (typeof x === 'string' ? x.trim().slice(0, max) : '');
+const str = (x: unknown, max = 600): string => (typeof x === 'string' ? clipAtBoundary(x.trim(), max) : '');
 
 /** Whatever the model sent → a well-formed Debrief. Never throws. */
 export function coerceDebrief(raw: unknown): Debrief {
@@ -413,7 +434,7 @@ export function coerceDebrief(raw: unknown): Debrief {
     ...new Set((Array.isArray(tf.patterns) ? tf.patterns : []).filter((p): p is Topic => typeof p === 'string' && valid.has(p))),
   ].slice(0, 3);
   return {
-    verdict: str(cutToolCallFraming(typeof o.verdict === 'string' ? o.verdict : ''), 200) || 'Day logged.',
+    verdict: str(cutToolCallFraming(typeof o.verdict === 'string' ? o.verdict : ''), 300) || 'Day logged.',
     wins,
     fixes,
     tomorrowFocus: { patterns, mockKind: isMockKind(tf.mockKind) ? tf.mockKind : null },
@@ -439,6 +460,10 @@ export function dailyFocusBias(topic: string, focus: readonly string[] | undefin
 // -----------------------------------------------------------------------------
 /** Failed automatic attempts per target per day before it gives up for the day. */
 export const MAX_AI_ATTEMPTS = 2;
+/** Automatic rewrites of a stale warm-up note per day. */
+export const MAX_NOTE_REFRESHES = 1;
+/** Automatic regenerations of a debrief made stale by a later mock grade, per day. */
+export const MAX_DEBRIEF_REGENS = 1;
 /** Minimum wait after a failure before the next attempt (study.service's number). */
 export const FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
 
@@ -451,7 +476,13 @@ export interface PendingReviewsInput {
   recognizeDone: boolean;
   /** Ids that already have a note. */
   noted: readonly string[];
+  /** Noted ids whose note is stale and may be rewritten (budgeted by the caller). */
+  staleNotes?: readonly AiReviewTarget[];
   hasDebrief: boolean;
+  /** A mock is active, grading or grade_failed today: the day is not settled. */
+  mockOpen?: boolean;
+  /** The debrief predates a later mock grade and may be regenerated once. */
+  debriefStale?: boolean;
   failures: Partial<Record<AiReviewTarget, { n: number; at: string }>>;
   enabled: boolean;
   now: number;
@@ -471,13 +502,17 @@ export function pendingReviews(input: PendingReviewsInput): AiReviewTarget[] {
   if (input.recognizeDone) eligible.push('recognize');
   for (const id of ['problem1', 'problem2', 'mock'] as const) if (status.get(id) === 'done') eligible.push(id);
 
-  const allSettled = SKIPPABLE_STEPS.every((id) => ['done', 'skipped'].includes(status.get(id) ?? ''));
+  // Settled = every step done or skipped AND no mock still running or grading
+  // (a second mock started after the first was graded leaves the mock step
+  // "done" while the day is plainly not over).
+  const allSettled =
+    SKIPPABLE_STEPS.every((id) => ['done', 'skipped'].includes(status.get(id) ?? '')) && !input.mockOpen;
   // Real activity, not just "done": a warm-up with nothing due is done but empty.
   const anyDone =
     input.warmupActivity > 0 ||
     input.recognizeDone ||
     (['problem1', 'problem2', 'mock'] as const).some((id) => status.get(id) === 'done');
-  if (!input.hasDebrief && allSettled && anyDone) eligible.push('debrief');
+  if (allSettled && anyDone && (!input.hasDebrief || input.debriefStale)) eligible.push('debrief');
 
   const allowed = (t: AiReviewTarget) => {
     const f = input.failures[t];
@@ -485,7 +520,8 @@ export function pendingReviews(input: PendingReviewsInput): AiReviewTarget[] {
     if (f.n >= MAX_AI_ATTEMPTS) return false;
     return input.now - Date.parse(f.at) >= FAILURE_COOLDOWN_MS;
   };
-  return eligible.filter((t) => (t === 'debrief' || !input.noted.includes(t)) && allowed(t));
+  const stale = new Set(input.staleNotes ?? []);
+  return eligible.filter((t) => (t === 'debrief' || !input.noted.includes(t) || stale.has(t)) && allowed(t));
 }
 
 /** One more failure for a target. Pure. */

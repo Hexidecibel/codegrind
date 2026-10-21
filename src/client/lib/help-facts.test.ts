@@ -83,9 +83,11 @@ describe('the tier ladder Help describes is the one curriculum.ts implements', (
 describe('the spaced-repetition numbers match db.ts', () => {
   const DB = source('src/server/services/db.ts');
 
+  const LADDER = source('src/server/services/review-ladder.ts');
+
   it('mirrors the per-problem review ladder', () => {
-    const match = /const REVIEW_LADDER_DAYS = \[([^\]]*)\]/.exec(DB);
-    expect(match, 'no REVIEW_LADDER_DAYS in db.ts').not.toBeNull();
+    const match = /export const RUNG_DAYS = \[([^\]]*)\]/.exec(LADDER);
+    expect(match, 'no RUNG_DAYS in review-ladder.ts').not.toBeNull();
     const days = match![1].split(',').map((n) => Number(n.trim()));
     expect(days).toEqual([...facts.REVIEW_LADDER_DAYS]);
   });
@@ -112,9 +114,10 @@ describe('the spaced-repetition numbers match db.ts', () => {
     const start = DB.indexOf('export function snoozeReview');
     expect(start, 'no snoozeReview in db.ts').toBeGreaterThan(-1);
     const body = DB.slice(start, DB.indexOf('\n}\n', start));
-    const match = /reviewDueMsFor\(Math\.max\(existing\.attempts, (\d+)\)/.exec(body);
-    expect(match, 'snoozeReview no longer floors the rung').not.toBeNull();
-    expect(Number(match![1])).toBe(facts.REVIEW_SKIP_MIN_RUNG);
+    expect(body, 'snoozeReview no longer snoozes by the rung').toMatch(/ladderSnoozeDue\(/);
+    // The snooze is the row's own rung, and the lowest rung is RUNG_DAYS[0].
+    expect(LADDER).toMatch(/export function ladderSnoozeDue\(row: LadderRow, nowMs: number\): string \{\n  return dueIn\(row\.rung, nowMs\);/);
+    expect(facts.REVIEW_SKIP_MIN_RUNG).toBe(0);
     expect(facts.REVIEW_SKIP_MIN_DAYS).toBe(facts.REVIEW_LADDER_DAYS[facts.REVIEW_SKIP_MIN_RUNG]);
     expect(facts.REVIEW_SKIP_MIN_DAYS).toBeGreaterThan(0);
     // "Not a miss": the statement it runs must not write attempts.

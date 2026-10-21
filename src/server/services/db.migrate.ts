@@ -431,6 +431,13 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
       if (tableExists(db, 'daily_sessions')) {
         addColumnIfMissing(db, 'daily_sessions', 'stepNotes', 'TEXT');
         addColumnIfMissing(db, 'daily_sessions', 'aiFailures', 'TEXT');
+        addColumnIfMissing(db, 'daily_sessions', 'debriefRegens', 'INTEGER NOT NULL DEFAULT 0');
+      }
+      // Phase H: the review queue's spaced ladder (review-ladder.ts). Additive,
+      // no backfill: an old row reads as rung 0 with its miss on an earlier day.
+      if (tableExists(db, 'review_queue')) {
+        addColumnIfMissing(db, 'review_queue', 'rung', 'INTEGER NOT NULL DEFAULT 0');
+        addColumnIfMissing(db, 'review_queue', 'lastMissAt', 'TEXT');
       }
       db.exec(`
         CREATE TABLE IF NOT EXISTS recognize_checks (

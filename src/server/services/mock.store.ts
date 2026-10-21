@@ -393,3 +393,16 @@ export function recentPlannedQuestionIds(kind: MockKind, limit = 5): string[] {
     }
   });
 }
+
+/**
+ * At boot, a mock in `grading` is an orphan: grading runs inside the request
+ * that ended the mock, and that process is gone. Left alone it showed a spinner
+ * forever with no retry (Phase H). Reaped to `grade_failed`, which the mock
+ * page offers to re-grade. Call only before the server takes requests.
+ * Returns how many were reaped.
+ */
+export function reapOrphanedGrading(now = new Date()): number {
+  return db
+    .prepare(`UPDATE mocks SET status = 'grade_failed', updatedAt = ? WHERE status = 'grading'`)
+    .run(now.toISOString()).changes;
+}

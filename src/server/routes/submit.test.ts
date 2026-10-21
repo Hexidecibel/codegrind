@@ -398,15 +398,79 @@ suite('POST /api/submit — recording, exactly once', () => {
     expect(db.isReviewQueued(PROBLEM_ID)).toBe(true);
   });
 
-  it('clears the review on a clean unaided solve', async () => {
-    mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
-    await submit();
-    expect(db.isReviewQueued(PROBLEM_ID)).toBe(true);
+  it('climbs the review ladder on clean solves on LATER days, never the same day (Phase H)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const DAY = 86_400_000;
+      // Noon Pacific, so +N days never crosses a local-day edge by accident.
+      const t0 = Date.parse('2026-10-21T19:00:00.000Z');
+      vi.setSystemTime(t0);
+      mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
+      await submit();
+      expect(db.getReviewRow(PROBLEM_ID)).toMatchObject({ rung: 0, clearedAt: null });
 
-    mocks.runTests.mockResolvedValue(sandboxResult('accepted'));
-    await submit();
-    expect(db.isReviewQueued(PROBLEM_ID)).toBe(false);
-    expect(db.getHistory('javascript')).toHaveLength(2);
+      // Minutes later, solved clean: the same day, so nothing moves.
+      vi.setSystemTime(t0 + 10 * 60_000);
+      mocks.runTests.mockResolvedValue(sandboxResult('accepted'));
+      await submit();
+      expect(db.isReviewQueued(PROBLEM_ID)).toBe(true);
+      expect(db.getReviewRow(PROBLEM_ID)!.rung).toBe(0);
+
+      // Each later-day clean solve climbs a rung: 1 → 3 → 7 → 14 days.
+      let t = t0;
+      for (const [wait, rung] of [[1, 1], [3, 2], [7, 3]] as const) {
+        t += wait * DAY;
+        vi.setSystemTime(t);
+        await submit();
+        const row = db.getReviewRow(PROBLEM_ID)!;
+        expect(row.rung).toBe(rung);
+        expect(row.clearedAt).toBeNull();
+      }
+      // A clean solve at the top rung clears it.
+      t += 14 * DAY;
+      vi.setSystemTime(t);
+      await submit();
+      expect(db.isReviewQueued(PROBLEM_ID)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a lapse drops ONE rung, and several misses on one day are one lapse', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const DAY = 86_400_000;
+      const t0 = Date.parse('2026-10-21T19:00:00.000Z');
+      vi.setSystemTime(t0);
+      mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
+      await submit();
+      mocks.runTests.mockResolvedValue(sandboxResult('accepted'));
+      vi.setSystemTime(t0 + 1 * DAY);
+      await submit();
+      vi.setSystemTime(t0 + 4 * DAY);
+      await submit();
+      expect(db.getReviewRow(PROBLEM_ID)!.rung).toBe(2);
+      mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
+      vi.setSystemTime(t0 + 11 * DAY);
+      await submit();
+      await submit({ problemId: PROBLEM_ID, code: 'y', override: true });
+      const row = db.getReviewRow(PROBLEM_ID)!;
+      expect(row.rung).toBe(1);
+      expect(Date.parse(row.dueAt) - (t0 + 11 * DAY)).toBeGreaterThanOrEqual(3 * DAY - 1000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('soft-caps Submit at three a day per problem; `override` gets past it', async () => {
+    mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
+    for (let i = 0; i < 3; i++) expect((await submit()).status).toBe(200);
+    const capped = await submit();
+    expect(capped.status).toBe(409);
+    expect(JSON.parse(capped.raw)).toMatchObject({ code: 'submit-cap' });
+    expect(db.getHistory('javascript')).toHaveLength(3);
+    expect((await submit({ problemId: PROBLEM_ID, code: 'x', override: true })).status).toBe(200);
+    expect(db.getHistory('javascript')).toHaveLength(4);
   });
 
   it('keeps the review queued when the solve was assisted', async () => {

@@ -37,7 +37,7 @@ process.env.ANTHROPIC_API_KEY = 'test-key-not-used';
 delete process.env.CODEGRIND_PROVIDER;
 delete process.env.ANTHROPIC_MODEL;
 
-const { interviewerTurn, gradeMock, coerceReply, INTERVIEWER_TOOL, EMIT_MOCK_GRADE_TOOL, INTERVIEWER_SYSTEM, GRADE_SYSTEM } =
+const { interviewerTurn, gradeMock, coerceReply, INTERVIEWER_TOOL, EMIT_MOCK_GRADE_TOOL, EMIT_MOCK_GRADE_TOOL_LEAN, INTERVIEWER_SYSTEM, GRADE_SYSTEM } =
   await import('./llm.mock.js');
 const { createAnthropicClient } = await import('./llm.anthropic.js');
 const { buildContext, buildMessages } = await import('./mock.state.js');
@@ -418,7 +418,8 @@ describe('the grade', () => {
     const { grade, metas } = await gradeMock(input);
     expect(mocks.create).toHaveBeenCalledTimes(2);
     expect(mocks.create.mock.calls[0][0].tools[0].strict).toBe(true);
-    expect(mocks.create.mock.calls[1][0].tools[0].strict).toBeUndefined();
+    // The lean retry is strict too (Phase H): unstrict, it failed the same way.
+    expect(mocks.create.mock.calls[1][0].tools[0].strict).toBe(true);
     expect(grade.degraded).toBe(true);
     expect(grade.gapsTaught).toEqual([{ concept: 'idempotency', summary: '' }]);
     expect(metas).toHaveLength(2);
@@ -442,7 +443,25 @@ describe('the grade', () => {
       if (node.anyOf) for (const n of node.anyOf as Record<string, unknown>[]) walk(n);
     };
     walk(EMIT_MOCK_GRADE_TOOL.schema as unknown as Record<string, unknown>);
+    walk(EMIT_MOCK_GRADE_TOOL_LEAN.schema as unknown as Record<string, unknown>);
     walk(INTERVIEWER_TOOL.schema as unknown as Record<string, unknown>);
+  });
+
+  it('keeps the summary LAST as the leak sink, and cuts trailing tool markup off it (Phase H)', async () => {
+    const props = Object.keys(EMIT_MOCK_GRADE_TOOL.schema.properties);
+    expect(props[props.length - 1]).toBe('summary');
+    expect(EMIT_MOCK_GRADE_TOOL.leakSink).toBe('summary');
+    expect(EMIT_MOCK_GRADE_TOOL_LEAN.leakSink).toBe('summary');
+    // The live failure: markup after a complete grade. Strict mode delivered
+    // every field, so the grade stands and only the tail is cut.
+    const tail = '\n<' + 'parameter name="stages">';
+    mocks.create.mockResolvedValueOnce(
+      answer({ ...GRADE, summary: `Solid capacity work.${tail}` }, 'tool_use', 'emit_mock_grade')
+    );
+    const { grade } = await gradeMock(input);
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    expect(grade.summary).toBe('Solid capacity work.');
+    expect(grade.degraded).toBeUndefined();
   });
 });
 

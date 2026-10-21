@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Strip technique names / hint sections / duplicated worked examples out of the
+# banked problem statements (problems.title, prompt, constraints, examples[].explanation).
+# Thin wrapper around bin/strip-pattern-leaks.ts. No model call.
+#
+#   bin/strip-pattern-leaks --dry-run   # print what would change, write nothing
+#   bin/strip-pattern-leaks             # back up the DB, then write (idempotent)
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+# shellcheck source=lib/node.sh
+source "$REPO/bin/lib/node.sh"
+cg_require_node
+
+if [[ -f "$REPO/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO/.env"
+  set +a
+fi
+
+if [[ " $* " != *" --dry-run "* ]]; then
+  "$REPO/bin/backup-db" pre-strip-pattern-leaks
+fi
+
+exec npx tsx bin/strip-pattern-leaks.ts "$@"

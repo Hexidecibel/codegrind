@@ -1,3 +1,4 @@
+import { stripExampleSections, stripPatternLeaks, stripTitleLeak } from '../../shared/pattern-leak.js';
 import {
   TOPICS,
   MISTAKE_TAGS,
@@ -106,6 +107,7 @@ ${p.signatureRule}
 ${p.referenceRule}
 - The prompt is Markdown: a concise problem statement. It must NOT contain an examples section, worked examples, or sample input/output — those go in examples[] and ONLY there, because the app renders the statement and examples[] one after the other and anything in both is printed twice. constraints[] are short bullet strings.
 - examples[] are the human-readable illustrations: 2-3 of them, each with the input as it would be written, the returned output, and a short explanation.
+- NEVER NAME THE TECHNIQUE. Spotting the pattern is the skill being practised, so the title, statement, examples and constraints must not name or hint at the intended technique or data structure: no "use a two-pointer approach", no "you must implement binary search", no "Hint:", "Approach:" or "How it works" sections, no "(i.e., use a hash map)" asides. Express a required complexity as a plain bound ("O(log n) time", "O(1) extra space") or through the numeric constraints. The pattern tag goes in pattern and nowhere else.
 - pattern is the underlying algorithmic pattern tag (e.g. "two-pointer", "sliding-window", "hashing", "binary-search", "dynamic-programming").${
       p.authoringRules.length ? `\n${p.authoringRules.join('\n')}` : ''
     }
@@ -545,12 +547,21 @@ export async function generateProblem(
     throw new Error('Generated problem is missing a reference solution.');
   }
 
+  // The deterministic backstop for the NEVER NAME THE TECHNIQUE rule above
+  // (shared/pattern-leak.ts): the prompt rule alone was ignored on 44 of 73
+  // banked problems. Strips only directive text, never a bare mention.
+  const examples = coerceExamples(input.examples).map((e) =>
+    e.explanation ? { ...e, explanation: stripPatternLeaks(e.explanation) } : e
+  );
+  const statement = stripPatternLeaks(typeof input.prompt === 'string' ? input.prompt : '');
   return {
-    title,
-    prompt: typeof input.prompt === 'string' ? input.prompt : '',
+    title: stripTitleLeak(title),
+    // The statement's own worked examples go when examples[] has them: the UI
+    // renders examples[] right under it, and both is the same thing twice.
+    prompt: examples.length ? stripExampleSections(statement) : statement,
     pattern: typeof input.pattern === 'string' && input.pattern.trim() ? input.pattern.trim() : topic,
-    examples: coerceExamples(input.examples),
-    constraints: coerceStrings(input.constraints),
+    examples,
+    constraints: coerceStrings(input.constraints).map(stripPatternLeaks).filter((c) => c.trim()),
     functionName,
     starterCode,
     sampleTests,

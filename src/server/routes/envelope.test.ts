@@ -102,6 +102,14 @@ describe('check', () => {
   });
 });
 
+describe('the double-answer guard (Phase H)', () => {
+  it('refuses the same item twice inside a few seconds', async () => {
+    svc.seedEnvelopeCards(NOW);
+    expect((await post('/api/envelope/check', { key: 'seed:20gb-day-to-year', answer: '8 TB' })).status).toBe(200);
+    expect((await post('/api/envelope/check', { key: 'seed:20gb-day-to-year', answer: '8 TB' })).status).toBe(409);
+  });
+});
+
 describe('the AI note', () => {
   it('runs once on a miss, is cached, and obeys the toggle', async () => {
     fake.runEnvelopeNote.mockResolvedValue({ result: { slip: 'You used the month constant.', fix: 'Write day = 10^5 first.' }, meta: META });
@@ -119,7 +127,8 @@ describe('the AI note', () => {
     expect((await post('/api/envelope/note', { attemptId: right.attemptId })).status).toBe(409);
 
     setSetting('ai.reviews', false);
-    const miss2 = await (await post('/api/envelope/check', { key: 'seed:2b-month-to-sec', answer: '80' })).json();
+    // Another item: the same one again inside a few seconds is a double tap (Phase H).
+    const miss2 = await (await post('/api/envelope/check', { key: 'seed:300-sec-to-day', answer: '300' })).json();
     expect(miss2.noteAvailable).toBe(false);
     expect((await post('/api/envelope/note', { attemptId: miss2.attemptId })).status).toBe(409);
     expect(fake.runEnvelopeNote).toHaveBeenCalledTimes(1);

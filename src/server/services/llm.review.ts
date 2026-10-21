@@ -21,8 +21,10 @@
 import { GAP_CARD_GRADES, type GapCardGrade } from '../../shared/gap-cards.js';
 import { structured } from './llm.client.js';
 import { cutToolCallFraming, type CallMeta, type ToolSpec } from './llm.types.js';
+import { clipAtBoundary } from '../../shared/clip.js';
 
-const str = (x: unknown, max = 300): string => (typeof x === 'string' ? x.trim().replace(/\s+/g, ' ').slice(0, max) : '');
+const str = (x: unknown, max = 300): string =>
+  typeof x === 'string' ? clipAtBoundary(x.trim().replace(/\s+/g, ' '), max) : '';
 
 // -----------------------------------------------------------------------------
 // Warm-up card grading
@@ -33,7 +35,7 @@ export const CARD_CHECK_SYSTEM = `You grade one spaced-repetition drill card for
 - why: ONE line, specific: what made it got/shaky/missed.
 - missing: 0-3 short items from the card back the answer left out that matter. Empty when nothing important is missing.
 
-Be strict but fair: a confident answer that names the right mechanism is "got" even if terse. Call emit_card_grade exactly once.`;
+Be strict but fair: a confident answer that names the right mechanism is "got" even if terse. "shaky" needs the CORE right; an answer whose central claim or number is wrong (a day's figure where a month's was asked, the opposite choice of the card back) is "missed", however close it sounds. Call emit_card_grade exactly once.`;
 
 // Strict (exactSchema): every property required, no extras, so the endpoint
 // guarantees the types — a `missing` that arrived as a STRING failed two of two
@@ -103,8 +105,8 @@ export function coerceCardCheck(raw: unknown): CardCheckResult {
   const missing = Array.isArray(o.missing) ? o.missing : typeof o.missing === 'string' ? [o.missing] : [];
   return {
     grade,
-    why: str(cutToolCallFraming(typeof o.why === 'string' ? o.why : ''), 240),
-    missing: missing.map((m) => str(m, 160)).filter(Boolean).slice(0, 3),
+    why: str(cutToolCallFraming(typeof o.why === 'string' ? o.why : ''), 400),
+    missing: missing.map((m) => str(m, 240)).filter(Boolean).slice(0, 3),
   };
 }
 
@@ -128,10 +130,14 @@ export async function runCardCheck(input: CardCheckInput): Promise<{ result: Car
 export const STEP_REVIEW_SYSTEM = `You are an interview-prep coach watching ONE day of practice, step by step, for a candidate targeting Staff engineer roles. The day: a warm-up (drill cards from past mocks, review problems), an optional Recognize set (name the pattern of a problem, no code), two adaptive algorithm problems (predict complexity first), and one mock interview.
 
 One step just finished. You get what happened in it, plus the notes from earlier steps today. Write:
-- note: 2-3 short lines on what happened in THIS step — specific, grounded in the digest (names, counts, the pattern, the mistake). No praise padding.
+- note: 2-3 short lines on what happened in THIS step — specific, grounded in the digest (names, counts, the pattern, the mistake). No praise padding. End each sentence cleanly; never trail off.
 - carry: ONE concrete thing to watch in the NEXT step (named below), phrased as an instruction the candidate can act on in the first five minutes of it. E.g. "Before coding, state the loop invariant out loud" — not "keep practising".
 
-If an earlier note's carry was or was not followed here, say so in the note. Call emit_step_review exactly once.`;
+THE CARRY MUST FIT THE NEXT STEP'S KIND. An algorithm problem gets algorithm advice (restate the input and edge cases, say the brute force first, predict time and space, trace an edge case before submitting) — never capacity-estimation, system-design or behavioral advice, however relevant it was to this step. A mock gets advice for that interview.
+
+JUDGING AN EARLIER CARRY. An earlier step may have left a carry for THIS step (shown as "Carry for this step"). Say whether it was followed ONLY when the digest records evidence either way — a prediction made or not, hints used or not, a trace, a pass on the first submit. Most habits (thinking aloud, stating a number before coding) leave no trace in the digest: then say nothing about that carry. Never call a carry skipped, ignored or missed without evidence in the digest, and never count how many times a habit was skipped.
+
+Call emit_step_review exactly once.`;
 
 // Strict, like the card grade. `note` (the longer free text) is last: the leak sink.
 export const EMIT_STEP_REVIEW_TOOL: ToolSpec = {
@@ -171,14 +177,14 @@ export function renderStepReviewInput(i: StepReviewInput): string {
   for (const d of i.digest.length ? i.digest : ['(nothing recorded)']) lines.push(`- ${d}`);
   if (i.earlier.length) {
     lines.push('', 'Earlier today:');
-    for (const e of i.earlier) lines.push(`- ${e.step}: ${e.note} Carry: ${e.carry}`);
+    for (const e of i.earlier) lines.push(`- ${e.step}: ${e.note}${e.carry ? ` Carry for this step: ${e.carry}` : ''}`);
   }
   return lines.join('\n');
 }
 
 export function coerceStepReview(raw: unknown): StepReviewResult {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  return { note: str(cutToolCallFraming(typeof o.note === 'string' ? o.note : ''), 500), carry: str(o.carry, 240) };
+  return { note: str(cutToolCallFraming(typeof o.note === 'string' ? o.note : ''), 900), carry: str(o.carry, 400) };
 }
 
 export async function runStepReview(input: StepReviewInput): Promise<{ result: StepReviewResult; meta: CallMeta }> {

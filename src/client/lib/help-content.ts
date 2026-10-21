@@ -188,7 +188,7 @@ export const HELP_HINTS: Readonly<Record<HelpHintId, HelpHint>> = {
     title: 'Review due',
     body: [
       'Problems you missed, or leaned on, waiting to come back. A due review is served ahead of everything else the scheduler might have picked.',
-      `Miss it again and it goes further out on a ${reviewLadderPhrase()} ladder. Solve it clean and unaided and it leaves the queue.`,
+      `It comes back on a ${reviewLadderPhrase()} ladder: each clean, unaided solve on a later day climbs a rung, a miss drops one, and a clean solve at the top clears it.`,
     ],
     section: 'numbers',
   },

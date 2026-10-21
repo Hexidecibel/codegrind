@@ -165,3 +165,11 @@ export function allAttempts(): { ok: boolean; orders: number; cause: string | nu
 export function attemptsSince(iso: string): EnvelopeAttemptRow[] {
   return (S().since.all(iso) as Record<string, unknown>[]).map(rowToAttempt);
 }
+
+/** When this item was last answered, or null (the double-answer guard). */
+export function lastAttemptAt(itemKey: string): string | null {
+  const row = db.prepare(`SELECT MAX(createdAt) AS at FROM envelope_attempts WHERE itemKey = ?`).get(itemKey) as
+    | { at: string | null }
+    | undefined;
+  return row?.at ?? null;
+}

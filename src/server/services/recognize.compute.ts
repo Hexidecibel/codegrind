@@ -174,6 +174,12 @@ export interface SelectInput {
   weakness: ReadonlyMap<string, number>;
   now: number;
   rng: () => number;
+  /**
+   * Local midnight starting today (ms). A problem already recognized since
+   * then is never re-served in a later session the same day — even by the
+   * relaxed fill pass that ignores RECENT_SKIP_DAYS.
+   */
+  todayStartMs?: number;
 }
 
 export interface Selection {
@@ -236,6 +242,7 @@ export function selectSession(input: SelectInput): Selection {
         if (titles.has(c.title.toLowerCase())) continue;
         if ((perTopic.get(c.topic) ?? 0) >= capLimit) continue;
         if (respectRecent && c.lastRecognizedAt && Date.parse(c.lastRecognizedAt) > recentCut) continue;
+        if (input.todayStartMs !== undefined && c.lastRecognizedAt && Date.parse(c.lastRecognizedAt) >= input.todayStartMs) continue;
         const picks = perTopic.get(c.topic) ?? 0;
         const score =
           (input.weakness.get(c.topic) ?? 0.8) * Math.pow(0.5, picks) +
@@ -295,8 +302,12 @@ export function interleave<T extends { topic: string; due?: boolean }>(items: re
  * The effective grade: a wrong pattern pick is a miss whatever the self-grade
  * says — the pick is the one part that is checked, not felt.
  */
-export function effectiveGrade(patternCorrect: boolean, selfGrade: GapCardGrade): GapCardGrade {
-  return patternCorrect ? selfGrade : 'missed';
+export function effectiveGrade(patternCorrect: boolean, selfGrade: GapCardGrade, aiAccepted = false): GapCardGrade {
+  // A pick other than the card's topic is still right when the AI check judged
+  // the written approach correct (Phase H: "hashing" for a card filed under
+  // "arrays" was checked correct, then force-graded missed). Problems have
+  // more than one valid optimal pattern; the check is the arbiter of that.
+  return patternCorrect || aiAccepted ? selfGrade : 'missed';
 }
 
 /**

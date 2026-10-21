@@ -82,6 +82,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly detail?: string,
+    /** A machine-readable reason, when the route sends one (e.g. 'submit-cap'). */
+    readonly code?: string,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -95,7 +97,8 @@ async function toApiError(res: Response, fallback: string): Promise<ApiError> {
     (body && (body.error || body.message)) || res.statusText || fallback;
   const detail =
     body && typeof body.detail === 'string' ? body.detail : undefined;
-  return new ApiError(message, detail);
+  const code = body && typeof body.code === 'string' ? body.code : undefined;
+  return new ApiError(message, detail, code);
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -207,11 +210,13 @@ export async function submitCode(
   hintsUsed = 0,
   prediction: Prediction | undefined,
   onEvent: (event: SubmitEvent) => void,
+  /** Past the soft Submit cap: the candidate confirmed they want to submit anyway. */
+  override = false,
 ): Promise<void> {
   const res = await fetch('/api/submit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ problemId, code, hintsUsed, prediction }),
+    body: JSON.stringify({ problemId, code, hintsUsed, prediction, ...(override ? { override: true } : {}) }),
   });
   if (!res.ok) throw await toApiError(res, 'Submit failed');
   await readNdjson<SubmitEvent>(res, onEvent);

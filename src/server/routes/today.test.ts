@@ -306,6 +306,60 @@ describe('automatic step reviews (Phase F)', () => {
     expect((await get()).stepNotes.problem1).toBeUndefined();
   });
 
+  it('a job still running past midnight writes to ITS day, not the next one (Phase H)', async () => {
+    const before = new Date('2026-10-21T06:59:50.000Z'); // 23:59:50 PDT, Oct 20
+    vi.setSystemTime(before);
+    insertProblem('p1');
+    insertAttempt('a1', 'p1', '2026-10-21T06:30:00.000Z', true);
+    review.runStepReview.mockImplementation(async () => {
+      vi.setSystemTime(new Date('2026-10-21T07:00:20.000Z')); // the call lands after midnight
+      return REVIEW;
+    });
+    expect((await get()).date).toBe('2026-10-20');
+    await todaySvc.aiReviewsIdle(before);
+    const row = (d: string) => db.prepare(`SELECT stepNotes FROM daily_sessions WHERE date = ?`).get(d) as { stepNotes: string | null } | undefined;
+    expect(JSON.parse(row('2026-10-20')!.stepNotes!).problem1.note).toBe(REVIEW.result.note);
+    expect(row('2026-10-21')?.stepNotes ?? null).toBeNull();
+  });
+
+  it('the auto debrief waits for an open mock, then regenerates ONCE when a later grade lands (Phase H)', async () => {
+    review.runStepReview.mockResolvedValue(REVIEW);
+    fake.runDebrief.mockResolvedValue({ debrief: DEBRIEF, meta: META });
+    insertProblem('p1');
+    insertAttempt('a1', 'p1', '2026-10-21T16:10:00.000Z', true);
+    insertMock('m1', 'active', '2026-10-21T17:00:00.000Z');
+    await post('/api/today/end');
+    await idle();
+    // Every step is settled, but a mock is still running: no debrief yet.
+    expect(fake.runDebrief).not.toHaveBeenCalled();
+
+    db.prepare(`UPDATE mocks SET status = 'graded' WHERE id = 'm1'`).run();
+    db.prepare(
+      `INSERT INTO mock_grades (mockId, level, verdict, grade, usage, createdAt) VALUES ('m1', 'staff', 'at', '{}', '{}', '2026-10-21T19:30:00.000Z')`
+    ).run();
+    await get();
+    await idle();
+    expect(fake.runDebrief).toHaveBeenCalledTimes(1);
+
+    // A second mock graded AFTER the debrief makes it stale: rewritten once.
+    vi.setSystemTime(new Date('2026-10-21T21:00:00.000Z'));
+    insertMock('m2', 'graded', '2026-10-21T20:30:00.000Z', 'below');
+    db.prepare(`UPDATE mock_grades SET createdAt = '2026-10-21T20:55:00.000Z' WHERE mockId = 'm2'`).run();
+    await get();
+    await idle();
+    expect(fake.runDebrief).toHaveBeenCalledTimes(2);
+
+    // ...and never again automatically, whatever lands later.
+    vi.setSystemTime(new Date('2026-10-21T22:00:00.000Z'));
+    insertMock('m3', 'graded', '2026-10-21T21:30:00.000Z', 'at');
+    db.prepare(`UPDATE mock_grades SET createdAt = '2026-10-21T21:55:00.000Z' WHERE mockId = 'm3'`).run();
+    for (let i = 0; i < 3; i++) {
+      await get();
+      await idle();
+    }
+    expect(fake.runDebrief).toHaveBeenCalledTimes(2);
+  });
+
   it('ending the day early writes the step notes, then the debrief with them as input', async () => {
     review.runStepReview.mockResolvedValue(REVIEW);
     fake.runDebrief.mockResolvedValue({ debrief: DEBRIEF, meta: META });
@@ -317,9 +371,8 @@ describe('automatic step reviews (Phase F)', () => {
     await idle();
     expect(review.runStepReview).toHaveBeenCalledTimes(1);
     expect(fake.runDebrief).toHaveBeenCalledTimes(1);
-    expect(fake.runDebrief.mock.calls[0][0].stepNotes).toEqual([
-      { step: 'Problem 1', note: REVIEW.result.note, carry: REVIEW.result.carry },
-    ]);
+    // Notes only: a carry is an instruction, not evidence (Phase H).
+    expect(fake.runDebrief.mock.calls[0][0].stepNotes).toEqual([{ step: 'Problem 1', note: REVIEW.result.note, carry: '' }]);
     const body = await get();
     await idle();
     expect(body.debrief.verdict).toBe('Thin day.');
