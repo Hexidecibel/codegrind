@@ -938,5 +938,99 @@
         "content": "Translate these 2 snippet(s) to Python.\n\nid: primer:arrays\n```javascript\nlet i = 0;\n```\n\nid: lesson:arrays:1\n```javascript\nconst total = nums.reduce((a, b) => a + b, 0);\n```"
       }
     ]
+  },
+  "runDebrief": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1500,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are a blunt, specific interview-prep coach reviewing ONE day of practice for a candidate targeting Staff engineer roles. The day's routine: a warm-up of drill cards and review problems, two adaptive algorithm problems (predict complexity before solving), and one mock interview.\n\nYou get a compact digest of the day and the last seven days. Write a short debrief:\n- verdict: one line, the honest headline of the day.\n- wins: 0-3 specific things that went well, each pointing at evidence in the digest. No generic praise.\n- fixes: 1-3 problems, each with a CONCRETE action: a named pattern to drill, a specific habit for the next problem, a mock concept to revisit. \"Practice more\" is not an action.\n- tomorrowFocus.patterns: 0-3 topic ids, EXACTLY from this list: arrays, hashing, two-pointer, sliding-window, binary-search, stack, linked-list, trees, graphs, bfs-dfs, backtracking, dynamic-programming, greedy, intervals, heap, trie, bit-manipulation, math.\n- tomorrowFocus.mockKind: one of system-design, or omit it to keep the normal rotation.\n\nGround everything in the digest. If the day was thin (steps skipped, nothing attempted), say so plainly and keep it short. Call emit_debrief exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_debrief",
+        "description": "Emit the end-of-day debrief.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "description": "One-line headline of the day."
+            },
+            "wins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "0-3 specific wins."
+            },
+            "fixes": {
+              "type": "array",
+              "description": "1-3 fixes, each with a concrete action.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "issue": {
+                    "type": "string",
+                    "description": "What went wrong, one line."
+                  },
+                  "action": {
+                    "type": "string",
+                    "description": "The concrete drill or action."
+                  }
+                },
+                "required": [
+                  "issue",
+                  "action"
+                ]
+              }
+            },
+            "tomorrowFocus": {
+              "type": "object",
+              "properties": {
+                "patterns": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "0-3 exact topic ids."
+                },
+                "mockKind": {
+                  "type": "string",
+                  "description": "Optional: tomorrow's mock kind."
+                }
+              },
+              "required": [
+                "patterns"
+              ]
+            }
+          },
+          "required": [
+            "verdict",
+            "wins",
+            "fixes",
+            "tomorrowFocus"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_debrief"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Day: 2026-10-21\n\nProblems today:\n- Pair Sum (two-pointer, easy): PASSED 10/10 tests, 0 hints, predicted O(n) time / O(1) space, confidence 4/5; mistakes: off-by-one\n\nMock today:\n- system-design: at level — Solid on scale.\n- gaps: Shard keys?\n\nDrill cards graded today: 3 (got 2, shaky 1, missed 0)\nSkipped steps: Problem 2\n\nLast 7 days: 4 active days, 12 submits, 9 solved, first-submit pass 61%, top mistakes: off-by-one"
+      }
+    ]
   }
 }

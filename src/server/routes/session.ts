@@ -24,6 +24,7 @@ import { planSession, type SessionSnapshotTopic } from '../services/llm.service.
 import { nextIntent, peekUpNext, type SchedulerIntent } from '../services/scheduler.service.js';
 import { getAdaptiveProblem } from '../services/bank.service.js';
 import { errorBody } from '../services/explain.service.js';
+import { dailyFocus } from '../services/today.service.js';
 
 export const sessionRoutes = new Hono();
 
@@ -91,7 +92,9 @@ sessionRoutes.post('/session/start', async (c) => {
       plan = DEFAULT_PLAN;
     }
 
-    const intent = nextIntent({ language, plan });
+    // The last debrief's tomorrowFocus: a light lean, never a pin.
+    const focus = dailyFocus();
+    const intent = nextIntent({ language, plan, dailyFocus: focus });
     const record = await getAdaptiveProblem(intent);
 
     createSession(language, sessionId, plan);
@@ -102,7 +105,7 @@ sessionRoutes.post('/session/start', async (c) => {
       plan,
       problem: toPlayerProblem(record),
       why: intentToWhy(intent),
-      upNext: peekUpNext({ language, plan, avoidTopic: intent.topic }),
+      upNext: peekUpNext({ language, plan, avoidTopic: intent.topic, dailyFocus: focus }),
     };
     return c.json(payload);
   } catch (err) {
@@ -133,11 +136,13 @@ sessionRoutes.post('/session/:id/next', async (c) => {
     const skipProblemId = body?.skipProblemId;
     if (typeof skipProblemId === 'string' && skipProblemId) snoozeReview(skipProblemId);
 
+    const focus = dailyFocus();
     const intent = nextIntent({
       // The language the sitting STARTED in — see createSession above.
       language: session.language,
       plan: session.plan,
       avoidTopic: session.lastTopic ?? undefined,
+      dailyFocus: focus,
     });
     const record = await getAdaptiveProblem(intent);
     bumpSession(id, intent.topic);
@@ -150,6 +155,7 @@ sessionRoutes.post('/session/:id/next', async (c) => {
         language: session.language,
         plan: session.plan,
         avoidTopic: intent.topic,
+        dailyFocus: focus,
       }),
     };
     return c.json(payload);

@@ -1,0 +1,405 @@
+// =============================================================================
+// TodayPage — the guided daily routine, the app's landing page
+// =============================================================================
+// One highlighted current step with a big Start / Continue button; done steps
+// show how they went; a progress bar, the streak and per-area readiness on
+// top; the debrief at the bottom. Everything here is a free GET except the
+// "Debrief me" button, which is the day's one (small, cached) model call.
+
+import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  ArrowRight,
+  CalendarCheck,
+  Check,
+  Flame,
+  Loader2,
+  Lock,
+  RotateCcw,
+  SkipForward,
+  Sparkles,
+  Target,
+  Trophy,
+  Wrench,
+} from 'lucide-react';
+import type { TodayState, TodayStep } from '@/shared/today';
+import { mockKindInfo } from '@/shared/mock-kinds';
+import { endTodayEarly, getToday, runTodayDebrief, skipTodayStep, ApiError } from '@/client/lib/api';
+import { humanize } from '@/client/lib/format';
+import { Button } from '@/client/components/ui/button';
+import { cn } from '@/lib/utils';
+
+function longDate(date: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+}
+
+function Header({ state }: { state: TodayState }) {
+  const pct = Math.round((state.completed / state.total) * 100);
+  return (
+    <section className="space-y-4 rounded-xl border border-border bg-card p-4 sm:p-5">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
+          <CalendarCheck className="h-6 w-6 text-primary" /> Today
+        </h1>
+        <span className="text-sm text-muted-foreground">{longDate(state.date)}</span>
+        <span
+          className="ml-auto inline-flex items-center gap-1 text-sm font-semibold"
+          title="Consecutive days with practice"
+        >
+          <Flame className={cn('h-4 w-4', state.streak > 0 ? 'text-amber-400' : 'text-muted-foreground')} />
+          {state.streak}-day streak
+        </span>
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex justify-between text-xs text-muted-foreground">
+          <span>
+            {state.current === null ? 'Day complete' : `${state.completed} of ${state.total} steps`}
+            {state.endedEarly ? ' · ended early' : ''}
+          </span>
+          <span>~90 min</span>
+        </div>
+        <div
+          className="h-2.5 overflow-hidden rounded-full bg-secondary"
+          role="progressbar"
+          aria-valuenow={pct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {state.readiness.map((a) => (
+          <div key={a.id} className="rounded-lg border border-border px-3 py-2" title={a.note}>
+            <div className="text-xs text-muted-foreground">{a.label}</div>
+            {a.pct === null ? (
+              <div className="text-sm text-muted-foreground/70">not started</div>
+            ) : (
+              <>
+                <div className="text-sm font-semibold">{a.pct}%</div>
+                <div className="mt-1 h-1 overflow-hidden rounded-full bg-secondary">
+                  <div className="h-full bg-emerald-400/80" style={{ width: `${a.pct}%` }} />
+                </div>
+                <div className="mt-1 truncate text-[11px] text-muted-foreground">{a.note}</div>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function StepIcon({ step, index }: { step: TodayStep; index: number }) {
+  const base = 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold';
+  if (step.status === 'done') return <div className={cn(base, 'bg-emerald-500/15 text-emerald-400')}><Check className="h-4 w-4" /></div>;
+  if (step.status === 'skipped') return <div className={cn(base, 'bg-secondary text-muted-foreground')}><SkipForward className="h-4 w-4" /></div>;
+  if (step.status === 'locked') return <div className={cn(base, 'bg-secondary text-muted-foreground')}><Lock className="h-4 w-4" /></div>;
+  const active = step.status === 'current' || step.status === 'in-progress';
+  return (
+    <div className={cn(base, active ? 'bg-primary text-primary-foreground' : 'bg-secondary text-muted-foreground')}>
+      {index + 1}
+    </div>
+  );
+}
+
+function StepRow({
+  step,
+  index,
+  busy,
+  onSkip,
+  onUnskip,
+}: {
+  step: TodayStep;
+  index: number;
+  busy: boolean;
+  onSkip: () => void;
+  onUnskip: () => void;
+}) {
+  const active = step.status === 'current' || step.status === 'in-progress';
+  const isDebrief = step.id === 'debrief';
+  return (
+    <li
+      className={cn(
+        'rounded-xl border p-4 transition-colors',
+        active ? 'border-primary/60 bg-primary/5 shadow-sm' : 'border-border bg-card',
+        (step.status === 'skipped' || step.status === 'locked') && 'opacity-70',
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <StepIcon step={step} index={index} />
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={cn('font-semibold', active && 'text-base')}>{step.label}</span>
+            {step.status === 'in-progress' && (
+              <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-300">in progress</span>
+            )}
+            {step.status === 'skipped' && <span className="text-xs text-muted-foreground">skipped</span>}
+          </div>
+          {step.result ? (
+            <p
+              className={cn(
+                'text-sm',
+                step.ok === true && 'text-emerald-400',
+                step.ok === false && 'text-rose-300',
+                step.ok === null && 'text-foreground/90',
+              )}
+            >
+              {step.result}
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              {step.status === 'locked' ? 'Unlocks after the mock (or end the day early).' : step.detail}
+            </p>
+          )}
+        </div>
+        {step.status === 'skipped' && (
+          <Button variant="ghost" size="sm" onClick={onUnskip} disabled={busy} className="text-muted-foreground">
+            Undo
+          </Button>
+        )}
+        {step.status === 'done' && !isDebrief && step.href !== '/today' && (
+          <Button variant="ghost" size="sm" asChild className="text-muted-foreground">
+            <Link to={step.href}>Open</Link>
+          </Button>
+        )}
+      </div>
+
+      {active && !isDebrief && (
+        <div className="mt-4 flex flex-wrap items-center gap-2 pl-11">
+          <Button asChild size="lg" className="gap-2">
+            <Link to={step.href}>
+              {step.status === 'in-progress' ? 'Continue' : 'Start'} <ArrowRight className="h-4 w-4" />
+            </Link>
+          </Button>
+          <Button variant="ghost" onClick={onSkip} disabled={busy} className="gap-1.5 text-muted-foreground">
+            <SkipForward className="h-4 w-4" /> Skip step
+          </Button>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function DebriefPanel({
+  state,
+  busy,
+  onRun,
+}: {
+  state: TodayState;
+  busy: boolean;
+  onRun: (regenerate: boolean) => void;
+}) {
+  const step = state.steps.find((s) => s.id === 'debrief')!;
+  const d = state.debrief;
+  if (step.status === 'locked') return null;
+  return (
+    <section id="debrief" className="scroll-mt-4 space-y-4 rounded-xl border border-primary/30 bg-card p-4 sm:p-5">
+      <h2 className="flex items-center gap-2 text-lg font-bold">
+        <Sparkles className="h-5 w-5 text-primary" /> Debrief
+      </h2>
+      {!d ? (
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            One short AI read of today — what went well, what to fix (each with a concrete drill), and what
+            tomorrow should lean on. Runs only when you click, once per day.
+          </p>
+          <Button size="lg" onClick={() => onRun(false)} disabled={busy} className="gap-2">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            {busy ? 'Reading your day…' : `Debrief me (~$${state.debriefEstimateUsd.toFixed(2)})`}
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <p className="text-base font-semibold">{d.verdict}</p>
+          {d.wins.length > 0 && (
+            <div className="space-y-1.5">
+              <h3 className="flex items-center gap-1.5 text-sm font-semibold text-emerald-400">
+                <Trophy className="h-4 w-4" /> Wins
+              </h3>
+              <ul className="list-disc space-y-1 pl-5 text-sm">
+                {d.wins.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {d.fixes.length > 0 && (
+            <div className="space-y-1.5">
+              <h3 className="flex items-center gap-1.5 text-sm font-semibold text-amber-300">
+                <Wrench className="h-4 w-4" /> Fixes
+              </h3>
+              <ul className="space-y-2 text-sm">
+                {d.fixes.map((f, i) => (
+                  <li key={i} className="rounded-lg border border-border px-3 py-2">
+                    <div>{f.issue}</div>
+                    <div className="mt-0.5 text-muted-foreground">
+                      <span className="font-medium text-foreground/90">Do:</span> {f.action}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+              <Target className="h-4 w-4 text-primary" /> Tomorrow
+            </h3>
+            <div className="flex flex-wrap gap-1.5 text-xs">
+              {d.tomorrowFocus.patterns.map((p) => (
+                <span key={p} className="rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1">
+                  {humanize(p)}
+                </span>
+              ))}
+              {d.tomorrowFocus.mockKind && (
+                <span className="rounded-full border border-border px-2.5 py-1">
+                  Mock: {mockKindInfo(d.tomorrowFocus.mockKind).label}
+                </span>
+              )}
+              {!d.tomorrowFocus.patterns.length && !d.tomorrowFocus.mockKind && (
+                <span className="text-muted-foreground">The usual adaptive plan.</span>
+              )}
+            </div>
+            {d.tomorrowFocus.patterns.length > 0 && (
+              <p className="text-xs text-muted-foreground">Tomorrow's problems lean toward these (lightly).</p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-3 border-t border-border pt-3 text-xs text-muted-foreground">
+            {state.debriefUsage && (
+              <span>
+                {state.debriefUsage.costUsd != null ? `$${state.debriefUsage.costUsd.toFixed(3)}` : 'local model'} ·{' '}
+                {state.debriefUsage.inputTokens + state.debriefUsage.outputTokens} tokens
+              </span>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              className="ml-auto gap-1.5"
+              onClick={() => {
+                if (window.confirm(`Regenerate the debrief? One more model call (~$${state.debriefEstimateUsd.toFixed(2)}).`)) {
+                  onRun(true);
+                }
+              }}
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+              Regenerate
+            </Button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function TodayPage() {
+  const [state, setState] = useState<TodayState | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [debriefBusy, setDebriefBusy] = useState(false);
+
+  useEffect(() => {
+    getToday()
+      .then(setState)
+      .catch((e: Error) => setError(e.message));
+  }, []);
+
+  // A #debrief link from another screen scrolls once the panel exists.
+  useEffect(() => {
+    if (state && window.location.hash === '#debrief') {
+      document.getElementById('debrief')?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [state]);
+
+  const act = useCallback(async (fn: () => Promise<TodayState>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setState(await fn());
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const runDebrief = useCallback(async (regenerate: boolean) => {
+    setDebriefBusy(true);
+    setError(null);
+    try {
+      setState(await runTodayDebrief(regenerate));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setDebriefBusy(false);
+    }
+  }, []);
+
+  if (!state) {
+    return (
+      <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+        {error ? (
+          <span className="text-destructive-foreground">{error}</span>
+        ) : (
+          <span className="inline-flex items-center gap-2">
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading your day…
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  const canEndEarly = !state.endedEarly && state.current !== null && state.current !== 'debrief';
+
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
+        <Header state={state} />
+
+        {error && <p className="text-sm text-destructive-foreground">{error}</p>}
+
+        <ol className="space-y-2.5">
+          {state.steps.map((s, i) => (
+            <StepRow
+              key={s.id}
+              step={s}
+              index={i}
+              busy={busy}
+              onSkip={() => act(() => skipTodayStep(s.id, true))}
+              onUnskip={() => act(() => skipTodayStep(s.id, false))}
+            />
+          ))}
+        </ol>
+
+        <DebriefPanel state={state} busy={debriefBusy} onRun={runDebrief} />
+
+        <div className="flex flex-wrap items-center gap-3 pb-6 text-sm">
+          {canEndEarly && (
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                if (window.confirm('End the day early? Unfinished steps are skipped and the debrief unlocks.')) {
+                  void act(() => endTodayEarly(true));
+                }
+              }}
+            >
+              End day early
+            </Button>
+          )}
+          {state.endedEarly && state.current !== null && (
+            <Button variant="ghost" disabled={busy} onClick={() => act(() => endTodayEarly(false))}>
+              Resume the day
+            </Button>
+          )}
+          <span className="ml-auto text-xs text-muted-foreground">
+            Today's mock: {mockKindInfo(state.mockKind).label}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}

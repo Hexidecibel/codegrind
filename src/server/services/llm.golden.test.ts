@@ -120,6 +120,12 @@ const TOOL_RESULTS: Record<string, Record<string, unknown>> = {
     code: 'let lo = 0;',
     takeaway: 'The invariant is the algorithm.',
   },
+  emit_debrief: {
+    verdict: 'Solid reps, loose complexity calls.',
+    wins: ['Passed Pair Sum first submit'],
+    fixes: [{ issue: 'Predicted O(n), wrote O(n^2)', action: 'Two sliding-window problems tomorrow' }],
+    tomorrowFocus: { patterns: ['sliding-window'], mockKind: 'system-design' },
+  },
   emit_translations: {
     translations: [
       { id: 'primer:arrays', code: 'i = 0' },
@@ -149,6 +155,8 @@ mocks.create.mockImplementation(async (body: Record<string, unknown>) => {
 });
 
 const llm = await import('./llm.service.js');
+// The Today routine's debrief lives in its own file; same seam, same fixture.
+const debriefLlm = await import('./llm.debrief.js');
 
 // -----------------------------------------------------------------------------
 // Fixed inputs. Every one of these is a constant on purpose: a body that varies
@@ -276,6 +284,29 @@ const CAPTURED: Record<string, unknown> = {
       'python'
     )
   ),
+  runDebrief: await capture(() =>
+    debriefLlm.runDebrief({
+      date: '2026-10-21',
+      attempts: [
+        {
+          title: 'Pair Sum',
+          pattern: 'two-pointer',
+          difficulty: 'easy',
+          solved: true,
+          hints: 0,
+          testsPassed: 10,
+          testsTotal: 10,
+          review: false,
+          predicted: { time: 'O(n)', space: 'O(1)', confidence: 4 },
+          mistakeTags: ['off-by-one'],
+        },
+      ],
+      mock: { kind: 'system-design', verdict: 'at', summary: 'Solid on scale.', gaps: ['Shard keys?'] },
+      skipped: ['Problem 2'],
+      cards: { reviewed: 3, got: 2, shaky: 1, missed: 0 },
+      week: { activeDays: 4, attempts: 12, solved: 9, firstSubmitPassPct: 61, topMistakes: ['off-by-one'] },
+    })
+  ),
 };
 
 if (UPDATE) {
@@ -287,10 +318,11 @@ const GOLDEN = JSON.parse(readFileSync(FIXTURE, 'utf8')) as Record<string, unkno
 
 // =============================================================================
 describe('the request body of every LLM call site', () => {
-  it('covers all eleven call sites', () => {
-    // Twelve entries, eleven sites: generateProblem is captured twice. If a
-    // twelfth site is added, it belongs here before it ships.
-    expect(Object.keys(CAPTURED)).toHaveLength(12);
+  it('covers all twelve call sites', () => {
+    // Thirteen entries, twelve sites: generateProblem is captured twice. The
+    // twelfth is the Today debrief (llm.debrief.ts). If a thirteenth site is
+    // added, it belongs here before it ships.
+    expect(Object.keys(CAPTURED)).toHaveLength(13);
     expect(Object.keys(GOLDEN)).toEqual(Object.keys(CAPTURED));
   });
 

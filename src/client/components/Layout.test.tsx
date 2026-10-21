@@ -46,8 +46,8 @@ function headerHrefs(html: string): string[] {
 }
 
 describe('the nav', () => {
-  it('has exactly six tabs, Mock third and Settings last', () => {
-    expect(navHrefs(render())).toEqual(['/', '/manual', '/mock', '/progress', '/study', '/settings']);
+  it('has exactly seven tabs, Today first and Settings last', () => {
+    expect(navHrefs(render())).toEqual(['/today', '/grind', '/manual', '/mock', '/progress', '/study', '/settings']);
   });
 
   it('keeps Help reachable as a `?` beside the gear, outside the tab row', () => {
@@ -65,7 +65,7 @@ describe('the nav', () => {
     // all on a phone, where none of them has a label.
     const help = /<a[^>]*href="\/help"[^>]*>/.exec(render(HELP_ROUTE));
     expect(help?.[0]).toContain('bg-secondary');
-    const grind = /<a[^>]*href="\/help"[^>]*>/.exec(render('/'));
+    const grind = /<a[^>]*href="\/help"[^>]*>/.exec(render('/grind'));
     expect(grind?.[0]).not.toContain('bg-secondary');
   });
 });
@@ -75,7 +75,7 @@ describe('every tab is usable with no label showing', () => {
     // Below `sm` the nav is six bare glyphs. Without these it is six unlabelled
     // links, which is unusable rather than merely terse.
     const html = render();
-    for (const label of ['Grind', 'Manual', 'Mock', 'Reflect', 'Study', 'Settings', 'Help']) {
+    for (const label of ['Today', 'Grind', 'Manual', 'Mock', 'Reflect', 'Study', 'Settings', 'Help']) {
       expect(html).toContain(`aria-label="${label}"`);
       expect(html).toContain(`title="${label}"`);
     }
@@ -85,25 +85,25 @@ describe('every tab is usable with no label showing', () => {
     // With no label the text line-box no longer sets the height; without
     // min-h/min-w these collapse to roughly 40×28.
     const anchors = [...render().matchAll(/<a [^>]*class="([^"]*)"/g)].map((m) => m[1]);
-    expect(anchors).toHaveLength(7);
-    for (const cls of anchors.slice(0, 6)) {
+    expect(anchors).toHaveLength(8);
+    for (const cls of anchors.slice(0, 7)) {
       expect(cls).toContain('min-h-11');
       expect(cls).toContain('min-w-11');
     }
     // The `?` is narrower by design (36px) but keeps the 44px height.
-    expect(anchors[6]).toContain('min-h-11');
+    expect(anchors[7]).toContain('min-h-11');
   });
 });
 
 describe('the header budget', () => {
   const html = render();
 
-  it('labels the five content tabs from `sm`, the gear from `lg`, and the `?` never', () => {
+  it('labels the six content tabs from `md`, the gear from `lg`, and the `?` never', () => {
     const labelled = [...html.matchAll(/<span class="hidden (sm|md|lg):inline">([^<]+)<\/span>/g)];
     const byBreakpoint: Record<string, string[]> = { sm: [], md: [], lg: [] };
     for (const [, bp, label] of labelled) byBreakpoint[bp].push(label);
-    expect(byBreakpoint.sm).toEqual(['Grind', 'Manual', 'Mock', 'Reflect', 'Study']);
-    expect(byBreakpoint.md).toEqual([]);
+    expect(byBreakpoint.sm).toEqual([]);
+    expect(byBreakpoint.md).toEqual(['Today', 'Grind', 'Manual', 'Mock', 'Reflect', 'Study']);
     expect(byBreakpoint.lg).toEqual(['Settings']);
   });
 
@@ -111,19 +111,24 @@ describe('the header budget', () => {
     expect(html).toMatch(/<nav class="[^"]*gap-0 sm:gap-1/);
   });
 
-  it('pays for Mock with the wordmark until `md`, without hiding it from a reader', () => {
+  it('pays for Today with the logo mark and the header gap below `sm`', () => {
+    expect(html).toMatch(/<header class="[^"]*gap-0 sm:gap-4/);
+    expect(html).toMatch(/<div class="hidden h-7 w-7[^"]*sm:flex/);
+  });
+
+  it('pays for the labels with the wordmark until `lg`, without hiding it from a reader', () => {
     // `sr-only`, not `hidden`: the app's name stays in the accessibility tree at
     // every width and only stops taking layout space on narrow screens.
-    expect(html).toMatch(/class="sr-only[^"]*md:not-sr-only[^"]*"[^>]*>\s*codegrind/);
+    expect(html).toMatch(/class="sr-only[^"]*lg:not-sr-only[^"]*"[^>]*>\s*codegrind/);
     expect(html).not.toMatch(/class="hidden[^"]*"[^>]*>\s*codegrind/);
   });
 
-  it('holds the tagline back to `lg`, where there is finally room for it', () => {
+  it('holds the tagline back to `xl`, where there is finally room for it', () => {
     // It used to appear at `sm`; at `md` the six labels and the wordmark have
     // already spent the row.
     const tagline = /<span class="([^"]*)">\s*AI-coached interview prep/.exec(html);
     expect(tagline, 'the tagline is gone').not.toBeNull();
-    expect(tagline![1]).toContain('lg:inline');
+    expect(tagline![1]).toContain('xl:inline');
     expect(tagline![1]).not.toContain('sm:inline');
   });
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   Loader2,
   Zap,
@@ -19,7 +19,11 @@ import {
   getPrimer,
   getSettings,
   getBankStatus,
+  getToday,
 } from '@/client/lib/api';
+import { presetToOverrides, type AssistanceSettings } from '@/client/lib/assistance';
+import { isGrindLink, todayStepFrom, type TodayLink } from '@/client/lib/today-flow';
+import { TodayNextBar } from '@/client/components/TodayNextBar';
 import { describeWait } from '@/client/lib/wait-copy';
 import { useLocalStorage } from '@/client/hooks/useLocalStorage';
 import { staleForLanguage, type GrindSnapshot } from '@/client/lib/grind-snapshot';
@@ -30,6 +34,9 @@ import { SolveSurface } from '@/client/components/SolveSurface';
 import { CoachBanner } from '@/client/components/CoachBanner';
 import { PatternPrimer } from '@/client/components/PatternPrimer';
 import { humanize } from '@/client/lib/format';
+
+/** The Today routine's editor: Minimal (highlighting + line numbers), closest to CoderPad. */
+const TODAY_ASSISTANCE: AssistanceSettings = { level: 2, overrides: presetToOverrides(2) };
 
 function uniqueTopics(topics: Topic[], next: Topic): Topic[] {
   return topics.includes(next) ? topics : [...topics, next];
@@ -64,6 +71,13 @@ export function GrindPage() {
   const validated = useRef(false);
   const isDesktop = useIsDesktop();
   const controlSize = useControlSize();
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Opened from Today (`?from=today&step=…`): Minimal editor, prediction
+  // required on the problem steps, and a "Next: <step> →" bar on completion.
+  const todayStep = todayStepFrom(location.search);
+  const [todayKey, setTodayKey] = useState(0);
+  const todayEntry = useRef(false);
 
   // "N due for review" pill — motivational; the scheduler already serves them first.
   const refreshReviewDue = useCallback(async () => {
@@ -266,7 +280,41 @@ export function GrindPage() {
   // before this submit. It waits for the stream to end instead.
   const onSubmitRecorded = useCallback(() => {
     void refreshReviewDue();
+    setTodayKey((k) => k + 1);
   }, [refreshReviewDue]);
+
+  // Entering from Today, once: no sitting yet → start one (the user clicked
+  // Start); a sitting whose problem was already submitted today → serve the
+  // next one, so "Problem 2" never opens on Problem 1's finished screen.
+  useEffect(() => {
+    if (!todayStep || todayEntry.current || resuming || starting || advancing) return;
+    todayEntry.current = true;
+    if (!snapshot) {
+      void start();
+      return;
+    }
+    if (todayStep === 'problem1' || todayStep === 'problem2') {
+      getToday()
+        .then((t) => {
+          if (t.attemptedProblemIds.includes(snapshot.problem.id)) void next();
+        })
+        .catch(() => {
+          /* stay on the problem shown */
+        });
+    }
+  }, [todayStep, resuming, starting, advancing, snapshot, start, next]);
+
+  // The bar's link stays on this screen when the next step is another grind
+  // problem: serve it here instead of re-mounting the page.
+  const onTodayLink = useCallback(
+    (link: TodayLink) => {
+      if (!isGrindLink(link)) return false;
+      navigate(link.href, { replace: true });
+      void next();
+      return true;
+    },
+    [navigate, next],
+  );
 
   // ---- Resuming a persisted session (brief liveness check) ------------------
   if (snapshot && resuming) {
@@ -338,6 +386,14 @@ export function GrindPage() {
 
     const footer = (
       <div className="space-y-1.5">
+        {todayStep && (
+          <TodayNextBar
+            here={todayStep}
+            screenPath="/grind"
+            refreshKey={`${todayKey}:${snapshot.problem.id}`}
+            onLocal={onTodayLink}
+          />
+        )}
         {advancing && wait.note && (
           <p
             aria-live="polite"
@@ -380,6 +436,8 @@ export function GrindPage() {
         key={snapshot.problem.id}
         problem={snapshot.problem}
         reviewMode={snapshot.why.kind === 'review'}
+        sessionAssistance={todayStep ? TODAY_ASSISTANCE : undefined}
+        requirePrediction={todayStep === 'problem1' || todayStep === 'problem2'}
         banner={
           <>
             <CoachBanner

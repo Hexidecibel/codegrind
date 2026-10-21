@@ -36,6 +36,7 @@ import {
   tierProgress,
   type TierProgress,
 } from './curriculum.js';
+import { dailyFocusBias } from './today.compute.js';
 
 // -----------------------------------------------------------------------------
 // Intent — what the scheduler decides to serve next.
@@ -71,6 +72,11 @@ export interface NextIntentOpts {
   plan?: SessionPlan;
   /** Topic just served — the scheduler avoids repeating it back-to-back. */
   avoidTopic?: string;
+  /**
+   * The last daily debrief's tomorrowFocus topics (today.service.dailyFocus).
+   * A light lean — see today.compute.DAILY_FOCUS_BIAS.
+   */
+  dailyFocus?: readonly string[];
 }
 
 // -----------------------------------------------------------------------------
@@ -198,11 +204,14 @@ interface Candidate {
   rationale: string;
 }
 
-function focusBias(topic: Topic, plan?: SessionPlan): number {
-  return plan?.focus?.includes(topic) ? 0.5 : 0;
-}
+function buildCandidates(
+  views: TopicView[],
+  plan?: SessionPlan,
+  dailyFocus?: readonly string[]
+): Candidate[] {
+  const focusBias = (topic: Topic, p?: SessionPlan): number =>
+    (p?.focus?.includes(topic) ? 0.5 : 0) + dailyFocusBias(topic, dailyFocus);
 
-function buildCandidates(views: TopicView[], plan?: SessionPlan): Candidate[] {
   const out: Candidate[] = [];
   const byTopic = new Map<Topic, TopicView>();
   for (const v of views) byTopic.set(v.topic, v);
@@ -391,7 +400,7 @@ export function nextIntent(opts: NextIntentOpts): SchedulerIntent {
   }
 
   const views = buildViews(language);
-  let candidates = buildCandidates(views, opts.plan);
+  let candidates = buildCandidates(views, opts.plan, opts.dailyFocus);
 
   // "Don't repeat the topic just served" guard — drop it unless it's all we have.
   if (opts.avoidTopic) {
@@ -424,7 +433,7 @@ export function peekUpNext(opts: NextIntentOpts): string {
     return 'a review problem to solve cold';
   }
   const views = buildViews(opts.language);
-  let candidates = buildCandidates(views, opts.plan);
+  let candidates = buildCandidates(views, opts.plan, opts.dailyFocus);
   if (opts.avoidTopic) {
     const filtered = candidates.filter((c) => c.topic !== opts.avoidTopic);
     if (filtered.length) candidates = filtered;

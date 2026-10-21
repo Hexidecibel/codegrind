@@ -118,6 +118,18 @@ export interface SolveSurfaceProps {
    * "solve it from scratch" note. The editor already resets to starter code.
    */
   reviewMode?: boolean;
+  /**
+   * The Today routine: the editor preset for this problem, instead of the
+   * stored preference. Changing it in the popover lasts for this problem only
+   * and never touches the stored preference.
+   */
+  sessionAssistance?: AssistanceSettings;
+  /**
+   * The Today routine: predict-before-solve is required — the gate opens
+   * whatever the stored preference says, has no Skip, and Start needs an
+   * approach and a time complexity.
+   */
+  requirePrediction?: boolean;
 }
 
 const emptyPrediction = (): Prediction => ({
@@ -145,11 +157,18 @@ export function SolveSurface({
   onSubmitRecorded,
   footer,
   reviewMode = false,
+  sessionAssistance,
+  requirePrediction = false,
 }: SolveSurfaceProps) {
-  const [assistanceRaw, setAssistance] = useLocalStorage<AssistanceSettings>(
+  const [storedAssistance, setStoredAssistance] = useLocalStorage<AssistanceSettings>(
     'codegrind.assistance',
     defaultAssistance(),
   );
+  const [sessionAssist, setSessionAssist] = useState<AssistanceSettings | null>(
+    sessionAssistance ?? null,
+  );
+  const assistanceRaw = sessionAssist ?? storedAssistance;
+  const setAssistance = sessionAssist ? setSessionAssist : setStoredAssistance;
   const assistance = normalizeAssistance(assistanceRaw);
 
   // Below `lg` the two panes are tabbed instead of side-by-side; there simply
@@ -239,13 +258,13 @@ export function SolveSurface({
     'codegrind.predict.gate',
     true,
   );
-  const [predictOpen, setPredictOpen] = useState(planGate);
+  const [predictOpen, setPredictOpen] = useState(planGate || requirePrediction);
   // Read through a ref inside the problem-change effect: putting `planGate` in
   // that effect's deps would make flipping the preference re-run it, and it
   // resets `code` to the starter — one toggle would silently delete whatever
   // you had typed.
-  const planGateRef = useRef(planGate);
-  planGateRef.current = planGate;
+  const planGateRef = useRef(planGate || requirePrediction);
+  planGateRef.current = planGate || requirePrediction;
   const [prediction, setPrediction] = useState<Prediction>(emptyPrediction);
   const [submittedPrediction, setSubmittedPrediction] =
     useState<Prediction | null>(null);
@@ -925,6 +944,7 @@ export function SolveSurface({
             skipPredict();
           }}
           controlSize={controlSize}
+          required={requirePrediction}
         />
       )}
     </div>
@@ -1457,6 +1477,7 @@ function PlanPanel({
   onSkip,
   onNeverAsk,
   controlSize,
+  required = false,
 }: {
   prediction: Prediction;
   onChange: (p: Prediction) => void;
@@ -1465,7 +1486,10 @@ function PlanPanel({
   /** Skip this one AND stop opening the gate; reversible from Assist. */
   onNeverAsk: () => void;
   controlSize: 'sm' | 'touch';
+  /** Today routine: no Skip, and Start needs an approach + time complexity. */
+  required?: boolean;
 }) {
+  const ready = !required || (!!prediction.approach.trim() && !!prediction.predTime.trim());
   const touch = controlSize === 'touch';
   const set = <K extends keyof Prediction>(key: K, value: Prediction[K]) =>
     onChange({ ...prediction, [key]: value });
@@ -1561,35 +1585,43 @@ function PlanPanel({
         <div className="flex items-center gap-3 pt-1">
           <Button
             onClick={onStart}
+            disabled={!ready}
             size={touch ? 'touch' : 'default'}
             className="gap-1.5"
           >
             <Play className="h-4 w-4" />
             Start solving
           </Button>
+          {required && (
+            <span className="text-xs text-muted-foreground">
+              Today's routine: approach + time complexity first.
+            </span>
+          )}
           {/* A real button, not a 22×16 text link. */}
-          <Button
+          {!required && <Button
             variant="ghost"
             onClick={onSkip}
             size={touch ? 'touch' : 'default'}
             className="text-muted-foreground"
           >
             Skip
-          </Button>
+          </Button>}
         </div>
 
         {/* The way out. Not a Button: "never show this again" is a decision, and
             giving it the same weight as "Start solving" invites the mis-tap that
             costs the feature. Says where to get it back in the same breath —
             an opt-out you cannot reverse is worse than the prompt it removed. */}
-        <button
-          type="button"
-          onClick={onNeverAsk}
-          className="flex min-h-11 w-full items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <EyeOff className="h-3.5 w-3.5" />
-          Don&rsquo;t ask again — turn it back on under Assist
-        </button>
+        {!required && (
+          <button
+            type="button"
+            onClick={onNeverAsk}
+            className="flex min-h-11 w-full items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <EyeOff className="h-3.5 w-3.5" />
+            Don&rsquo;t ask again — turn it back on under Assist
+          </button>
+        )}
       </div>
     </div>
   );
