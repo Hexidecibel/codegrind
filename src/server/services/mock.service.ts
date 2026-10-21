@@ -32,13 +32,18 @@ import {
   MOCK_MAX_ANSWER_CHARS,
   costOf,
   type MockAction,
+  type MockCodeResult,
   type MockEndEvent,
+  type MockRunSummary,
+  type MockState,
   type MockGrade,
   type MockPlanPreview,
   type MockTurnRequest,
   type MockUsage,
   type MockView,
 } from '../../shared/mock.js';
+import { MOCK_MAX_CODE_CHARS } from '../../shared/coding-mock.js';
+import type { RunResult } from '../../shared/types.js';
 import {
   gapKey,
   isGapCardGrade,
@@ -46,10 +51,13 @@ import {
   type GapCard,
   type GapCardsResponse,
 } from '../../shared/gap-cards.js';
-import { db } from './db.js';
+import { db, enqueueReview, getActiveLanguage, getProblem, getSkillState } from './db.js';
+import { getNextProblem } from './bank.service.js';
+import { runTests } from './sandbox.service.js';
 import type { CallMeta } from './llm.types.js';
 import { gradeMock, interviewerTurn } from './llm.mock.js';
 import { mockKindSpec } from './mock-kinds/index.js';
+import { coerceRunSummary, toCodeResult, weakestTopicOf } from './mock-kinds/coding.js';
 import { errorBody } from './explain.service.js';
 import {
   applyReply,
@@ -175,7 +183,7 @@ function toView(m: MockRow, turns: StoredMockTurn[], grade: MockGrade | null): M
     usage: m.usage,
     // `rendered` and `observations` stay server-side: the control notes are
     // instructions to the model, not something to show the candidate.
-    turns: turns.map(({ rendered: _r, observations: _o, ...t }) => t),
+    turns: turns.map(({ rendered: _r, observations: _o, editor: _e, ...t }) => t),
     grade,
     gaps: getGaps(m.id),
     createdAt: m.createdAt,
@@ -212,13 +220,31 @@ export function parseKind(raw: unknown): MockKind {
 }
 
 /** The planner's inputs from this kind's history. */
-function prepareArgs(kind: MockKind, level: MockLevel, requested: unknown) {
+function prepareArgs(kind: MockKind, level: MockLevel, requested: unknown, options?: unknown) {
   return {
     level,
     requested,
     history: recentConceptSignals(kind),
     recentQuestionIds: recentPlannedQuestionIds(kind),
+    options,
+    // Coding: the bank (which may generate — a model call that belongs to the
+    // bank, not the spec) and the skill state, in the active language.
+    coding: {
+      weakestTopic: () => weakestTopicOf(getSkillState(getActiveLanguage())),
+      fetchProblem: (topic: Parameters<typeof getNextProblem>[1], difficulty: Parameters<typeof getNextProblem>[2]) =>
+        getNextProblem(getActiveLanguage(), topic, difficulty),
+    },
   };
+}
+
+/** Test seam: replace the hidden-test runner the coding mock uses (the sandbox needs Docker). */
+let runHidden = async (problemId: string, code: string): Promise<RunResult> => {
+  const problem = getProblem(problemId);
+  if (!problem) throw new Error('The mock’s problem is no longer in the bank.');
+  return runTests({ language: problem.language, functionName: problem.functionName, userCode: code, tests: problem.hiddenTests });
+};
+export function setHiddenRunnerForTest(fn: typeof runHidden): void {
+  runHidden = fn;
 }
 
 /**
@@ -229,15 +255,16 @@ function prepareArgs(kind: MockKind, level: MockLevel, requested: unknown) {
 export async function previewPlan(kindRaw: unknown, levelRaw?: unknown): Promise<MockPlanPreview> {
   const kind = parseKind(kindRaw);
   const spec = mockKindSpec(kind);
-  if (!spec.prepare) return { kind, concepts: [], reasons: {}, storyBank: null };
+  // Only PLANNED kinds preview: coding's prepare fetches (maybe generates) a problem.
+  if (!spec.prepare || !spec.info.planned) return { kind, concepts: [], reasons: {}, storyBank: null };
   const level: MockLevel = isMockLevel(levelRaw) ? levelRaw : DEFAULT_MOCK_LEVEL;
   const prep = await spec.prepare(prepareArgs(kind, level, undefined));
-  const concepts = prep.plan.items.map((i) => i.concept);
+  const concepts = prep.plan?.items.map((i) => i.concept) ?? [];
   return {
     kind,
     concepts,
     reasons: Object.fromEntries(concepts.map((c) => [c, prep.reasons[c] ?? []])),
-    storyBank: prep.plan.storyBank ?? null,
+    storyBank: prep.plan?.storyBank ?? null,
   };
 }
 
@@ -246,6 +273,7 @@ export async function startMock(body: {
   level?: unknown;
   promptId?: unknown;
   plan?: unknown;
+  coding?: unknown;
 }): Promise<MockView> {
   const kind = parseKind(body.kind);
   const spec = mockKindSpec(kind);
@@ -264,20 +292,22 @@ export async function startMock(body: {
   // Planned kinds read what they need (behavioral: the story bank) BEFORE the
   // row exists; the result is frozen into the context and the state, so every
   // later request and the grade see exactly what the mock started with.
-  const prep = spec.prepare ? await spec.prepare(prepareArgs(kind, level, body.plan)) : undefined;
+  const prep = spec.prepare ? await spec.prepare(prepareArgs(kind, level, body.plan, body.coding)) : undefined;
   const now = new Date();
   const id = nanoid();
-  const state = {
+  const state: MockState = {
     ...initialState(now, kind),
-    ...(prep ? { plan: prep.plan, graderContext: prep.graderContext } : {}),
+    ...(prep?.plan ? { plan: prep.plan } : {}),
+    ...(prep ? { graderContext: prep.graderContext } : {}),
+    ...(prep?.coding ? { coding: prep.coding } : {}),
   };
   const context = spec.buildContext(prompt, level, prep);
   const row: MockRow = {
     id,
     kind,
     level,
-    promptId: prompt.id,
-    prompt: prompt.brief,
+    promptId: prep?.brief ? null : prompt.id,
+    prompt: prep?.brief ?? prompt.brief,
     status: 'active',
     context,
     digest: null,
@@ -320,7 +350,9 @@ export async function startMock(body: {
 // -----------------------------------------------------------------------------
 
 /** `concept` is checked against the mock's kind later, once the mock is read. */
-function parseTurn(body: unknown): Omit<MockTurnRequest, 'concept'> & { action: MockAction; concept?: unknown } {
+function parseTurn(
+  body: unknown
+): Omit<MockTurnRequest, 'concept' | 'lastRun'> & { action: MockAction; concept?: unknown; lastRun: MockRunSummary | null } {
   const b = (body ?? {}) as Record<string, unknown>;
   if (!Number.isInteger(b.expectedSeq)) throw new MockError('expectedSeq is required.', 400);
   const action = (b.action ?? 'answer') as MockAction;
@@ -330,7 +362,30 @@ function parseTurn(body: unknown): Omit<MockTurnRequest, 'concept'> & { action: 
     throw new MockError(`That answer is over ${MOCK_MAX_ANSWER_CHARS} characters — split it up.`, 400);
   }
   if (action === 'answer' && !content.trim()) throw new MockError('Say something first.', 400);
-  return { expectedSeq: b.expectedSeq as number, content, action, concept: b.concept };
+  if (b.code !== undefined && typeof b.code !== 'string') throw new MockError('code must be a string.', 400);
+  if (typeof b.code === 'string' && b.code.length > MOCK_MAX_CODE_CHARS) {
+    throw new MockError(`The editor is over ${MOCK_MAX_CODE_CHARS} characters.`, 400);
+  }
+  return {
+    expectedSeq: b.expectedSeq as number,
+    content,
+    action,
+    concept: b.concept,
+    ...(typeof b.code === 'string' ? { code: b.code } : {}),
+    lastRun: coerceRunSummary(b.lastRun),
+  };
+}
+
+/**
+ * Fields a mock Submit may have written WHILE this turn's model call was in
+ * flight (routes/submit.ts mock mode does not take the lock — the hidden tests
+ * should not wait on the interviewer). Folded back so the turn's write does not
+ * erase them.
+ */
+function keepConcurrentSubmit(next: MockState, id: string): MockState {
+  const fresh = getMock(id)?.state.coding;
+  if (!next.coding || !fresh) return next;
+  return { ...next, coding: { ...next.coding, submits: fresh.submits, lastSubmit: fresh.lastSubmit } };
 }
 
 export async function takeTurn(id: string, body: unknown): Promise<MockView> {
@@ -351,8 +406,8 @@ export async function takeTurn(id: string, body: unknown): Promise<MockView> {
     }
 
     const now = new Date();
-    const { rendered, endNote } = renderCandidateMessage(
-      { content: req.content, action: req.action, concept },
+    const { rendered, endNote, coding, editor } = renderCandidateMessage(
+      { content: req.content, action: req.action, concept, code: req.code, lastRun: req.lastRun },
       m.state,
       now,
       m.kind
@@ -360,7 +415,8 @@ export async function takeTurn(id: string, body: unknown): Promise<MockView> {
     const messages = buildMessages(m.context, toStoredTurns(turns), rendered);
     const { reply, observations, meta } = await interviewerTurn(messages, m.state.stage, m.kind);
 
-    const next = applyReply(m.state, reply, true, endNote, m.kind);
+    let next = applyReply(m.state, reply, true, endNote, m.kind);
+    if (coding && next.coding) next = keepConcurrentSubmit({ ...next, coding: { ...next.coding, ...coding } }, id);
     const usage = addUsage(m.usage, meta);
     const candidate: NewTurn = {
       seq: seq + 1,
@@ -369,7 +425,7 @@ export async function takeTurn(id: string, body: unknown): Promise<MockView> {
       content: req.content.trim(),
       rendered,
       stage: m.state.stage,
-      meta: { action: req.action },
+      meta: { action: req.action, ...(editor ? { editor } : {}) },
     };
     const interviewer: NewTurn = {
       seq: seq + 2,
@@ -408,7 +464,15 @@ export function prepareEnd(id: string): MockRow {
   return m;
 }
 
-export async function* runEnd(m: MockRow): AsyncGenerator<MockEndEvent> {
+/** POST /end's body: coding sends the editor as it is at End. */
+export function parseEnd(body: unknown): { code?: string } {
+  const b = (body ?? {}) as Record<string, unknown>;
+  if (typeof b.code !== 'string') return {};
+  if (b.code.length > MOCK_MAX_CODE_CHARS) throw new MockError(`The editor is over ${MOCK_MAX_CODE_CHARS} characters.`, 400);
+  return { code: b.code };
+}
+
+export async function* runEnd(m: MockRow, end: { code?: string } = {}): AsyncGenerator<MockEndEvent> {
   if (busy.has(m.id)) {
     yield { type: 'error', error: 'The interviewer is still answering your last message.' };
     return;
@@ -421,6 +485,13 @@ export async function* runEnd(m: MockRow): AsyncGenerator<MockEndEvent> {
     const info = mockKindInfo(m.kind);
     const spec = mockKindSpec(m.kind);
     const prompt = m.promptId ? info.promptById(m.promptId) : null;
+    // Coding: settle the hidden-test result (the last Submit, or the final code
+    // run now). Stored at once, so a failed grade does not run it twice.
+    if (spec.finalize) {
+      const state = await spec.finalize(m.state, end, { runHidden });
+      m = { ...m, state };
+      updateMock({ ...m, status: 'grading' });
+    }
     const graderContext = spec.graderContext?.(m.state) ?? null;
     let grade: MockGrade;
     let usage = m.usage;
@@ -449,6 +520,13 @@ export async function* runEnd(m: MockRow): AsyncGenerator<MockEndEvent> {
       yield { type: 'error', error: body.error, ...(body.detail ? { detail: body.detail } : {}) };
       return;
     }
+    // Coding: the server-known test result onto the grade, and the one deliberate
+    // grind side effect (a missed pattern → the review queue).
+    if (spec.afterGrade) {
+      const after = spec.afterGrade(m.state, grade, { enqueueReview: (pid) => enqueueReview(pid, 'failed') });
+      grade = after.grade;
+      m = { ...m, state: after.state };
+    }
     putGrade(m.id, grade, gradeUsage);
     storeGradeGaps(m.id, grade);
     const digest = `${grade.verdict} ${m.level}: ${grade.summary.slice(0, 280)}`;
@@ -457,6 +535,38 @@ export async function* runEnd(m: MockRow): AsyncGenerator<MockEndEvent> {
   } finally {
     busy.delete(m.id);
   }
+}
+
+// -----------------------------------------------------------------------------
+// Coding: a Submit inside the mock (routes/submit.ts, mode: 'mock')
+// -----------------------------------------------------------------------------
+
+/**
+ * Check a mock-mode Submit before the sandbox runs: the mock exists, is an
+ * active coding mock, and the problem is the mock's own.
+ */
+export function codingSubmitTarget(mockId: unknown, problemId: unknown): MockRow {
+  const m = typeof mockId === 'string' ? getMock(mockId) : null;
+  if (!m) throw new MockError('No such mock.', 404);
+  if (!m.state.coding) throw new MockError('That mock has no editor.', 400);
+  if (m.status !== 'active') throw new MockError(`This mock is ${m.status.replace('_', ' ')}.`, 409);
+  if (problemId !== m.state.coding.problemId) throw new MockError('That is not this mock’s problem.', 400);
+  return m;
+}
+
+/**
+ * Record a mock Submit's hidden-test result on the mock — and NOTHING else: no
+ * attempt row, no skill/SRS update, no review queue, no coaching. Re-read
+ * right before the write (no await in between) so a turn stored meanwhile is
+ * not overwritten.
+ */
+export function recordCodingSubmit(mockId: string, result: RunResult, code: string, now = new Date()): MockCodeResult {
+  const r = toCodeResult(result, code, now);
+  const m = getMock(mockId);
+  if (!m?.state.coding) return r;
+  const coding = { ...m.state.coding, submits: m.state.coding.submits + 1, lastSubmit: r };
+  updateMock({ ...m, state: { ...m.state, coding } });
+  return r;
 }
 
 export function abandonMock(id: string): MockView {

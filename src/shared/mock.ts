@@ -9,6 +9,7 @@
 import type { MockGap } from './gap-cards.js';
 import type { ConceptSignal, GapType, InterviewerMode, MockLevel } from './sd.js';
 import { MOCK_KIND_INFO, type MockConcept, type MockKind, type MockStage } from './mock-kinds.js';
+import type { CodingMockOptions } from './coding-mock.js';
 
 export type { MockConcept, MockKind, MockStage } from './mock-kinds.js';
 
@@ -86,6 +87,55 @@ export interface MockState {
    * sees it.
    */
   graderContext?: string;
+  /** Coding only: the problem, what the interviewer last saw of the editor, and the test results. */
+  coding?: MockCodingState;
+}
+
+/** One hidden-test run inside a coding mock (a mock Submit, or the run at End). */
+export interface MockCodeResult {
+  verdict: string;
+  passed: number;
+  total: number;
+  /** Names of failing hidden tests, at most a handful. Never the expected values. */
+  failing: string[];
+  /** Hash of the code that ran. */
+  codeHash: string;
+  at: string;
+  /** The sandbox could not run it at all. */
+  error?: string;
+}
+
+/**
+ * A coding mock's own state — deliberately NOT `plan` (behavioral's planner
+ * reads past plans of its own kind; a coding mock has no plan).
+ */
+export interface MockCodingState {
+  problemId: string;
+  title: string;
+  topic: string;
+  difficulty: string;
+  pattern: string;
+  language: string;
+  /** How the problem was chosen: the weakest topic, or the start card's pick. */
+  chosenBy: 'weakest' | 'pick';
+  /** Hash of the starter code: End never runs code nobody wrote. */
+  starterHash: string;
+  /**
+   * Hash of the editor as the interviewer last saw it (the starter code at
+   * start). A turn shows the editor again only when this changes.
+   */
+  codeHash: string;
+  /** The code the interviewer last saw — run at End when nothing was submitted. */
+  lastCode: string | null;
+  /** Hash of the last [run] line shown, so the same result is never repeated. */
+  runHash: string | null;
+  /** Mock Submits so far, and the latest one's hidden-test result. */
+  submits: number;
+  lastSubmit: MockCodeResult | null;
+  /** The result the grade used: the last Submit, or the code run at End. */
+  final?: (MockCodeResult & { source: 'submit' | 'end' }) | null;
+  /** Set once the grade put the problem on the review queue. */
+  reviewQueued?: boolean;
 }
 
 /** Whether the story bank (resume-builder) loaded when the mock started. */
@@ -175,6 +225,21 @@ export interface MockGrade {
   questions?: MockQuestionGrade[];
   /** Behavioral: competencies with no good story — capture one in resume-builder. */
   storyGaps?: { concept: MockConcept; note: string }[];
+  /** Coding: the grader's read of the solution, plus the hidden-test result it was given. */
+  coding?: MockCodingGrade;
+}
+
+export interface MockCodingGrade {
+  /** The pattern itself was the miss: not recognised without the interviewer's help. */
+  patternMissed: boolean;
+  patternNote: string;
+  /** As the candidate stated it, and the optimal. */
+  complexityStated: string;
+  complexityOptimal: string;
+  /** Hidden tests at the end (filled by the server, never the model). Null = never ran. */
+  tests: (MockCodeResult & { source: 'submit' | 'end' }) | null;
+  /** True when the problem was put on the review queue because the pattern was missed. */
+  reviewQueued: boolean;
 }
 
 /** One behavioral question, graded. */
@@ -242,6 +307,8 @@ export interface MockStartRequest {
   level?: MockLevel;
   /** A prompt-bank id. Absent = the server picks. */
   promptId?: string;
+  /** Coding: how to pick the problem. Absent = the weakest topic, medium. */
+  coding?: CodingMockOptions;
 }
 
 export interface MockTurnRequest {
@@ -251,6 +318,26 @@ export interface MockTurnRequest {
   action?: MockAction;
   /** For teach_me: which concept, when the client knows it (an offer). */
   concept?: MockConcept;
+  /** Coding: the editor right now. Shown to the interviewer only when it changed. */
+  code?: string;
+  /** Coding: the newest Run/Submit result the interviewer has not heard about. */
+  lastRun?: MockRunSummary;
+}
+
+/** A one-line Run or Submit result, as the client summarises it for the interviewer. */
+export interface MockRunSummary {
+  kind: 'run' | 'submit';
+  verdict: string;
+  passed: number;
+  total: number;
+  /** "sample 2: expected 5, got 4" — the first failure, short. Never for hidden tests' values. */
+  firstFailure?: string;
+}
+
+/** POST /api/mock/:id/end body. */
+export interface MockEndRequest {
+  /** Coding: the editor at End — run against the hidden tests unless it was just submitted. */
+  code?: string;
 }
 
 /** NDJSON lines from POST /api/mock/:id/end. */
@@ -273,7 +360,9 @@ export const MOCK_MINUTES = MOCK_KIND_INFO['system-design'].minutes;
 /** How long before the end the interviewer is warned. */
 export const MOCK_WARN_MINUTES = 5;
 /** The longest answer accepted in one turn, in characters. */
-export const MOCK_MAX_ANSWER_CHARS = 6000;
+// Dictated answers (Wispr Flow into the textarea) run long; 8000 is ~1,300
+// spoken words — several minutes of talking, well past any one turn.
+export const MOCK_MAX_ANSWER_CHARS = 8000;
 
 // -----------------------------------------------------------------------------
 // Price

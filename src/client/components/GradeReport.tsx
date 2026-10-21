@@ -19,6 +19,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import type {
+  MockCodingGrade,
   MockGrade,
   MockKind,
   MockQuestionGrade,
@@ -143,6 +144,57 @@ function QuestionList({ questions, conceptLabel }: { questions: MockQuestionGrad
   );
 }
 
+/** Coding: the hidden-test result the grade used, the pattern call, complexity, and the review-queue note. */
+function CodingSummary({ coding }: { coding: MockCodingGrade }) {
+  const t = coding.tests;
+  const pass = t && !t.error && t.total > 0 && t.passed === t.total;
+  return (
+    <section className="space-y-1.5 rounded-lg border border-border bg-card p-3 text-sm">
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span className="font-semibold">Hidden tests</span>
+        {t ? (
+          t.error ? (
+            <span className="text-amber-300">could not run ({t.error})</span>
+          ) : (
+            <span className={pass ? 'text-emerald-300' : 'text-red-300'}>
+              {t.passed}/{t.total} passed
+            </span>
+          )
+        ) : (
+          <span className="text-muted-foreground">never ran — no code was written</span>
+        )}
+        {t && !t.error && (
+          <span className="text-xs text-muted-foreground">
+            {t.source === 'submit' ? 'from your last Submit' : 'your final code, run at End'}
+          </span>
+        )}
+      </div>
+      {t && t.failing.length > 0 && (
+        <div className="text-xs text-muted-foreground">Failing: {t.failing.join(', ')}</div>
+      )}
+      <div>
+        <span className="font-semibold">Pattern</span>{' '}
+        <span className={coding.patternMissed ? 'text-amber-300' : 'text-emerald-300'}>
+          {coding.patternMissed ? 'missed' : 'found it yourself'}
+        </span>
+        {coding.patternNote && <span className="text-muted-foreground"> — {coding.patternNote}</span>}
+      </div>
+      <div>
+        <span className="font-semibold">Complexity</span>{' '}
+        <span className="text-muted-foreground">
+          yours: {coding.complexityStated || 'not stated'}
+          {coding.complexityOptimal ? ` · optimal: ${coding.complexityOptimal}` : ''}
+        </span>
+      </div>
+      {coding.reviewQueued && (
+        <p className="text-xs text-sky-300">
+          This problem is now on your review queue — Grind will bring it back cold.
+        </p>
+      )}
+    </section>
+  );
+}
+
 export function GradeReport({
   grade,
   usage,
@@ -189,6 +241,8 @@ export function GradeReport({
           </p>
         )}
       </div>
+
+      {grade.coding && <CodingSummary coding={grade.coding} />}
 
       {grade.questions && grade.questions.length > 0 && (
         <QuestionList questions={grade.questions} conceptLabel={conceptLabel} />

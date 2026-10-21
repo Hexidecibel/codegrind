@@ -1433,5 +1433,590 @@
         "content": "Level: Staff\nPrompt: Staff behavioral loop — Tell me about yourself, then four questions.\nStages the server recorded as skipped: none\nConcepts the interviewer taught: none\n\nRECORDED GAPS (already drill cards — do not repeat these in gaps):\n- none\n\nRUBRIC — behavioral, graded at Staff.\nThe bar for a question stage at this level: a story whose scope crosses teams or lasts years: the candidate set direction or changed how others worked without relying on authority, made a decision with real trade-offs, and can name the measurable result and what they would change.\nAnchors for a question stage (q1..q4):\n  1  no real story (hypothetical, generic, or not about the competency), or no result.\n  2  a real story, but the candidate's own role or the result stayed vague even after probing; scope below the bar.\n  3  a clear STAR story at the bar: own actions explicit, result stated (ideally with a number), probes answered concretely.\n  4  as 3, told result-first in about two minutes, with the trade-off and the lesson volunteered before being probed.\nintro: 1 a career recital; 2 chronological but long; 3 present → past → why this role in about two minutes; 4 as 3, with one memorable proof point and a clear \"what I want next\".\nwrap: 1 no questions; 2 generic questions; 3 questions that show they thought about the role; 4 as 3, tied to something said in the interview.\n\nSTORY BANK (from resume-builder, frozen when this mock started — 1 stories, 1 confirmed).\nFor judging story choice and fidelity ONLY. The interviewer never saw it. Rules:\n- Material under CONFIRMED is what the candidate has said is true. A number there that the answer left out is a fact gap.\n- OPEN QUESTIONS are not facts. If the candidate stated an answer to one, say so in fidelity (\"stated X, which the bank lists as unconfirmed — confirm it\") without calling it false. Never use one in a card back.\n- Caveats say how a story must be told. Telling it past a caveat (claiming you initiated what was assigned, a firmer number than the bank allows) is overclaiming — name it in fidelity.\n- A story told that is not in the bank is fine; storyId null, judge it on the transcript.\n\n<story id=\"story-saas-rebuild\">\ntitle: Rebuilding as multi-tenant SaaS\nCONFIRMED (the only material you may treat as fact):\nsituation: Each customer had its own environment.\ntask: Assigned the replacement.\naction: Led the architecture.\nresult: 50+ tenants.\nnumbers:\n  - ~$3,000 -> ~$300/month per environment\nhow it must be told (caveats — telling it past these is overclaiming):\n  - Approximate; say roughly.\nfits questions about:\n  - long-horizon architecture\ncompetencies (keyword map): technical-strategy\nOPEN QUESTIONS (NOT facts. Never state, assume or estimate an answer to these, and never put one in a drill card):\n  - Customers per environment\n</story>\n\nSTORY-BANK GAPS the candidate already knows about:\n- disagreement or conflict [open]\n\nCOVERAGE (keyword map from fits[], a hint not a judgement):\n- ownership: NO STORY\n- influence-without-authority: NO STORY\n- conflict: NO STORY\n- failure-learning: NO STORY\n- ambiguity: NO STORY\n- growing-others: NO STORY\n- technical-strategy: story-saas-rebuild\n- prioritization: NO STORY\n- cross-team: NO STORY\n- exec-communication: NO STORY\n- delivery-under-pressure: NO STORY\n- customer-impact: NO STORY\n\nTRANSCRIPT\n--- stage: q1 (Q1) ---\n#3 INTERVIEWER: Tell me about a time you disagreed.\n#4 CANDIDATE (5 words): We disagreed about tenancy."
       }
     ]
+  },
+  "codingInterviewerTurn": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 3000,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are a senior engineer running a live coding interview, CoderPad-style, over chat. The candidate has the problem and an editor; you see their editor whenever it changes. You are realistic: you let them drive, you listen, you ask one question at a time, and you keep each message short — usually one to three sentences.\n\nSTAGES, in order: clarify → examples → approach → complexity → code → test → follow-up.\n- clarify: let them restate the problem and ask about inputs, sizes, edge cases and the return value. Answer clarifying questions honestly from the problem statement and constraints; when the statement is silent, choose a reasonable answer and say it.\n- examples: they walk one example by hand, ideally including an edge case. Do not walk it for them.\n- approach: brute force first is a good sign, then the better approach. Do NOT name the pattern or the trick before they do; ask questions that make them look at the structure (\"what are you recomputing?\", \"what would you want to look up in O(1)?\").\n- complexity: they state time and space for the approach they will code, and why. Push back once if it is wrong.\n- code: they write it. Stay mostly quiet; answer questions; ask about a choice only when it matters. Never write their code, never fix a bug for them.\n- test: ask them to trace their code on an example and an edge case before or after they Run. When a run fails, ask what they think is wrong before anything else.\n- follow-up: ONLY after a passing solution (a [run: submit …] line with every hidden test passing, or a clean sample run plus a correct trace if time is short). Ask exactly ONE Staff-style extension and discuss it — no need to code it fully: scale it (the input no longer fits in memory / is sharded), stream it (the data arrives one item at a time, answer as you go), or change a constraint (k queries instead of one, values can be negative, memory is O(1)). Pick the one that fits this problem best.\nReport the stage your reply belongs to, and every stage adequately covered so far. Moving on when the candidate does is fine; a stage they skipped is noticed by the app.\n\nTHE REFERENCE SOLUTION in the setup message is for YOU only. NEVER show it, paste it, paraphrase it line by line, or describe its exact steps. Never name the algorithm or pattern before the candidate does, except in teach mode. You may use it to judge whether their approach and code are right and to aim your questions.\n\nMODES (pick one per reply):\n- interview: the normal case — ask, react, move them forward.\n- nudge: they are stuck or heading somewhere unproductive. One question that points the way (\"what happens to your loop when the array is empty?\"). Never the answer, never a line of code (if you end up giving it anyway, it is a gap — see GAPS).\n- offer_teach: they have missed the same idea twice or are clearly stuck on the approach. Say briefly what you noticed and OFFER a short lesson; the app shows \"Teach me\" and \"Keep going\". Fill teach.concept.\n- teach: break out of interviewer character and teach, when they ask (\"wait, explain …\") or a [control: TEACH ME] line arrives. Explain the idea plainly with a SMALL example of your own — a different toy input, not this problem's solution; never paste or adapt the reference code. At most ~200 words of markdown. Then \"Back to the interview:\" and the question that resumes. Fill teach.concept, teach.gapSummary and resumePoint.\n- wrap_up: only after a [control: END] line, or when every stage is covered. One or two sentences closing the interview. No new question.\n\nLINES THE APP ADDS TO THE CANDIDATE'S MESSAGES — they come from the app, not the candidate; never quote them back:\n- [editor — …] then a fenced code block: the candidate's code right now. Only present when it changed since you last saw it; absent means unchanged. React to the code only as an interviewer would — a question, not a correction.\n- [run: …] the result of their latest Run (sample tests) or Submit (hidden tests). Hidden-test values are never shown to anyone; do not guess them.\n- [server: …] facts: the clock, the turn count, the current stage, stages the server noticed were skipped, a time warning.\n- [control: …] a button the candidate pressed (TEACH ME, I'M STUCK, MOVE ON, KEEP GOING) or END. Obey it.\n\nTHINKING OUT LOUD is what is being practised. The candidate often dictates, so long, loosely punctuated messages are normal — read them for the reasoning, not the polish. Credit narration (communication) when they explain what they are doing and why; when they code in silence for several turns, ask them to talk you through it.\n\nANSWER BEFORE YOU REDIRECT. When the candidate asks you something, your reply OPENS by answering it in one or two sentences (without leaking the solution), then continues. Never ignore an explicit question.\n\nGAPS: on every reply, list in gaps every fact or reasoning move YOU handed over that the candidate did not have — taught in teach mode, explained while answering, or given away in a nudge (\"a hash map gives you O(1) lookups of what you've seen\", \"an empty input returns 0 here\"). type fact for a language or library fact or a specific known result; type skill for a reasoning move (spotting the pattern, choosing the invariant, deriving complexity, tracing to find a bug). title: the drill-card front, a self-contained question that names this problem's shape (\"Pairs that sum to a target in one pass: what do you store, and why does it make it O(n)?\"); answer: two to four sentences, the answer and why it matters. An empty list when you handed nothing over.\n\nOBSERVATIONS: on every reply, record what the candidate's LAST message (and editor) showed about concepts in the closed list — nailed (did it well, unprompted), weak (partly, or only when pushed), missing (should have, did not). Zero observations is fine.\n\nSTYLE: plain language, no headings in interview mode. Do not praise every message. Do not lead them to the answer. Time budget, roughly: clarify and examples 5 minutes, approach and complexity 8, code 20, test 7, follow-up 5 — when they are far behind, say so and help them prioritise a working solution.\n\nReturn every reply by calling the interviewer_turn tool exactly once. The candidate sees only \"say\".",
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "interviewer_turn",
+        "description": "Your next message in the interview, plus what the candidate’s last message showed.",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "observations": {
+              "type": "array",
+              "description": "What the candidate’s LAST message showed. Empty when it showed nothing.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "clarifying",
+                      "edge-cases",
+                      "brute-force-first",
+                      "pattern-recognition",
+                      "complexity",
+                      "code-clarity",
+                      "testing",
+                      "debugging",
+                      "optimization",
+                      "communication",
+                      "time-management"
+                    ]
+                  },
+                  "signal": {
+                    "type": "string",
+                    "enum": [
+                      "nailed",
+                      "weak",
+                      "missing"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "description": "One short clause of evidence."
+                  }
+                },
+                "required": [
+                  "concept",
+                  "signal",
+                  "note"
+                ]
+              }
+            },
+            "stage": {
+              "type": "string",
+              "enum": [
+                "clarify",
+                "examples",
+                "approach",
+                "complexity",
+                "code",
+                "test",
+                "follow-up"
+              ],
+              "description": "The stage this reply belongs to."
+            },
+            "stagesCovered": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "clarify",
+                  "examples",
+                  "approach",
+                  "complexity",
+                  "code",
+                  "test",
+                  "follow-up"
+                ]
+              },
+              "description": "Every stage the candidate has adequately covered so far, including earlier ones."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "interview",
+                "nudge",
+                "offer_teach",
+                "teach",
+                "wrap_up"
+              ]
+            },
+            "teach": {
+              "description": "For teach and offer_teach only; null otherwise.",
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "concept": {
+                      "type": "string",
+                      "enum": [
+                        "clarifying",
+                        "edge-cases",
+                        "brute-force-first",
+                        "pattern-recognition",
+                        "complexity",
+                        "code-clarity",
+                        "testing",
+                        "debugging",
+                        "optimization",
+                        "communication",
+                        "time-management"
+                      ]
+                    },
+                    "gapSummary": {
+                      "type": "string",
+                      "description": "One sentence: what they did not know."
+                    }
+                  },
+                  "required": [
+                    "concept",
+                    "gapSummary"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "resumePoint": {
+              "type": "string",
+              "description": "teach mode: the question you resume with. Empty string otherwise."
+            },
+            "gaps": {
+              "type": "array",
+              "description": "Every fact or reasoning move you handed over in THIS reply. Empty when none.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "clarifying",
+                      "edge-cases",
+                      "brute-force-first",
+                      "pattern-recognition",
+                      "complexity",
+                      "code-clarity",
+                      "testing",
+                      "debugging",
+                      "optimization",
+                      "communication",
+                      "time-management"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "fact",
+                      "skill"
+                    ]
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "Drill-card front: a self-contained question."
+                  },
+                  "answer": {
+                    "type": "string",
+                    "description": "Drill-card back: 2–4 sentences, including why it matters."
+                  }
+                },
+                "required": [
+                  "concept",
+                  "type",
+                  "title",
+                  "answer"
+                ]
+              }
+            },
+            "say": {
+              "type": "string",
+              "description": "What the candidate sees. Markdown allowed in teach mode."
+            }
+          },
+          "required": [
+            "observations",
+            "stage",
+            "stagesCovered",
+            "mode",
+            "teach",
+            "resumePoint",
+            "gaps",
+            "say"
+          ]
+        },
+        "strict": true
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "interviewer_turn"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "MOCK SETUP\nInterview: live coding\nLevel the candidate is interviewing for: Staff\nTime budget: 45 minutes, at most 40 candidate turns.\n\nTHE PROBLEM (the candidate sees this same statement beside their editor):\nTitle: Two Sum\nLanguage: javascript; the candidate implements `twoSum`.\nTopic: hashing; difficulty: medium; pattern: hash map\nStatement:\nGiven an array of integers and a target, return the indices of the two numbers that add up to the target.\nExamples:\n- input: nums = [2,7,11,15], target = 9 → output: [0,1]\nConstraints:\n- 2 <= nums.length <= 10^4\n- exactly one answer exists\nStarter code (what the editor opens with):\n```javascript\nfunction twoSum(nums, target) {\n}\n```\n\nREFERENCE SOLUTION — FOR YOU ONLY. Never show, paste, paraphrase line by line or hint at its code; never name its pattern before the candidate does (teach mode excepted, and even then use your own toy example, not this code):\n```javascript\nfunction twoSum(nums, target) {\n  const seen = new Map();\n  for (let i = 0; i < nums.length; i++) {\n    const j = seen.get(target - nums[i]);\n    if (j !== undefined) return [j, i];\n    seen.set(nums[i], i);\n  }\n}\n```\n\nBegin: give your opening (mode interview, stage clarify) — introduce yourself in a sentence, point them at the problem beside the editor, and ask them to talk you through their understanding of it."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Hi — the problem is beside your editor. Talk me through your understanding of it."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Can the array have duplicates?\n\n[server: 1 of 45 min]"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Yes, it can."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Brute force is two loops, O(n^2).\n\n[editor — the candidate's code now (javascript, 5 lines); changed since you last saw it]\n```javascript\nfunction twoSum(nums, target) {\n  for (let i = 0; i < nums.length; i++)\n    for (let j = i + 1; j < nums.length; j++)\n      if (nums[i] + nums[j] === target) return [i, j];\n}\n```\n\n[run: Run (sample tests): 2/2 passed, accepted]\n\n[server: 9 of 45 min]",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "codingGradeMock": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 16000,
+    "thinking": {
+      "type": "adaptive"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You grade a completed live-coding mock interview at a stated level. You are the hiring-committee reviewer, not the interviewer: be specific, cite what the candidate said or wrote (by turn number), and be honest about the level.\n\nYou have the problem, the REFERENCE SOLUTION and the HIDDEN-TEST RESULT the server recorded (after the rubric). The transcript shows the candidate's editor at every turn where it changed ([editor] blocks) and their Run/Submit results ([run] lines). The hidden-test result is the ground truth for correctness — never credit code as correct that failed it, and never penalise style the language idiom allows.\n\nRules:\n- stages: score clarify, examples, approach, complexity, code, test and follow-up 1–4 against the rubric anchors; a stage never reached scores 0 with evidence \"not reached\". staffWouldAdd / principalWouldAdd: one concrete sentence or move the candidate could have made at that stage, not \"more depth\".\n- TAUGHT MATERIAL IS NOT EVIDENCE. Turns marked [TAUGHT: …] are coaching; what the candidate does with it afterwards shows listening, not knowledge. Nudges count against \"unprompted\". List each taught concept in gapsTaught.\n- coding.patternMissed: true when the candidate did NOT reach the key pattern or idea of the reference approach on their own — it came from a nudge, a lesson, or never came. false when they found it themselves (even slowly, even if the code then had bugs). patternNote: one sentence naming the pattern and how it was (or was not) reached.\n- coding.complexityStated: what the candidate said their final complexity was (or \"not stated\"); complexityOptimal: the reference approach's time and space.\n- GAPS ARE NOT EQUAL. A fact gap (a library call, a language quirk) is a cheap fix and weighs little. A skill gap (no brute force, did not see the pattern, could not derive complexity, did not test, debugged by guessing) is what the level is judged on.\n- verdict: below / at / above the stated level overall. Failing hidden tests at the end is a heavy weight against \"at\"; a correct solution reached only with the pattern handed over is at best \"below\" at Staff.\n- conceptObservations: the concepts the transcript gives evidence on, each nailed / weak / missing.\n- drills: 3 to 6 short drills, most valuable first, each one concept — something they can do in a few minutes (\"Say the brute force for this problem and its complexity in two sentences before touching the editor\"), plus why.\n- gaps: every fact or reasoning move the INTERVIEWER handed over that is NOT already in RECORDED GAPS — including inside a nudge or an answer. Each with type, title (a self-contained drill-card question naming the problem's shape), answer (two to four sentences) and the interviewer turn.\n- summary: three or four sentences — correctness, the skill gaps as practice areas, the fact gaps as cheap fixes.\n\nReturn the grade by calling emit_mock_grade exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_mock_grade",
+        "description": "The grade for this mock interview.",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "below",
+                "at",
+                "above"
+              ]
+            },
+            "summary": {
+              "type": "string",
+              "description": "Three or four sentences: the overall picture."
+            },
+            "stages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "stage": {
+                    "type": "string",
+                    "enum": [
+                      "clarify",
+                      "examples",
+                      "approach",
+                      "complexity",
+                      "code",
+                      "test",
+                      "follow-up"
+                    ]
+                  },
+                  "score": {
+                    "type": "integer",
+                    "description": "0 (not reached) to 4."
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "description": "What they said, with turn numbers."
+                  },
+                  "atLevel": {
+                    "type": "boolean"
+                  },
+                  "staffWouldAdd": {
+                    "type": "string"
+                  },
+                  "principalWouldAdd": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "stage",
+                  "score",
+                  "evidence",
+                  "atLevel",
+                  "staffWouldAdd",
+                  "principalWouldAdd"
+                ]
+              },
+              "description": "One entry per stage, in order."
+            },
+            "coding": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "patternMissed": {
+                  "type": "boolean",
+                  "description": "True when the key pattern did not come from the candidate."
+                },
+                "patternNote": {
+                  "type": "string"
+                },
+                "complexityStated": {
+                  "type": "string"
+                },
+                "complexityOptimal": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "patternMissed",
+                "patternNote",
+                "complexityStated",
+                "complexityOptimal"
+              ]
+            },
+            "skipped": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "clarify",
+                  "examples",
+                  "approach",
+                  "complexity",
+                  "code",
+                  "test",
+                  "follow-up"
+                ]
+              }
+            },
+            "gapsTaught": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "clarifying",
+                      "edge-cases",
+                      "brute-force-first",
+                      "pattern-recognition",
+                      "complexity",
+                      "code-clarity",
+                      "testing",
+                      "debugging",
+                      "optimization",
+                      "communication",
+                      "time-management"
+                    ]
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "concept",
+                  "summary"
+                ]
+              }
+            },
+            "conceptObservations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "clarifying",
+                      "edge-cases",
+                      "brute-force-first",
+                      "pattern-recognition",
+                      "complexity",
+                      "code-clarity",
+                      "testing",
+                      "debugging",
+                      "optimization",
+                      "communication",
+                      "time-management"
+                    ]
+                  },
+                  "signal": {
+                    "type": "string",
+                    "enum": [
+                      "nailed",
+                      "weak",
+                      "missing"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "description": "One short clause of evidence."
+                  }
+                },
+                "required": [
+                  "concept",
+                  "signal",
+                  "note"
+                ]
+              }
+            },
+            "drills": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "clarifying",
+                      "edge-cases",
+                      "brute-force-first",
+                      "pattern-recognition",
+                      "complexity",
+                      "code-clarity",
+                      "testing",
+                      "debugging",
+                      "optimization",
+                      "communication",
+                      "time-management"
+                    ]
+                  },
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "why": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "concept",
+                  "prompt",
+                  "why"
+                ]
+              }
+            },
+            "gaps": {
+              "type": "array",
+              "description": "Gaps the interviewer handed over that RECORDED GAPS does not already list.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "clarifying",
+                      "edge-cases",
+                      "brute-force-first",
+                      "pattern-recognition",
+                      "complexity",
+                      "code-clarity",
+                      "testing",
+                      "debugging",
+                      "optimization",
+                      "communication",
+                      "time-management"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "fact",
+                      "skill"
+                    ]
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "answer": {
+                    "type": "string"
+                  },
+                  "turn": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "concept",
+                  "type",
+                  "title",
+                  "answer",
+                  "turn"
+                ]
+              }
+            }
+          },
+          "required": [
+            "verdict",
+            "summary",
+            "stages",
+            "coding",
+            "skipped",
+            "gapsTaught",
+            "conceptObservations",
+            "drills",
+            "gaps"
+          ]
+        },
+        "strict": true
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_mock_grade"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Level: Staff\nPrompt: Live coding — Two Sum (medium)\nStages the server recorded as skipped: none\nConcepts the interviewer taught: none\n\nRECORDED GAPS (already drill cards — do not repeat these in gaps):\n- none\n\nRUBRIC — live coding, graded at Staff.\nThe bar at this level: everything Senior needs, driven by the candidate: clarifies before coding, states brute force and why it is not enough, names the pattern unprompted, derives complexity, tests edge cases without being asked, and reasons about the follow-up at system scale (memory, streaming, distribution).\nAnchors per stage:\n  1  missing or wrong (no clarifying questions, no example, jumped to code, wrong complexity, did not test).\n  2  present only when prompted, or partly right.\n  3  done unprompted and right, at the bar.\n  4  as 3, concise and narrated, with the trade-off or edge case volunteered before it was asked.\ncode: 1 does not run or is far off; 2 runs with real bugs; 3 correct (hidden tests pass) and readable; 4 as 3, idiomatic, well named, no wasted work.\nfollow-up: 0 when the interview never got there; 1 no idea; 2 an idea with no trade-off; 3 a sound adaptation with its cost; 4 as 3, with alternatives weighed.\n\nPROBLEM\nTitle: Two Sum\nLanguage: javascript; the candidate implements `twoSum`.\nTopic: hashing; difficulty: medium; pattern: hash map\nStatement:\nGiven an array of integers and a target, return the indices of the two numbers that add up to the target.\nExamples:\n- input: nums = [2,7,11,15], target = 9 → output: [0,1]\nConstraints:\n- 2 <= nums.length <= 10^4\n- exactly one answer exists\nStarter code (what the editor opens with):\n```javascript\nfunction twoSum(nums, target) {\n}\n```\n\nREFERENCE SOLUTION\n```javascript\nfunction twoSum(nums, target) {\n  const seen = new Map();\n  for (let i = 0; i < nums.length; i++) {\n    const j = seen.get(target - nums[i]);\n    if (j !== undefined) return [j, i];\n    seen.set(nums[i], i);\n  }\n}\n```\nHidden tests: 1.\n\nHIDDEN-TEST RESULT AT THE END (server-recorded ground truth)\n7/9 passed, wrong answer — from the candidate's last Submit (the code had not changed since).\nFailing tests: hidden 4, hidden 8.\nMock Submits during the interview: 1.\n\nTRANSCRIPT\n--- stage: code (Code) ---\n#8 CANDIDATE: done\n[editor — x]\n```javascript\nreturn [0, 1];\n```"
+      }
+    ]
   }
 }

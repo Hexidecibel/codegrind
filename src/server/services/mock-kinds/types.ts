@@ -12,7 +12,14 @@
 // vendor-free rules as it.
 
 import type { MockKind, MockKindInfo, MockPrompt, MockStage } from '../../../shared/mock-kinds.js';
-import type { MockGrade, MockObservation, MockPlan, MockState } from '../../../shared/mock.js';
+import type {
+  MockCodingState,
+  MockGrade,
+  MockObservation,
+  MockPlan,
+  MockState,
+} from '../../../shared/mock.js';
+import type { Difficulty, ProblemRecord, RunResult, Topic } from '../../../shared/types.js';
 import type { ConceptSignal, MockLevel } from '../../../shared/sd.js';
 import type { ToolSpec } from '../llm.types.js';
 import type { InterviewerReply } from '../mock.state.js';
@@ -51,6 +58,19 @@ export interface MockKindSpec {
    * the system-design grade request byte-identical.
    */
   graderContext?(state: MockState): string | null;
+  /**
+   * Async, before the grade call, I/O allowed (never a model): settle what the
+   * grader must be told that the turns did not record (coding: run the final
+   * code against the hidden tests unless the last Submit already did). Returns
+   * the state to store and grade from.
+   */
+  finalize?(state: MockState, end: { code?: string }, deps: MockFinalizeDeps): Promise<MockState>;
+  /**
+   * After a successful grade: attach server-known facts to it and make the
+   * kind's deliberate side effects (coding: a missed pattern puts the problem
+   * on the review queue). Returns the grade and state to store.
+   */
+  afterGrade?(state: MockState, grade: MockGrade, deps: MockAfterGradeDeps): { grade: MockGrade; state: MockState };
 
   // --- coercion into the kind's closed vocabulary ---------------------------
   /** `fallbackStage`: an unknown stage is "no change", never a jump. */
@@ -69,12 +89,38 @@ export interface MockPrepareArgs {
   recentQuestionIds: string[];
   rand?: () => number;
   fetchImpl?: typeof fetch;
+  /** MockStartRequest.coding, unvalidated. */
+  options?: unknown;
+  /**
+   * Coding: the problem source and the skill state, injected by mock.service so
+   * the spec itself never touches the bank (which may call a model to generate).
+   */
+  coding?: {
+    weakestTopic(): Topic;
+    fetchProblem(topic: Topic, difficulty: Difficulty): Promise<ProblemRecord>;
+  };
+}
+
+export interface MockFinalizeDeps {
+  runHidden(problemId: string, code: string): Promise<RunResult>;
+}
+
+export interface MockAfterGradeDeps {
+  /** Put a problem on the grind review queue (the existing ladder). */
+  enqueueReview(problemId: string): void;
 }
 
 export interface MockPrep {
-  plan: MockPlan;
+  /** Planned kinds (behavioral). */
+  plan?: MockPlan;
   /** Grader-only text, frozen into state.graderContext. */
   graderContext: string;
   /** Why each concept was weighted up (the start card's preview). */
   reasons: Record<string, string[]>;
+  /** Coding: the problem the mock runs on, frozen into state.coding. */
+  coding?: MockCodingState;
+  /** Overrides the stored mock's prompt text (coding: the problem title). */
+  brief?: string;
+  /** Coding: the full problem, for buildContext only (never stored on the state). */
+  problem?: ProblemRecord;
 }

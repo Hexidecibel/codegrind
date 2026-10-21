@@ -38,6 +38,7 @@ import type {
 import type { Language } from '@/shared/languages';
 import type {
   MockEndEvent,
+  MockEndRequest,
   MockListResponse,
   MockKind,
   MockPlanPreview,
@@ -149,6 +150,11 @@ export function nextProblem(topic: Topic, difficulty: Difficulty): Promise<Probl
   return request<Problem>(`/api/problems/next?${qs}`);
 }
 
+/** GET /api/problems/:id — one problem, player-safe (a coding mock's own). Free. */
+export function getProblemById(id: string): Promise<Problem> {
+  return request<Problem>(`/api/problems/${encodeURIComponent(id)}`);
+}
+
 /** POST /api/problems/generate — force a fresh Claude-generated problem (slow). */
 export function generateProblem(
   topic: Topic,
@@ -205,6 +211,25 @@ export async function submitCode(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ problemId, code, hintsUsed, prediction }),
+  });
+  if (!res.ok) throw await toApiError(res, 'Submit failed');
+  await readNdjson<SubmitEvent>(res, onEvent);
+}
+
+/**
+ * POST /api/submit in a coding mock — hidden tests only, recorded on the mock.
+ * One `result` line; no coaching, no attempt, no skill or review-queue change.
+ */
+export async function submitMockCode(
+  mockId: string,
+  problemId: string,
+  code: string,
+  onEvent: (event: SubmitEvent) => void,
+): Promise<void> {
+  const res = await fetch('/api/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode: 'mock', mockId, problemId, code }),
   });
   if (!res.ok) throw await toApiError(res, 'Submit failed');
   await readNdjson<SubmitEvent>(res, onEvent);
@@ -539,10 +564,15 @@ export function sendMockTurn(id: string, body: MockTurnRequest): Promise<MockVie
 }
 
 /** POST /api/mock/:id/end — NDJSON `wrapup` then `grade` (or `error`). One model call. */
-export async function endMock(id: string, onEvent: (event: MockEndEvent) => void): Promise<void> {
+export async function endMock(
+  id: string,
+  onEvent: (event: MockEndEvent) => void,
+  body: MockEndRequest = {},
+): Promise<void> {
   const res = await fetch(`/api/mock/${encodeURIComponent(id)}/end`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw await toApiError(res, 'Grading failed');
   await readNdjson<MockEndEvent>(res, onEvent);

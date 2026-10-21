@@ -9,7 +9,9 @@
 //   GET  /api/mock/:id              one mock        free
 //   POST /api/mock/start            {kind?, level?, promptId?}     ONE model call
 //   POST /api/mock/:id/turn         {expectedSeq, content, action?} ONE model call
-//   POST /api/mock/:id/end          NDJSON: wrapup → grade          ONE model call (two on a retry)
+//   POST /api/mock/:id/end          {code?} NDJSON: wrapup → grade  ONE model call (two on a retry)
+//                                   (coding: the final code runs against the hidden tests first —
+//                                   sandbox, not a model — unless the last mock Submit already did)
 //   POST /api/mock/:id/abandon      free
 //
 // Every model call is a POST the candidate clicked; every GET is a database read.
@@ -25,6 +27,7 @@ import {
   gapCards,
   getMockView,
   gradeGapCard,
+  parseEnd,
   parseKind,
   prepareEnd,
   previewPlan,
@@ -115,11 +118,13 @@ mockRoutes.post('/mock/:id/abandon', (c) => {
   }
 });
 
-mockRoutes.post('/mock/:id/end', (c) => {
+mockRoutes.post('/mock/:id/end', async (c) => {
   let mock;
+  let end;
   try {
     // Validated BEFORE the stream opens, so "nothing to grade" is a 409 and not
     // an error line inside a 200.
+    end = parseEnd(await c.req.json().catch(() => null));
     mock = prepareEnd(c.req.param('id'));
   } catch (err) {
     return fail(c, 'mock-end', err);
@@ -128,7 +133,7 @@ mockRoutes.post('/mock/:id/end', (c) => {
   c.header('Cache-Control', 'no-store');
   c.header('X-Accel-Buffering', 'no');
   return stream(c, async (s) => {
-    for await (const event of runEnd(mock)) {
+    for await (const event of runEnd(mock, end)) {
       try {
         await s.write(JSON.stringify(event satisfies MockEndEvent) + '\n');
       } catch {

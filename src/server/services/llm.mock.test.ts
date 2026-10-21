@@ -162,11 +162,64 @@ await gradeMock({
 const behavioralGradeBody = mocks.create.mock.calls[0][0];
 mocks.create.mockReset();
 
+// Coding: the problem AND the reference in the frozen context (interviewer
+// only, with the never-leak rule); candidate turns carry the [editor] block and
+// the [run] line; the grader gets the reference and the hidden-test result.
+const { CODING_SPEC } = await import('./mock-kinds/coding.js');
+const C_PROBLEM = {
+  id: 'p-two-sum', language: 'javascript' as const, title: 'Two Sum',
+  prompt: 'Given an array of integers and a target, return the indices of the two numbers that add up to the target.',
+  examples: [{ input: 'nums = [2,7,11,15], target = 9', output: '[0,1]' }],
+  constraints: ['2 <= nums.length <= 10^4', 'exactly one answer exists'],
+  difficulty: 'medium' as const, topic: 'hashing' as const, pattern: 'hash map',
+  starterCode: 'function twoSum(nums, target) {\n}\n', functionName: 'twoSum',
+  sampleTests: [], hiddenTests: [{ name: 'hidden 1', args: [], expected: [0, 1] }],
+  referenceSolution: 'function twoSum(nums, target) {\n  const seen = new Map();\n  for (let i = 0; i < nums.length; i++) {\n    const j = seen.get(target - nums[i]);\n    if (j !== undefined) return [j, i];\n    seen.set(nums[i], i);\n  }\n}',
+  canonicalized: true, used: true, createdAt: '2026-10-21T00:00:00Z',
+};
+const C_PREP = await CODING_SPEC.prepare!({
+  level: 'staff', requested: undefined, history: [], recentQuestionIds: [],
+  coding: { weakestTopic: () => 'hashing', fetchProblem: async () => C_PROBLEM },
+});
+const C_CONTEXT = CODING_SPEC.buildContext(CODING_SPEC.info.pickPrompt([]), 'staff', C_PREP);
+mocks.create.mockResolvedValueOnce(answer({ ...REPLY, observations: [], stage: 'approach', say: 'What are you recomputing in that inner loop?' }));
+await interviewerTurn(
+  buildMessages(C_CONTEXT, [
+    { seq: 1, role: 'interviewer', rendered: 'Hi — the problem is beside your editor. Talk me through your understanding of it.' },
+    { seq: 2, role: 'candidate', rendered: 'Can the array have duplicates?\n\n[server: 1 of 45 min]' },
+    { seq: 3, role: 'interviewer', rendered: 'Yes, it can.' },
+  ], 'Brute force is two loops, O(n^2).\n\n[editor — the candidate\'s code now (javascript, 5 lines); changed since you last saw it]\n```javascript\nfunction twoSum(nums, target) {\n  for (let i = 0; i < nums.length; i++)\n    for (let j = i + 1; j < nums.length; j++)\n      if (nums[i] + nums[j] === target) return [i, j];\n}\n```\n\n[run: Run (sample tests): 2/2 passed, accepted]\n\n[server: 9 of 45 min]'),
+  'approach',
+  'coding'
+);
+const codingInterviewerBody = mocks.create.mock.calls[0][0];
+mocks.create.mockReset();
+mocks.create.mockResolvedValueOnce(answer({ ...GRADE, stages: [], gapsTaught: [], conceptObservations: [], drills: [], coding: { patternMissed: false, patternNote: 'n', complexityStated: 'O(n)', complexityOptimal: 'O(n)' } }, 'tool_use', 'emit_mock_grade'));
+await gradeMock({
+  kind: 'coding',
+  level: 'staff',
+  promptTitle: 'Live coding',
+  brief: 'Two Sum (medium)',
+  transcript: '--- stage: code (Code) ---\n#8 CANDIDATE: done\n[editor — x]\n```javascript\nreturn [0, 1];\n```',
+  skipped: [],
+  taught: [],
+  recordedGaps: [],
+  graderContext: CODING_SPEC.graderContext!({
+    stage: 'test', covered: [], skipped: [], startedAt: '', candidateTurns: 8, pendingOffer: null, taught: [], pendingSkipNote: [], endNoteSent: false,
+    graderContext: C_PREP.graderContext,
+    coding: { ...C_PREP.coding!, submits: 1, final: { verdict: 'wrong_answer', passed: 7, total: 9, failing: ['hidden 4', 'hidden 8'], codeHash: 'h', at: '', source: 'submit' } },
+  }),
+});
+const codingGradeBody = mocks.create.mock.calls[0][0];
+mocks.create.mockReset();
+
 const CAPTURED = {
   interviewerTurn: interviewerBody,
   gradeMock: gradeBody,
   behavioralInterviewerTurn: behavioralInterviewerBody,
   behavioralGradeMock: behavioralGradeBody,
+  codingInterviewerTurn: codingInterviewerBody,
+  codingGradeMock: codingGradeBody,
 };
 if (UPDATE) {
   mkdirSync(dirname(FIXTURE), { recursive: true });
@@ -500,6 +553,30 @@ describe('gaps in the grade', () => {
   it('an old grade with no gaps field coerces to an empty list', async () => {
     mocks.create.mockResolvedValueOnce(answer(GRADE, 'tool_use', 'emit_mock_grade'));
     expect((await gradeMock(input)).grade.gaps).toEqual([]);
+  });
+});
+
+describe('the coding calls', () => {
+  it('gives the interviewer the reference with the never-leak rule, and the editor in the user turn', () => {
+    const ctx = JSON.stringify(codingInterviewerBody.messages[0].content);
+    expect(ctx).toContain('REFERENCE SOLUTION — FOR YOU ONLY');
+    expect(ctx).toContain('const seen = new Map();');
+    const last = JSON.stringify(codingInterviewerBody.messages.at(-1).content);
+    expect(last).toContain('[editor — ');
+    expect(last).toContain('[run: Run (sample tests): 2/2 passed, accepted]');
+    expect(codingInterviewerBody.model).toBe('claude-sonnet-5');
+    expect(codingInterviewerBody.tool_choice).toEqual({ type: 'tool', name: 'interviewer_turn' });
+  });
+
+  it('gives the grader the reference and the hidden-test result after the rubric', () => {
+    const user = JSON.stringify(codingGradeBody.messages[0].content);
+    const rubric = user.indexOf('RUBRIC — live coding');
+    const tests = user.indexOf('HIDDEN-TEST RESULT AT THE END');
+    expect(rubric).toBeGreaterThan(-1);
+    expect(tests).toBeGreaterThan(rubric);
+    expect(tests).toBeLessThan(user.indexOf('TRANSCRIPT'));
+    expect(user).toContain('7/9 passed, wrong answer');
+    expect(JSON.stringify(codingGradeBody.tools[0])).toContain('patternMissed');
   });
 });
 

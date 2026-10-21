@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { stream } from 'hono/streaming';
 import { nanoid } from 'nanoid';
 import type {
@@ -12,6 +12,7 @@ import type {
   Prediction,
   TestCase,
   TestResult,
+  RunResult,
 } from '../../shared/types.js';
 import {
   getProblem,
@@ -28,6 +29,7 @@ import { runTests } from '../services/sandbox.service.js';
 import { coach, askFollowup } from '../services/llm.service.js';
 import { stashFix, getFix } from '../services/coachfix.service.js';
 import { errorBody } from '../services/explain.service.js';
+import { MockError, codingSubmitTarget, recordCodingSubmit } from '../services/mock.service.js';
 
 /** Validate/normalize a client-supplied prediction, or undefined if absent/invalid. */
 function coercePrediction(raw: unknown): Prediction | undefined {
@@ -189,6 +191,13 @@ function coachingUnavailable(problem: ProblemRecord): CoachingBrief {
 // into two. The client compensates for the visible half (the "N due for review"
 // pill waits for the stream to end; see SolveSurface's onSubmitRecorded).
 submitRoutes.post('/submit', async (c) => {
+  // MOCK MODE (a Submit inside a coding mock interview) is its own short path:
+  // hidden tests, the result recorded on the MOCK, one `result` line — and
+  // nothing else. No coaching call, no attempt row, no skill/SRS update, no
+  // review-queue move, no reference solution even on a pass. The mock's grade
+  // judges the solution; its only grind side effect lives there.
+  const raw = await c.req.json<Record<string, unknown>>().catch(() => null);
+  if (raw && raw.mode === 'mock') return submitInMock(c, raw);
   // Everything that can fail before a byte is written stays an ordinary HTTP
   // error, with a status code and an explained message. Only what happens after
   // the first line is committed to the stream. This is also why the sandbox run
@@ -200,12 +209,12 @@ submitRoutes.post('/submit', async (c) => {
   let prediction: Prediction | undefined;
   let result;
   try {
-    const body = await c.req.json<{
+    const body = (raw ?? {}) as {
       problemId?: string;
       code?: string;
       hintsUsed?: number;
       prediction?: unknown;
-    }>();
+    };
     const found = body.problemId ? getProblem(body.problemId) : null;
     if (!found) return c.json({ error: 'problem not found' }, 404);
     problem = found;
@@ -322,6 +331,35 @@ submitRoutes.post('/submit', async (c) => {
     await write({ type: 'coaching', coaching });
   });
 });
+
+/** POST /api/submit { mode: 'mock', mockId, problemId, code } — see the top of the submit route. */
+async function submitInMock(c: Context, body: Record<string, unknown>) {
+  let result: RunResult;
+  let code: string;
+  let mockId: string;
+  try {
+    const mock = codingSubmitTarget(body.mockId, body.problemId);
+    mockId = mock.id;
+    const problem = getProblem(mock.state.coding!.problemId);
+    if (!problem) return c.json({ error: 'problem not found' }, 404);
+    code = typeof body.code === 'string' ? body.code : '';
+    result = await runTests({
+      language: problem.language,
+      functionName: problem.functionName,
+      userCode: code,
+      tests: problem.hiddenTests,
+    });
+  } catch (err) {
+    if (err instanceof MockError) return c.json({ error: err.message }, err.status);
+    return c.json(errorBody('submit', err), 500);
+  }
+  recordCodingSubmit(mockId, result, code);
+  c.header('Content-Type', 'application/x-ndjson; charset=utf-8');
+  c.header('Cache-Control', 'no-store');
+  c.header('X-Accel-Buffering', 'no');
+  const event: SubmitEvent = { type: 'result', result: { ...result, results: redactHiddenExpected(result.results) } };
+  return c.body(JSON.stringify(event) + '\n');
+}
 
 // POST /api/ask { problemId, code, question, history?, results? } — tutor Q&A.
 // `results` are the per-test outcomes of the last submit: without them the

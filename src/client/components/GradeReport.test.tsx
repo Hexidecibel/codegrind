@@ -127,3 +127,37 @@ describe('a behavioral grade', () => {
     expect(out({ loaded: true })).not.toContain('story bank was unavailable');
   });
 });
+
+describe('the coding grade report', () => {
+  const coding = (over: Partial<NonNullable<MockGrade['coding']>> = {}): MockGrade => ({
+    ...GRADE,
+    stages: [],
+    coding: {
+      patternMissed: true,
+      patternNote: 'The sliding window came from a nudge.',
+      complexityStated: 'O(n^2)',
+      complexityOptimal: 'O(n) time, O(k) space',
+      tests: { verdict: 'wrong_answer', passed: 7, total: 9, failing: ['hidden 4'], codeHash: 'h', at: '', source: 'end' },
+      reviewQueued: true,
+      ...over,
+    },
+  });
+
+  it('shows the hidden tests, the pattern call, complexity and the review-queue note', () => {
+    const h = renderToStaticMarkup(<GradeReport grade={coding()} kind="coding" />);
+    expect(h).toContain('7/9 passed');
+    expect(h).toContain('your final code, run at End');
+    expect(h).toContain('Failing: hidden 4');
+    expect(h).toContain('missed');
+    expect(h).toContain('The sliding window came from a nudge.');
+    expect(h).toContain('optimal: O(n) time, O(k) space');
+    expect(h).toContain('on your review queue');
+  });
+
+  it('says so when nothing ran', () => {
+    const h = renderToStaticMarkup(<GradeReport grade={coding({ tests: null, reviewQueued: false, patternMissed: false })} kind="coding" />);
+    expect(h).toContain('never ran');
+    expect(h).toContain('found it yourself');
+    expect(h).not.toContain('review queue');
+  });
+});

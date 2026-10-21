@@ -24,8 +24,9 @@ import {
   type StoredTurn,
 } from './mock.state.js';
 import { SD_PROMPTS, pickPrompt, sdPrompt } from '../../shared/sd-prompts.js';
-import { MOCK_TURN_CAP, MOCK_MINUTES, type MockTurn } from '../../shared/mock.js';
+import { MOCK_TURN_CAP, MOCK_MINUTES, type MockState, type MockTurn } from '../../shared/mock.js';
 import type { SdStage } from '../../shared/sd.js';
+import { hashCode } from './mock-kinds/coding.js';
 
 const T0 = new Date('2026-10-15T10:00:00Z');
 const at = (min: number) => new Date(T0.getTime() + min * 60_000);
@@ -285,5 +286,95 @@ describe('behavioral', () => {
     expect(renderTranscript(turns, 'behavioral')).toContain('#2 CANDIDATE (4 words): I build');
     expect(renderTranscript(turns, 'behavioral')).toContain('--- stage: intro (Intro) ---');
     expect(renderTranscript(turns)).toContain('#2 CANDIDATE: I build');
+  });
+});
+
+describe('coding: the editor rides along, rendered once', () => {
+  const CONTEXT = 'MOCK SETUP\nInterview: live coding';
+  const STARTER = 'function twoSum(nums, target) {\n}\n';
+  const creply = (over: Partial<InterviewerReply> = {}): InterviewerReply => reply({ stage: 'clarify', ...over });
+  const startState = (): MockState => ({
+    ...initialState(T0, 'coding'),
+    coding: {
+      problemId: 'p1', title: 'Two Sum', topic: 'hashing', difficulty: 'medium', pattern: 'hash map',
+      language: 'javascript', chosenBy: 'weakest', starterHash: hashCode(STARTER), codeHash: hashCode(STARTER),
+      lastCode: null, runHash: null, submits: 0, lastSubmit: null,
+    },
+  });
+
+  it('shows the editor only when it changed since the interviewer last saw it, and the run line once', () => {
+    let state = startState();
+    const first = renderCandidateMessage({ content: 'Can the array be empty?', action: 'answer', code: STARTER }, state, at(1), 'coding');
+    expect(first.rendered).not.toContain('[editor');
+    expect(first.editor).toBeUndefined();
+
+    const code = 'function twoSum(nums, target) {\n  const seen = new Map();\n}\n';
+    const second = renderCandidateMessage(
+      { content: 'Starting with a map.', action: 'answer', code, lastRun: { kind: 'run', verdict: 'wrong_answer', passed: 1, total: 3, firstFailure: 'sample 2: expected [0,1], got null' } },
+      state,
+      at(10),
+      'coding'
+    );
+    expect(second.rendered).toContain("[editor — the candidate's code now (javascript, 3 lines); changed since you last saw it]");
+    expect(second.rendered).toContain('```javascript\nfunction twoSum(nums, target) {\n  const seen = new Map();\n}\n```');
+    expect(second.rendered).toContain('[run: Run (sample tests): 1/3 passed, wrong answer — first failure: sample 2: expected [0,1], got null]');
+    // The editor and run sit after the words, before the server notes.
+    expect(second.rendered.indexOf('Starting with a map.')).toBeLessThan(second.rendered.indexOf('[editor'));
+    expect(second.rendered.indexOf('[run:')).toBeLessThan(second.rendered.indexOf('[server:'));
+    expect(second.editor).toContain('[editor');
+    state = { ...state, coding: { ...state.coding!, ...second.coding } };
+    expect(state.coding!.lastCode).toBe(code);
+
+    const third = renderCandidateMessage(
+      { content: 'Same code, still thinking.', action: 'answer', code, lastRun: { kind: 'run', verdict: 'wrong_answer', passed: 1, total: 3, firstFailure: 'sample 2: expected [0,1], got null' } },
+      state,
+      at(12),
+      'coding'
+    );
+    expect(third.rendered).not.toContain('[editor');
+    expect(third.rendered).not.toContain('[run:');
+  });
+
+  it('caps a huge editor at ~8k characters', () => {
+    const big = 'x'.repeat(20_000);
+    const { rendered } = renderCandidateMessage({ content: 'big', action: 'answer', code: big }, startState(), at(1), 'coding');
+    expect(rendered).toContain('… (12000 more characters not shown)');
+    expect(rendered.length).toBeLessThan(9000);
+  });
+
+  it('produces a byte-stable prefix from one turn to the next while the code changes', () => {
+    const stored: StoredTurn[] = [{ seq: 1, role: 'interviewer', rendered: 'Talk me through the problem.' }];
+    let state = applyReply(startState(), creply(), false, false, 'coding');
+    let previous = JSON.stringify(buildMessages(CONTEXT, stored));
+    const stages = ['examples', 'approach', 'code', 'code', 'code', 'test'];
+    for (let i = 1; i <= stages.length; i++) {
+      const code = `${STARTER}// step ${Math.min(i, 4)}\n`; // turns 5 and 6 leave the code unchanged
+      const { rendered, coding } = renderCandidateMessage(
+        { content: `thinking out loud ${i}`, action: 'answer', code, lastRun: i === 6 ? { kind: 'submit', verdict: 'accepted', passed: 9, total: 9 } : null },
+        state,
+        at(i * 5),
+        'coding'
+      );
+      if (i <= 4) expect(rendered).toContain('[editor');
+      else expect(rendered).not.toContain('[editor');
+      const serialized = JSON.stringify(buildMessages(CONTEXT, stored, rendered));
+      expect(serialized.startsWith(previous.slice(0, -1))).toBe(true);
+      const seq = stored.length;
+      stored.push({ seq: seq + 1, role: 'candidate', rendered });
+      stored.push({ seq: seq + 2, role: 'interviewer', rendered: `reply ${i}` });
+      state = applyReply(state, creply({ stage: stages[i - 1], say: `reply ${i}` }), true, false, 'coding');
+      state = { ...state, coding: { ...state.coding!, ...coding } };
+      previous = JSON.stringify(buildMessages(CONTEXT, stored));
+      expect(previous.startsWith(serialized.slice(0, -1))).toBe(true);
+    }
+  });
+
+  it('shows the grader each turn’s editor snapshot', () => {
+    const turns = [
+      { seq: 2, role: 'candidate' as const, kind: 'answer' as const, content: 'here', stage: 'code', createdAt: '', editor: '[editor — x]\n```js\nreturn 1;\n```' },
+    ];
+    const text = renderTranscript(turns, 'coding');
+    expect(text).toContain('--- stage: code (Code) ---');
+    expect(text).toContain('#2 CANDIDATE: here\n[editor — x]\n```js\nreturn 1;\n```');
   });
 });

@@ -145,7 +145,7 @@ describe('llm.recognize.ts stays vendor-free too', () => {
 
 describe('mock-kinds/ stays vendor-free, and never calls a model itself', () => {
   it('finds the spec files (an empty scan would pass vacuously)', () => {
-    expect(KIND_SOURCES.map((k) => k.file)).toContain('system-design.ts');
+    expect(KIND_SOURCES.map((k) => k.file)).toEqual(expect.arrayContaining(['system-design.ts', 'behavioral.ts', 'coding.ts']));
   });
 
   for (const { file, source } of KIND_SOURCES) {
