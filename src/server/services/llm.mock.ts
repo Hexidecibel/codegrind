@@ -119,6 +119,12 @@ export interface GradeInput {
   taught: MockConcept[];
   /** Gaps already recorded turn by turn, so the grader only adds what they missed. */
   recordedGaps?: { seq: number | null; type: string; title: string; summary: string }[];
+  /**
+   * Grader-only text from the kind's spec (behavioral: the story bank frozen at
+   * start), placed after the rubric. Absent = nothing added (system design's
+   * request is byte-identical to before kinds).
+   */
+  graderContext?: string | null;
 }
 
 export interface GradeResult {
@@ -149,6 +155,7 @@ export async function gradeMock(input: GradeInput): Promise<GradeResult> {
     '',
     spec.rubric(input.level),
     '',
+    ...(input.graderContext ? [input.graderContext, ''] : []),
     'TRANSCRIPT',
     input.transcript,
   ].join('\n');

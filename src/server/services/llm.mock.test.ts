@@ -105,7 +105,69 @@ await gradeMock({
 });
 const gradeBody = mocks.create.mock.calls[0][0];
 
-const CAPTURED = { interviewerTurn: interviewerBody, gradeMock: gradeBody };
+// Behavioral: the same two calls with the behavioral spec. The grade carries
+// the frozen story bank (graderContext) after the rubric; the interviewer never does.
+const { BEHAVIORAL_SPEC } = await import('./mock-kinds/behavioral.js');
+const { renderGraderContext, normalizeBank } = await import('./story-bank.js');
+const B_PLAN = {
+  items: [
+    { stage: 'q1', concept: 'conflict', questionId: 'con-peer', question: 'Tell me about a time you strongly disagreed with a peer on a technical decision. How was it resolved?' },
+    { stage: 'q2', concept: 'influence-without-authority', questionId: 'iwa-adopt', question: 'Describe a technical direction you championed that other teams adopted. How did you get buy-in?' },
+    { stage: 'q3', concept: 'failure-learning', questionId: 'fail-underestimate', question: 'Describe a project where you badly underestimated something. What did you change afterwards?' },
+    { stage: 'q4', concept: 'exec-communication', questionId: 'exec-bad-news', question: 'Describe a time you had to tell leadership something they did not want to hear.' },
+  ],
+};
+const B_BANK = normalizeBank({
+  stories: [
+    {
+      id: 'story-saas-rebuild', title: 'Rebuilding as multi-tenant SaaS', status: 'confirmed',
+      situation: 'Each customer had its own environment.', task: 'Assigned the replacement.', action: 'Led the architecture.', result: '50+ tenants.',
+      numbers: ['~$3,000 -> ~$300/month per environment'], caveats: ['Approximate; say roughly.'], unconfirmed: ['Customers per environment'],
+      fits: ['long-horizon architecture'], doesNotFit: [],
+    },
+  ],
+  gaps: [{ type: 'disagreement or conflict', status: 'open' }],
+});
+const B_GRADER = renderGraderContext({ ok: true, bank: B_BANK });
+const B_CONTEXT = BEHAVIORAL_SPEC.buildContext(BEHAVIORAL_SPEC.info.pickPrompt([]), 'staff', {
+  plan: B_PLAN,
+  graderContext: B_GRADER,
+  reasons: {},
+});
+mocks.create.mockReset();
+mocks.create.mockResolvedValueOnce(answer({ ...REPLY, observations: [], stage: 'intro', say: 'Tell me about yourself.' }));
+await interviewerTurn(
+  buildMessages(B_CONTEXT, [
+    { seq: 1, role: 'interviewer', rendered: 'Tell me about yourself.' },
+    { seq: 2, role: 'candidate', rendered: 'I lead backend architecture.\n\n[server: 1 of 35 min]' },
+    { seq: 3, role: 'interviewer', rendered: 'Thanks. Tell me about a time you strongly disagreed with a peer.' },
+  ], 'We disagreed about tenancy.\n\n[server: 4 of 35 min]'),
+  'q1',
+  'behavioral'
+);
+const behavioralInterviewerBody = mocks.create.mock.calls[0][0];
+mocks.create.mockReset();
+mocks.create.mockResolvedValueOnce(answer({ ...GRADE, stages: [], gapsTaught: [], conceptObservations: [], drills: [], questions: [], storyGaps: [] }, 'tool_use', 'emit_mock_grade'));
+await gradeMock({
+  kind: 'behavioral',
+  level: 'staff',
+  promptTitle: 'Staff behavioral loop',
+  brief: 'Tell me about yourself, then four questions.',
+  transcript: '--- stage: q1 (Q1) ---\n#3 INTERVIEWER: Tell me about a time you disagreed.\n#4 CANDIDATE (5 words): We disagreed about tenancy.',
+  skipped: [],
+  taught: [],
+  recordedGaps: [],
+  graderContext: B_GRADER,
+});
+const behavioralGradeBody = mocks.create.mock.calls[0][0];
+mocks.create.mockReset();
+
+const CAPTURED = {
+  interviewerTurn: interviewerBody,
+  gradeMock: gradeBody,
+  behavioralInterviewerTurn: behavioralInterviewerBody,
+  behavioralGradeMock: behavioralGradeBody,
+};
 if (UPDATE) {
   mkdirSync(dirname(FIXTURE), { recursive: true });
   writeFileSync(FIXTURE, `${JSON.stringify(CAPTURED, null, 2)}\n`);
@@ -438,5 +500,31 @@ describe('gaps in the grade', () => {
   it('an old grade with no gaps field coerces to an empty list', async () => {
     mocks.create.mockResolvedValueOnce(answer(GRADE, 'tool_use', 'emit_mock_grade'));
     expect((await gradeMock(input)).grade.gaps).toEqual([]);
+  });
+});
+
+describe('the behavioral calls', () => {
+  it('keeps the story bank out of the interviewer request entirely', () => {
+    const body = JSON.stringify(behavioralInterviewerBody);
+    expect(body).not.toContain('story-saas-rebuild');
+    expect(body).not.toContain('STORY BANK');
+    expect(body).toContain('competency conflict');
+    expect(behavioralInterviewerBody.model).toBe('claude-sonnet-5');
+  });
+
+  it('puts the story bank in the grade request after the rubric and before the transcript', () => {
+    const user = behavioralGradeBody.messages[0].content as string;
+    const rubric = user.indexOf('RUBRIC — behavioral');
+    const bank = user.indexOf('STORY BANK (from resume-builder');
+    const transcript = user.indexOf('TRANSCRIPT');
+    expect(rubric).toBeGreaterThan(0);
+    expect(bank).toBeGreaterThan(rubric);
+    expect(transcript).toBeGreaterThan(bank);
+    expect(behavioralGradeBody.tools[0].name).toBe('emit_mock_grade');
+    expect(JSON.stringify(behavioralGradeBody.tools[0])).toContain('storyGaps');
+  });
+
+  it('adds nothing to the system-design grade request', () => {
+    expect((gradeBody.messages[0].content as string)).not.toContain('STORY BANK');
   });
 });

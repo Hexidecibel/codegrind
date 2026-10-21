@@ -40,6 +40,10 @@ WorkingDirectory=@CODEGRIND_REPO@
 EnvironmentFile=@CODEGRIND_REPO@/.env
 Environment=HOST=127.0.0.1
 Environment=NODE_ENV=production
+## The behavioral mock reads the story bank from resume-builder at http://127.0.0.1:9410
+## (code default, src/server/services/story-bank.ts). To point it elsewhere add
+## Environment=CODEGRIND_STORY_BANK_URL=http://host:port here — NOT in .env, which
+## cush-tools' bin/inject truncates to the secrets manifest.
 Environment=PATH=@CODEGRIND_NODE_BIN@:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=@CODEGRIND_NODE_BIN@/npx tsx src/server/index.ts
 Restart=always

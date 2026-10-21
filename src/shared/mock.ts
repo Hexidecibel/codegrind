@@ -77,6 +77,41 @@ export interface MockState {
   pendingSkipNote: MockStage[];
   /** Set once the END control note has been sent. */
   endNoteSent: boolean;
+  /** Kinds that plan at start (behavioral): what was planned, frozen with the mock. */
+  plan?: MockPlan;
+  /**
+   * SERVER ONLY — stripped from MockView. Text the GRADER gets on top of the
+   * rubric (behavioral: the story bank as it was at start). Frozen here so the
+   * grade judges the bank the mock was run against, and the interviewer never
+   * sees it.
+   */
+  graderContext?: string;
+}
+
+/** Whether the story bank (resume-builder) loaded when the mock started. */
+export interface StoryBankStatus {
+  loaded: boolean;
+  stories: number;
+  confirmed: number;
+  /** Open or partly covered story-bank gaps, as resume-builder names them. */
+  openGaps: string[];
+  /** Why it did not load. */
+  error?: string;
+}
+
+/** A planned mock: which concept each stage targets, and with what question. */
+export interface MockPlan {
+  items: { stage: MockStage; concept: MockConcept; questionId: string; question: string }[];
+  storyBank?: StoryBankStatus;
+}
+
+/** GET /api/mock/plan?kind= — the start card's preview. No questions: those stay a surprise. */
+export interface MockPlanPreview {
+  kind: MockKind;
+  concepts: MockConcept[];
+  /** Why each concept was weighted up, by concept ("open story-bank gap", …). */
+  reasons: Record<MockConcept, string[]>;
+  storyBank: StoryBankStatus | null;
 }
 
 export interface MockUsage {
@@ -136,6 +171,33 @@ export interface MockGrade {
   gaps?: MockGradeGap[];
   /** True when the second, simpler schema had to be used. */
   degraded?: boolean;
+  /** Behavioral: one entry per question stage the interview reached. */
+  questions?: MockQuestionGrade[];
+  /** Behavioral: competencies with no good story — capture one in resume-builder. */
+  storyGaps?: { concept: MockConcept; note: string }[];
+}
+
+/** One behavioral question, graded. */
+export interface MockQuestionGrade {
+  stage: MockStage;
+  concept: MockConcept;
+  /** As the interviewer asked it. */
+  question: string;
+  /** The story-bank id the answer told, or null (none fits / bank unavailable / a new story). */
+  storyId: string | null;
+  storyFit: 'strong' | 'ok' | 'weak' | 'none';
+  star: { situation: boolean; task: boolean; action: boolean; result: boolean };
+  /** Scope and impact against the level's bar, 1–4. */
+  scope: number;
+  ownership: 'i' | 'we' | 'mixed';
+  quantified: boolean;
+  /** The candidate's main answer, in words (from the transcript's counts). */
+  words: number;
+  length: 'short' | 'ok' | 'long';
+  /** Against the bank: numbers left out, claims past a caveat, open questions stated as fact. '' when clean. */
+  fidelity: string;
+  /** The one change that would most improve this answer. */
+  fix: string;
 }
 
 export interface MockView {
@@ -175,6 +237,8 @@ export interface MockListResponse {
 export interface MockStartRequest {
   /** Absent = system design. */
   kind?: MockKind;
+  /** Planned kinds: the concepts the start card previewed. Invalid or absent = the server picks. */
+  plan?: { concepts: MockConcept[] };
   level?: MockLevel;
   /** A prompt-bank id. Absent = the server picks. */
   promptId?: string;
@@ -272,7 +336,9 @@ export function costOf(model: string, t: TokenCounts): number | null {
  * than from a measurement. bin/mock-dry-run --dry-run prints the same model
  * turn by turn; the first real mock's `usage` is what replaces it.
  *
- * The assumptions, all deliberately on the generous side:
+ * The assumptions, all deliberately on the generous side (system-design
+ * numbers below; each kind's are in MockKindInfo.cost — behavioral answers are
+ * about twice as long and its grader also reads the story bank):
  *   - a frozen prefix (tools + system + context) of ~4,000 tokens
  *   - each exchange adds ~320 tokens to the history (answer + reply)
  *   - each interviewer reply costs ~400 output tokens (the tool call carries
@@ -282,13 +348,16 @@ export function costOf(model: string, t: TokenCounts): number | null {
  */
 export function estimateMockCost(
   turns: number,
-  price: ModelPrice = MODEL_PRICES['claude-sonnet-5']
+  price: ModelPrice = MODEL_PRICES['claude-sonnet-5'],
+  kind: MockKind = 'system-design'
 ): { usd: number; tokens: TokenCounts } {
-  const PREFIX = 4000;
-  const PER_EXCHANGE = 320;
-  const REPLY_OUT = 400;
-  const GRADE_SYSTEM = 3000;
-  const GRADE_OUT = 8000;
+  // Per kind (MockKindInfo.cost); the system-design shape is the original one.
+  const shape = MOCK_KIND_INFO[kind].cost;
+  const PREFIX = shape.prefix;
+  const PER_EXCHANGE = shape.perExchange;
+  const REPLY_OUT = shape.replyOut;
+  const GRADE_SYSTEM = shape.gradeFixed;
+  const GRADE_OUT = shape.gradeOut;
   let cacheRead = 0;
   let cacheWrite = PREFIX; // the opening call writes the whole frozen prefix
   let output = REPLY_OUT;

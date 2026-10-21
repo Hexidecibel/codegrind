@@ -322,7 +322,7 @@ export function buildMessages(
  * the rubric depends on: not score an answer the interviewer just taught.
  */
 export function renderTranscript(turns: readonly MockTurn[], kind: MockKind = 'system-design'): string {
-  const meta = mockKindInfo(kind).stageMeta;
+  const { stageMeta: meta, wordCounts } = mockKindInfo(kind);
   const lines: string[] = [];
   let lastStage: MockStage | null = null;
   for (const t of [...turns].sort((a, b) => a.seq - b.seq)) {
@@ -342,8 +342,16 @@ export function renderTranscript(turns: readonly MockTurn[], kind: MockKind = 's
       lines.push(`#${t.seq} INTERVIEWER${tag}: ${t.content}`);
     } else {
       const button = t.action && t.action !== 'answer' ? ` [pressed: ${t.action}]` : '';
-      lines.push(`#${t.seq} CANDIDATE${button}: ${t.content || '(no text)'}`);
+      // Behavioral answers are judged on length; the count is computed, not left to the grader.
+      const words = wordCounts && t.content ? ` (${countWords(t.content)} words)` : '';
+      lines.push(`#${t.seq} CANDIDATE${button}${words}: ${t.content || '(no text)'}`);
     }
   }
   return lines.join('\n');
+}
+
+/** Words in an answer, as a person would count them. */
+export function countWords(text: string): number {
+  const m = text.trim().match(/\S+/g);
+  return m ? m.length : 0;
 }

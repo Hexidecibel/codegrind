@@ -12,7 +12,7 @@
 //   * End & grade streams wrapup → grade; a truncated or failed grade is an
 //     error event and leaves the mock re-gradable.
 
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { Hono } from 'hono';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -471,5 +471,120 @@ describe('drill cards', () => {
   it('does not shadow GET /api/mock/:id', async () => {
     const id = await withCards();
     expect((await app.request(`/api/mock/${id}`)).status).toBe(200);
+  });
+});
+
+describe('behavioral', () => {
+  const BANK = {
+    stories: [
+      {
+        id: 'story-secret', title: 'T', status: 'confirmed', situation: 'SITUATION-TEXT', task: 't', action: 'a', result: 'r',
+        numbers: [], caveats: ['CAVEAT-TEXT'], unconfirmed: ['UNCONFIRMED-TEXT'], fits: ['influence without authority'], doesNotFit: [],
+      },
+    ],
+    gaps: [{ type: 'disagreement or conflict', status: 'open' }],
+  };
+  const fetchUrls: string[] = [];
+  function bankUp() {
+    vi.stubGlobal('fetch', async (u: string) => {
+      fetchUrls.push(u);
+      return new Response(JSON.stringify(BANK), { status: 200 });
+    });
+  }
+  function bankDown() {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('connect ECONNREFUSED 127.0.0.1:9410');
+    });
+  }
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    fetchUrls.length = 0;
+  });
+
+  async function startB(body: Record<string, unknown> = {}) {
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'intro', say: 'Tell me about yourself.' }));
+    const res = await post('/api/mock/start', { kind: 'behavioral', ...body });
+    expect(res.status).toBe(200);
+    return (await res.json()) as Record<string, any>;
+  }
+
+  it('previews the plan for the start card for free: four competencies and the bank status, no questions', async () => {
+    bankUp();
+    const res = await app.request('/api/mock/plan?kind=behavioral');
+    expect(res.status).toBe(200);
+    const p = await res.json();
+    expect(p.concepts).toHaveLength(4);
+    expect(new Set(p.concepts).size).toBe(4);
+    expect(p.storyBank).toMatchObject({ loaded: true, stories: 1, confirmed: 1 });
+    expect(JSON.stringify(p)).not.toMatch(/question|SITUATION-TEXT/i);
+    expect(fake.interviewerTurn).not.toHaveBeenCalled();
+    // A kind that does not plan answers with an empty preview.
+    expect((await (await app.request('/api/mock/plan?kind=system-design')).json()).concepts).toEqual([]);
+  });
+
+  it('starts with kind=behavioral: the plan is frozen into the context, the bank goes to state for the grader only', async () => {
+    bankUp();
+    const concepts = ['conflict', 'influence-without-authority', 'ownership', 'exec-communication'];
+    const view = await startB({ plan: { concepts } });
+    expect(view.kind).toBe('behavioral');
+    expect(view.limits).toEqual({ turnCap: 30, minutes: 35 });
+    expect(view.state.stage).toBe('intro');
+    expect(view.state.plan.items.map((i: { concept: string }) => i.concept)).toEqual(concepts);
+    expect(view.state.plan.storyBank).toMatchObject({ loaded: true });
+    // The bank never crosses the wire, and never reaches the interviewer.
+    expect(view.state.graderContext).toBeUndefined();
+    expect(JSON.stringify(view)).not.toContain('SITUATION-TEXT');
+    const [messages, stage, kind] = fake.interviewerTurn.mock.calls[0];
+    expect(kind).toBe('behavioral');
+    expect(stage).toBe('intro');
+    expect(messages[0].content).toContain('competency conflict');
+    expect(JSON.stringify(messages)).not.toMatch(/SITUATION-TEXT|CAVEAT-TEXT|UNCONFIRMED-TEXT|story-secret/);
+    expect(fetchUrls[0]).toBe('http://127.0.0.1:9410/api/data/read?file=stories.json');
+
+    // Turn 2 replays the same frozen context (prefix stability through the store).
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'q1', say: 'Tell me about a disagreement.' }));
+    await post(`/api/mock/${view.id}/turn`, { expectedSeq: 1, content: 'I build backends.' });
+    const second = fake.interviewerTurn.mock.calls[1][0];
+    expect(second[0]).toEqual(messages[0]);
+    expect(second[1]).toEqual({ role: 'assistant', content: 'Tell me about yourself.' });
+
+    // End & grade: the grader gets the frozen bank and a word-counted transcript.
+    fake.gradeMock.mockResolvedValueOnce({ grade: { ...GRADE, questions: [], storyGaps: [] }, metas: [META] });
+    await readEvents(await post(`/api/mock/${view.id}/end`));
+    const input = fake.gradeMock.mock.calls[0][0];
+    expect(input.kind).toBe('behavioral');
+    expect(input.graderContext).toContain('<story id="story-secret">');
+    expect(input.graderContext.indexOf('UNCONFIRMED-TEXT')).toBeGreaterThan(input.graderContext.indexOf('OPEN QUESTIONS'));
+    expect(input.transcript).toContain('#2 CANDIDATE (3 words): I build backends.');
+  });
+
+  it('still starts when resume-builder is down, and records why', async () => {
+    bankDown();
+    const view = await startB();
+    expect(view.state.plan.items).toHaveLength(4);
+    expect(view.state.plan.storyBank).toMatchObject({ loaded: false, error: expect.stringMatching(/ECONNREFUSED/) });
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'intro', say: 'And?' }));
+    await post(`/api/mock/${view.id}/turn`, { expectedSeq: 1, content: 'hi' });
+    fake.gradeMock.mockResolvedValueOnce({ grade: GRADE, metas: [META] });
+    await readEvents(await post(`/api/mock/${view.id}/end`));
+    expect(fake.gradeMock.mock.calls[0][0].graderContext).toMatch(/^STORY BANK: UNAVAILABLE/);
+  });
+
+  it('weights the next plan by past weak grades (the history reaches the planner)', async () => {
+    bankUp();
+    const view = await startB();
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'intro', say: 'And?' }));
+    await post(`/api/mock/${view.id}/turn`, { expectedSeq: 1, content: 'hi' });
+    fake.gradeMock.mockResolvedValueOnce({
+      grade: { ...GRADE, conceptObservations: [{ concept: 'prioritization', signal: 'missing', note: 'n' }] },
+      metas: [META],
+    });
+    await readEvents(await post(`/api/mock/${view.id}/end`));
+    const p = await (await app.request('/api/mock/plan?kind=behavioral')).json();
+    // Reasons are reported for the concepts that were picked; prioritization is
+    // only sometimes picked, so check the weight reached the planner via the service.
+    const { recentConceptSignals } = await import('../services/mock.store.js');
+    expect(recentConceptSignals('behavioral')).toEqual([{ concept: 'prioritization', signal: 'missing', note: 'n' }]);
+    expect(p.concepts).toHaveLength(4);
   });
 });

@@ -34,6 +34,7 @@ import {
   type MockAction,
   type MockEndEvent,
   type MockGrade,
+  type MockPlanPreview,
   type MockTurnRequest,
   type MockUsage,
   type MockView,
@@ -75,6 +76,8 @@ import {
   getTurns,
   insertMock,
   putGrade,
+  recentConceptSignals,
+  recentPlannedQuestionIds,
   recentPromptIds,
   toStoredTurns,
   updateCardSchedule,
@@ -167,7 +170,8 @@ function toView(m: MockRow, turns: StoredMockTurn[], grade: MockGrade | null): M
     promptId: m.promptId,
     prompt: m.prompt,
     status: m.status,
-    state: m.state,
+    // graderContext (the story bank, for the grader) stays server-side.
+    state: publicState(m.state),
     usage: m.usage,
     // `rendered` and `observations` stay server-side: the control notes are
     // instructions to the model, not something to show the candidate.
@@ -178,6 +182,12 @@ function toView(m: MockRow, turns: StoredMockTurn[], grade: MockGrade | null): M
     endedAt: m.endedAt,
     limits: { turnCap: info.turnCap, minutes: info.minutes },
   };
+}
+
+function publicState(s: MockRow['state']): MockRow['state'] {
+  if (s.graderContext === undefined) return s;
+  const { graderContext: _g, ...rest } = s;
+  return rest;
 }
 
 export function getMockView(id: string): MockView {
@@ -201,7 +211,42 @@ export function parseKind(raw: unknown): MockKind {
   return raw;
 }
 
-export async function startMock(body: { kind?: unknown; level?: unknown; promptId?: unknown }): Promise<MockView> {
+/** The planner's inputs from this kind's history. */
+function prepareArgs(kind: MockKind, level: MockLevel, requested: unknown) {
+  return {
+    level,
+    requested,
+    history: recentConceptSignals(kind),
+    recentQuestionIds: recentPlannedQuestionIds(kind),
+  };
+}
+
+/**
+ * GET /api/mock/plan?kind= — what a planned kind would ask about, for the start
+ * card. Free: no model call (behavioral reads the story bank over localhost).
+ * The questions are not shown; the start request sends the concepts back.
+ */
+export async function previewPlan(kindRaw: unknown, levelRaw?: unknown): Promise<MockPlanPreview> {
+  const kind = parseKind(kindRaw);
+  const spec = mockKindSpec(kind);
+  if (!spec.prepare) return { kind, concepts: [], reasons: {}, storyBank: null };
+  const level: MockLevel = isMockLevel(levelRaw) ? levelRaw : DEFAULT_MOCK_LEVEL;
+  const prep = await spec.prepare(prepareArgs(kind, level, undefined));
+  const concepts = prep.plan.items.map((i) => i.concept);
+  return {
+    kind,
+    concepts,
+    reasons: Object.fromEntries(concepts.map((c) => [c, prep.reasons[c] ?? []])),
+    storyBank: prep.plan.storyBank ?? null,
+  };
+}
+
+export async function startMock(body: {
+  kind?: unknown;
+  level?: unknown;
+  promptId?: unknown;
+  plan?: unknown;
+}): Promise<MockView> {
   const kind = parseKind(body.kind);
   const spec = mockKindSpec(kind);
   if (body.level !== undefined && !isMockLevel(body.level)) {
@@ -216,10 +261,17 @@ export async function startMock(body: { kind?: unknown; level?: unknown; promptI
     prompt = spec.info.pickPrompt(recentPromptIds(kind));
   }
 
+  // Planned kinds read what they need (behavioral: the story bank) BEFORE the
+  // row exists; the result is frozen into the context and the state, so every
+  // later request and the grade see exactly what the mock started with.
+  const prep = spec.prepare ? await spec.prepare(prepareArgs(kind, level, body.plan)) : undefined;
   const now = new Date();
   const id = nanoid();
-  const state = initialState(now, kind);
-  const context = spec.buildContext(prompt, level);
+  const state = {
+    ...initialState(now, kind),
+    ...(prep ? { plan: prep.plan, graderContext: prep.graderContext } : {}),
+  };
+  const context = spec.buildContext(prompt, level, prep);
   const row: MockRow = {
     id,
     kind,
@@ -367,7 +419,9 @@ export async function* runEnd(m: MockRow): AsyncGenerator<MockEndEvent> {
     yield { type: 'wrapup', status: 'grading', candidateTurns: m.state.candidateTurns };
     const turns = getTurns(m.id);
     const info = mockKindInfo(m.kind);
+    const spec = mockKindSpec(m.kind);
     const prompt = m.promptId ? info.promptById(m.promptId) : null;
+    const graderContext = spec.graderContext?.(m.state) ?? null;
     let grade: MockGrade;
     let usage = m.usage;
     let gradeUsage = emptyUsage();
@@ -381,6 +435,7 @@ export async function* runEnd(m: MockRow): AsyncGenerator<MockEndEvent> {
         skipped: m.state.skipped,
         taught: m.state.taught,
         recordedGaps: getGaps(m.id).map((g) => ({ seq: g.seq, type: g.type, title: g.title, summary: g.summary })),
+        ...(graderContext ? { graderContext } : {}),
       });
       grade = result.grade;
       for (const meta of result.metas) {

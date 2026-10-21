@@ -40,6 +40,7 @@ import type {
   MockEndEvent,
   MockListResponse,
   MockKind,
+  MockPlanPreview,
   MockStartRequest,
   MockTurnRequest,
   MockView,
@@ -507,6 +508,12 @@ export function listMocks(): Promise<MockListResponse> {
 /** GET /api/mock/prompts?kind= — a kind's static prompt bank. Free. */
 export function getMockPrompts(kind: MockKind = 'system-design'): Promise<{ prompts: MockPromptOption[] }> {
   return request<{ prompts: MockPromptOption[] }>(`/api/mock/prompts?kind=${encodeURIComponent(kind)}`);
+}
+
+/** GET /api/mock/plan?kind= — a planned kind's competencies and story-bank status. Free (no model). */
+export function getMockPlan(kind: MockKind, level?: string): Promise<MockPlanPreview> {
+  const q = `kind=${encodeURIComponent(kind)}${level ? `&level=${encodeURIComponent(level)}` : ''}`;
+  return request<MockPlanPreview>(`/api/mock/plan?${q}`);
 }
 
 /** GET /api/mock/:id — one mock, with its transcript and grade. Free. */

@@ -76,3 +76,54 @@ describe('the gaps section', () => {
     expect(html).not.toContain('Cheap fixes');
   });
 });
+
+describe('a behavioral grade', () => {
+  const B: MockGrade = {
+    level: 'staff',
+    verdict: 'below',
+    summary: 'Good stories, buried results.',
+    stages: ['intro', 'q1', 'q2', 'q3', 'q4', 'wrap'].map((stage) => ({
+      stage, score: stage === 'q1' ? 2 : 0, evidence: 'e', atLevel: false, staffWouldAdd: '', principalWouldAdd: '',
+    })),
+    skipped: [],
+    gapsTaught: [],
+    conceptObservations: [],
+    drills: [],
+    questions: [
+      {
+        stage: 'q1', concept: 'conflict', question: 'Tell me about a time you disagreed with a peer.', storyId: 'story-saas-rebuild',
+        storyFit: 'weak', star: { situation: true, task: true, action: true, result: false }, scope: 2, ownership: 'we',
+        quantified: false, words: 412, length: 'long', fidelity: 'Left out the ~$300/month figure.', fix: 'Lead with the result.',
+      },
+    ],
+    storyGaps: [{ concept: 'conflict', note: 'Capture a disagreement you personally had.' }],
+  };
+  const out = (bank?: { loaded: boolean; error?: string }) =>
+    renderToStaticMarkup(
+      <GradeReport
+        grade={B}
+        kind="behavioral"
+        storyBank={bank ? { stories: 0, confirmed: 0, openGaps: [], ...bank } : undefined}
+      />
+    );
+
+  it('renders each question with STAR, I-vs-we, numbers, length, story fit and fidelity', () => {
+    const h = out({ loaded: true });
+    expect(h).toContain('Question by question');
+    expect(h).toContain('Conflict &amp; disagreement');
+    expect(h).toContain('412 words');
+    expect(h).toContain('no number');
+    expect(h).toContain('story: story-saas-rebuild');
+    expect(h).toContain('Left out the ~$300/month figure.');
+    expect(h).toContain('Lead with the result.');
+    expect(h).toContain('Q1');
+  });
+
+  it('lists story gaps with a link to capture them, and notes a bank that was down', () => {
+    const h = out({ loaded: false, error: 'resume-builder unreachable' });
+    expect(h).toContain('Stories to capture');
+    expect(h).toContain('https://resume.cush.rocks');
+    expect(h).toContain('story bank was unavailable');
+    expect(out({ loaded: true })).not.toContain('story bank was unavailable');
+  });
+});

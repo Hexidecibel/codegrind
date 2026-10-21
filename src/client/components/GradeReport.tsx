@@ -7,8 +7,26 @@
 // fixes, skills are practice areas. Every gap is already a drill card on the
 // Mock tab (GapCards), so this section says so rather than offering a button.
 
-import { AlertTriangle, CheckCircle2, GraduationCap, Layers, ListChecks, XCircle } from 'lucide-react';
-import type { MockGrade, MockKind, MockUsage, MockVerdict } from '@/shared/mock';
+import {
+  AlertTriangle,
+  BookOpen,
+  CheckCircle2,
+  ExternalLink,
+  GraduationCap,
+  Layers,
+  ListChecks,
+  MessageSquareQuote,
+  XCircle,
+} from 'lucide-react';
+import type {
+  MockGrade,
+  MockKind,
+  MockQuestionGrade,
+  MockUsage,
+  MockVerdict,
+  StoryBankStatus,
+} from '@/shared/mock';
+import { STORY_CAPTURE_URL } from '@/shared/behavioral-questions';
 import type { MockGap } from '@/shared/gap-cards';
 import { GAP_TYPE_META, cardFront } from '@/client/components/GapCards';
 import { MOCK_LEVEL_LABEL } from '@/shared/sd';
@@ -59,16 +77,85 @@ function GapList({ gaps, type }: { gaps: MockGap[]; type: MockGap['type'] }) {
   );
 }
 
+const STAR_KEYS = ['situation', 'task', 'action', 'result'] as const;
+const OWNERSHIP_LABEL: Record<MockQuestionGrade['ownership'], string> = { i: '"I"', we: '"we"', mixed: '"I" + "we"' };
+
+function Pill({ ok, children }: { ok: boolean; children: React.ReactNode }) {
+  return (
+    <span
+      className={cn(
+        'rounded border px-1.5 text-xs',
+        ok ? 'border-emerald-500/40 text-emerald-300' : 'border-amber-500/40 text-amber-300',
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+/** Behavioral: one card per question — STAR, scope, I-vs-we, numbers, length, story fit, fidelity. */
+function QuestionList({ questions, conceptLabel }: { questions: MockQuestionGrade[]; conceptLabel: (c: string) => string }) {
+  return (
+    <section className="space-y-2">
+      <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+        <MessageSquareQuote className="h-4 w-4" /> Question by question
+      </h3>
+      <ol className="space-y-2">
+        {questions.map((q) => (
+          <li key={q.stage} className="space-y-1.5 rounded-lg border border-border bg-card p-3 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">{q.stage.toUpperCase()} · {conceptLabel(q.concept)}</span>
+              <ScoreDots score={q.scope} />
+              <span className="text-xs text-muted-foreground">scope</span>
+            </div>
+            {q.question && <p className="italic text-muted-foreground">“{q.question}”</p>}
+            <div className="flex flex-wrap gap-1.5">
+              {STAR_KEYS.map((k) => (
+                <Pill key={k} ok={q.star[k]}>
+                  {k}
+                </Pill>
+              ))}
+              <Pill ok={q.ownership === 'i'}>{OWNERSHIP_LABEL[q.ownership]}</Pill>
+              <Pill ok={q.quantified}>{q.quantified ? 'quantified' : 'no number'}</Pill>
+              <Pill ok={q.length === 'ok'}>
+                {q.words ? `${q.words} words` : 'length'} · {q.length}
+              </Pill>
+              <Pill ok={q.storyFit === 'strong' || q.storyFit === 'ok'}>
+                {q.storyId ? `story: ${q.storyId}` : 'no bank story'} · fit {q.storyFit}
+              </Pill>
+            </div>
+            {q.fidelity && (
+              <p className="text-amber-200/90">
+                <span className="font-medium">Against your bank: </span>
+                {q.fidelity}
+              </p>
+            )}
+            {q.fix && (
+              <p>
+                <span className="font-medium">Fix: </span>
+                {q.fix}
+              </p>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 export function GradeReport({
   grade,
   usage,
   gaps = [],
   kind = 'system-design',
+  storyBank,
 }: {
   grade: MockGrade;
   usage?: MockUsage;
   gaps?: MockGap[];
   kind?: MockKind;
+  /** Behavioral: whether the story bank loaded when the mock started. */
+  storyBank?: StoryBankStatus;
 }) {
   const { conceptLabel } = mockKindInfo(kind);
   const verdict = VERDICT_META[grade.verdict];
@@ -94,7 +181,42 @@ export function GradeReport({
             observations are missing from this report.
           </p>
         )}
+        {storyBank && !storyBank.loaded && (
+          <p className="flex items-center gap-1.5 text-xs text-amber-300">
+            <AlertTriangle className="h-3.5 w-3.5" /> Your story bank was unavailable when this mock started
+            {storyBank.error ? ` (${storyBank.error})` : ''} — stories were judged on the transcript alone, with no
+            fidelity check.
+          </p>
+        )}
       </div>
+
+      {grade.questions && grade.questions.length > 0 && (
+        <QuestionList questions={grade.questions} conceptLabel={conceptLabel} />
+      )}
+
+      {grade.storyGaps && grade.storyGaps.length > 0 && (
+        <section className="space-y-2">
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+            <BookOpen className="h-4 w-4" /> Stories to capture
+          </h3>
+          <ul className="space-y-1 text-sm">
+            {grade.storyGaps.map((g) => (
+              <li key={g.concept}>
+                <span className="font-medium">{conceptLabel(g.concept)}</span>
+                {g.note && <span className="text-muted-foreground"> — {g.note}</span>}
+              </li>
+            ))}
+          </ul>
+          <a
+            href={STORY_CAPTURE_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+          >
+            Capture them in resume-builder (Interview → Capture) <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        </section>
+      )}
 
       <section className="space-y-2">
         <h3 className="text-sm font-semibold">Stage by stage</h3>

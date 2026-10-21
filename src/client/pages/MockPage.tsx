@@ -32,6 +32,7 @@ import {
   abandonMock,
   endMock,
   getMock,
+  getMockPlan,
   getMockPrompts,
   listMocks,
   sendMockTurn,
@@ -42,6 +43,7 @@ import {
 import {
   estimateMockCost,
   type MockAction,
+  type MockPlanPreview,
   type MockSummary,
   type MockTurn,
   type MockView,
@@ -100,6 +102,61 @@ function Markdown({ children }: { children: string }) {
 // The start card
 // -----------------------------------------------------------------------------
 
+/** A planned kind's preview: the competencies (not the questions) and the story bank's state. */
+function PlanPreview({
+  kind,
+  plan,
+  onReroll,
+}: {
+  kind: MockKind;
+  plan: MockPlanPreview | null;
+  onReroll: () => void;
+}) {
+  const { conceptLabel, start } = mockKindInfo(kind);
+  if (!plan) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Planning the questions…
+      </div>
+    );
+  }
+  const bank = plan.storyBank;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        Planned competencies
+        <button onClick={onReroll} className="text-xs font-normal text-muted-foreground underline hover:text-foreground">
+          pick again
+        </button>
+      </div>
+      <ol className="space-y-1 text-sm">
+        {plan.concepts.map((c, i) => (
+          <li key={c} className="flex flex-wrap items-baseline gap-x-2">
+            <span className="text-xs text-muted-foreground">Q{i + 1}</span>
+            <span>{conceptLabel(c)}</span>
+            {plan.reasons[c]?.length ? (
+              <span className="text-xs text-muted-foreground">— {plan.reasons[c].join('; ')}</span>
+            ) : null}
+          </li>
+        ))}
+      </ol>
+      <p className="text-xs text-muted-foreground">{start.pickHint} The questions themselves stay a surprise.</p>
+      {bank &&
+        (bank.loaded ? (
+          <p className="text-xs text-emerald-300/90">
+            Story bank loaded: {bank.stories} stories ({bank.confirmed} confirmed)
+            {bank.openGaps.length ? ` · open gaps: ${bank.openGaps.join(', ')}` : ''}. Only the grader reads it.
+          </p>
+        ) : (
+          <p className="text-xs text-amber-300">
+            Story bank unavailable ({bank.error ?? 'resume-builder did not answer'}). The mock still runs; the grade
+            will judge stories on the transcript alone.
+          </p>
+        ))}
+    </div>
+  );
+}
+
 function StartCard() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -115,6 +172,10 @@ function StartCard() {
   const [level, setLevel] = useState<MockLevel>(DEFAULT_MOCK_LEVEL);
   const [promptId, setPromptId] = useState('');
   const [prompts, setPrompts] = useState<MockPromptOption[]>([]);
+  // Planned kinds (behavioral): the competencies it will ask about, and whether
+  // the story bank loaded. `null` while loading; the start sends the plan back.
+  const [plan, setPlan] = useState<MockPlanPreview | null>(null);
+  const [planKey, setPlanKey] = useState(0);
   const [mocks, setMocks] = useState<MockSummary[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -132,15 +193,32 @@ function StartCard() {
     getMockPrompts(kind).then((r) => setPrompts(r.prompts)).catch(setError);
   }, [kind]);
 
-  const typical = estimateMockCost(info.typicalTurns).usd;
-  const worst = estimateMockCost(info.turnCap).usd;
+  useEffect(() => {
+    setPlan(null);
+    if (!mockKindInfo(kind).planned) return;
+    let live = true;
+    getMockPlan(kind)
+      .then((p) => live && setPlan(p))
+      .catch((err) => live && setError(err));
+    return () => {
+      live = false;
+    };
+  }, [kind, planKey]);
+
+  const typical = estimateMockCost(info.typicalTurns, undefined, kind).usd;
+  const worst = estimateMockCost(info.turnCap, undefined, kind).usd;
   const active = mocks?.find((m) => m.status === 'active' || m.status === 'grade_failed');
 
   const start = async () => {
     setBusy(true);
     setError(null);
     try {
-      const view = await startMock({ kind, level, ...(promptId ? { promptId } : {}) });
+      const view = await startMock({
+        kind,
+        level,
+        ...(promptId ? { promptId } : {}),
+        ...(info.planned && plan?.concepts.length ? { plan: { concepts: plan.concepts } } : {}),
+      });
       navigate(`/mock/${view.id}${todayStep ? '?from=today&step=mock' : ''}`);
     } catch (err) {
       setError(err as Error);
@@ -225,27 +303,31 @@ function StartCard() {
           </div>
         </div>
 
-        <label className="block space-y-1.5">
-          <span className="text-sm font-medium">Prompt</span>
-          <select
-            value={promptId}
-            onChange={(e) => setPromptId(e.target.value)}
-            className="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-          >
-            <option value="">Pick one for me</option>
-            {prompts.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.title}
-                {p.familiar ? info.start.familiarTag : ''}
-              </option>
-            ))}
-          </select>
-          <span className="block text-xs text-muted-foreground">
-            {promptId
-              ? prompts.find((p) => p.id === promptId)?.brief
-              : info.start.pickHint}
-          </span>
-        </label>
+        {info.planned && <PlanPreview kind={kind} plan={plan} onReroll={() => setPlanKey((k) => k + 1)} />}
+
+        {prompts.length > 1 && (
+          <label className="block space-y-1.5">
+            <span className="text-sm font-medium">Prompt</span>
+            <select
+              value={promptId}
+              onChange={(e) => setPromptId(e.target.value)}
+              className="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="">Pick one for me</option>
+              {prompts.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.title}
+                  {p.familiar ? info.start.familiarTag : ''}
+                </option>
+              ))}
+            </select>
+            <span className="block text-xs text-muted-foreground">
+              {promptId
+                ? prompts.find((p) => p.id === promptId)?.brief
+                : info.start.pickHint}
+            </span>
+          </label>
+        )}
 
         <div className="text-xs text-muted-foreground">
           About ${typical.toFixed(2)} for a typical mock, at most ~${worst.toFixed(2)} at the {info.turnCap}-turn cap
@@ -574,7 +656,15 @@ function Graded({ view }: { view: MockView }) {
         <h1 className="text-xl font-bold tracking-tight">{titleOf(view)}</h1>
         <p className="text-sm text-muted-foreground">{view.prompt}</p>
       </div>
-      {view.grade && <GradeReport grade={view.grade} usage={view.usage} gaps={view.gaps} kind={view.kind} />}
+      {view.grade && (
+        <GradeReport
+          grade={view.grade}
+          usage={view.usage}
+          gaps={view.gaps}
+          kind={view.kind}
+          storyBank={view.state.plan?.storyBank}
+        />
+      )}
       <div>
         <Button variant="outline" size="sm" onClick={() => setShowTranscript((s) => !s)}>
           {showTranscript ? 'Hide' : 'Show'} the transcript ({view.turns.length} messages)
