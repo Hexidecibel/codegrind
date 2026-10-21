@@ -126,6 +126,15 @@ const TOOL_RESULTS: Record<string, Record<string, unknown>> = {
     fixes: [{ issue: 'Predicted O(n), wrote O(n^2)', action: 'Two sliding-window problems tomorrow' }],
     tomorrowFocus: { patterns: ['sliding-window'], mockKind: 'system-design' },
   },
+  emit_recognize_check: {
+    verdict: 'partly',
+    missing: ['the sortedness invariant'],
+    edgeCaseThatBites: 'duplicates at both ends',
+    oneLineFix: 'Move the pointer on the side that makes the sum smaller.',
+    keyInsight: 'Sorted input + pair target: a monotone two-ended scan.',
+    optimalTime: 'O(n)',
+    optimalSpace: 'O(1)',
+  },
   emit_translations: {
     translations: [
       { id: 'primer:arrays', code: 'i = 0' },
@@ -157,6 +166,8 @@ mocks.create.mockImplementation(async (body: Record<string, unknown>) => {
 const llm = await import('./llm.service.js');
 // The Today routine's debrief lives in its own file; same seam, same fixture.
 const debriefLlm = await import('./llm.debrief.js');
+// The Recognize drill's optional AI check; same seam, same fixture.
+const recognizeLlm = await import('./llm.recognize.js');
 
 // -----------------------------------------------------------------------------
 // Fixed inputs. Every one of these is a constant on purpose: a body that varies
@@ -307,6 +318,13 @@ const CAPTURED: Record<string, unknown> = {
       week: { activeDays: 4, attempts: 12, solved: 9, firstSubmitPassPct: 61, topMistakes: ['off-by-one'] },
     })
   ),
+  runRecognizeCheck: await capture(() =>
+    recognizeLlm.runRecognizeCheck({
+      problem: PROBLEM,
+      picked: 'two-pointer',
+      approach: 'Two pointers from both ends; move the smaller side. O(n) time, O(1) space.',
+    })
+  ),
 };
 
 if (UPDATE) {
@@ -318,11 +336,12 @@ const GOLDEN = JSON.parse(readFileSync(FIXTURE, 'utf8')) as Record<string, unkno
 
 // =============================================================================
 describe('the request body of every LLM call site', () => {
-  it('covers all twelve call sites', () => {
-    // Thirteen entries, twelve sites: generateProblem is captured twice. The
-    // twelfth is the Today debrief (llm.debrief.ts). If a thirteenth site is
-    // added, it belongs here before it ships.
-    expect(Object.keys(CAPTURED)).toHaveLength(13);
+  it('covers all thirteen call sites', () => {
+    // Fourteen entries, thirteen sites: generateProblem is captured twice. The
+    // twelfth is the Today debrief (llm.debrief.ts), the thirteenth the
+    // Recognize AI check (llm.recognize.ts). If a fourteenth site is added, it
+    // belongs here before it ships.
+    expect(Object.keys(CAPTURED)).toHaveLength(14);
     expect(Object.keys(GOLDEN)).toEqual(Object.keys(CAPTURED));
   });
 

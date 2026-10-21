@@ -46,6 +46,15 @@ import type {
 } from '@/shared/mock';
 import type { GapCard, GapCardGrade, GapCardsResponse } from '@/shared/gap-cards';
 import type { TodayState, TodayStepId } from '@/shared/today';
+import type {
+  RecognizeCheck,
+  RecognizeCode,
+  RecognizeGradeRequest,
+  RecognizeGradeResponse,
+  RecognizeReveal,
+  RecognizeSession,
+  RecognizeStats,
+} from '@/shared/recognize';
 
 /** Shape returned by GET /api/session/:id (resume). */
 export interface SessionState {
@@ -569,4 +578,40 @@ export function endTodayEarly(ended = true): Promise<TodayState> {
 /** POST /api/today/debrief — ONE small model call, cached per day; `regenerate` pays again. */
 export function runTodayDebrief(regenerate = false): Promise<TodayState> {
   return request<TodayState>('/api/today/debrief', { method: 'POST', body: JSON.stringify({ regenerate }) });
+}
+
+// -----------------------------------------------------------------------------
+// Recognize — pattern matching, no code
+// -----------------------------------------------------------------------------
+/** GET /api/recognize/session — N cards (statement + 4 choices). Free. */
+export function getRecognizeSession(n: number): Promise<RecognizeSession> {
+  return request<RecognizeSession>(`/api/recognize/session?n=${n}`);
+}
+
+/** POST /api/recognize/reveal — pattern, primer, cached note. Free; no code. */
+export function revealRecognize(problemId: string, picked: string | null): Promise<RecognizeReveal> {
+  return request<RecognizeReveal>('/api/recognize/reveal', { method: 'POST', body: JSON.stringify({ problemId, picked }) });
+}
+
+/** POST /api/recognize/code — the reference solution. Writes the reveal ledger. */
+export function showRecognizeCode(problemId: string): Promise<RecognizeCode> {
+  return request<RecognizeCode>('/api/recognize/code', { method: 'POST', body: JSON.stringify({ problemId }) });
+}
+
+/** POST /api/recognize/check — ONE small model call, on click only. */
+export function checkRecognize(problemId: string, picked: string | null, approach: string): Promise<RecognizeCheck> {
+  return request<RecognizeCheck>('/api/recognize/check', {
+    method: 'POST',
+    body: JSON.stringify({ problemId, picked, approach }),
+  });
+}
+
+/** POST /api/recognize/grade — record the card, move its schedule. Free. */
+export function gradeRecognize(req: RecognizeGradeRequest): Promise<RecognizeGradeResponse> {
+  return request<RecognizeGradeResponse>('/api/recognize/grade', { method: 'POST', body: JSON.stringify(req) });
+}
+
+/** GET /api/recognize/stats — per-pattern accuracy. Free. */
+export function getRecognizeStats(): Promise<RecognizeStats> {
+  return request<RecognizeStats>('/api/recognize/stats');
 }

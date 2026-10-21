@@ -32,8 +32,10 @@ import {
   localDay,
   localDayStreak,
   pickMockKind,
+  previousDay,
   todayTz,
 } from './today.compute.js';
+import { todayRecognize } from './recognize.service.js';
 import * as store from './today.store.js';
 import { runDebrief, type DebriefInput } from './llm.debrief.js';
 
@@ -138,6 +140,12 @@ export function getToday(now = new Date()): TodayState {
     debriefUsage: row.debriefUsage,
     focus: dailyFocus(now),
     debriefEstimateUsd: DEBRIEF_ESTIMATE_USD,
+    recognize: todayRecognize(
+      dayStart,
+      // "the last 3 local days" = from local midnight two days ago
+      new Date(dayStartMs(previousDay(previousDay(date)), todayTz())).toISOString(),
+      now
+    ),
   };
 }
 

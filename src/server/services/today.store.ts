@@ -76,6 +76,7 @@ function prepare() {
       SELECT createdAt AS at FROM attempts WHERE createdAt >= @since
       UNION ALL SELECT createdAt FROM mocks WHERE createdAt >= @since
       UNION ALL SELECT lastReviewedAt FROM mock_gaps WHERE lastReviewedAt >= @since
+      UNION ALL SELECT createdAt FROM recognize_attempts WHERE createdAt >= @since
     `),
   };
 }

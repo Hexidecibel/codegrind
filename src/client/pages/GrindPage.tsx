@@ -516,6 +516,13 @@ export function GrindPage() {
             >
               or pick manually
             </Link>
+            <span className="mx-2 text-xs text-muted-foreground">·</span>
+            <Link
+              to="/recognize"
+              className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              rusty? recognize patterns (no code)
+            </Link>
           </div>
         </div>
       </div>

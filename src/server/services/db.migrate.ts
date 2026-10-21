@@ -368,6 +368,53 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
         );
       `);
 
+      // The Recognize drill (pattern matching, no code). Three new tables, no
+      // backfill → always-run. Deliberately NOT attempts/skill_state/review_queue:
+      // a recognize card is not a solve and must never move tier credit.
+      //   recognize_attempts  one row per graded card (accuracy, Today, Reflect)
+      //   recognize_cards     the SRS schedule for misses/shaky, one per problem,
+      //                       on the gap-card ladder (shared/gap-cards.ts)
+      //   recognize_notes     the problem-specific key insight + optimal
+      //                       complexity, cached from the first AI check
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS recognize_attempts (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          problemId      TEXT NOT NULL,
+          topic          TEXT NOT NULL,
+          picked         TEXT,
+          patternCorrect INTEGER NOT NULL,
+          approach       TEXT NOT NULL DEFAULT '',
+          selfGrade      TEXT NOT NULL,              -- got | shaky | missed, as clicked
+          grade          TEXT NOT NULL,              -- effective: a wrong pick is missed
+          codeShown      INTEGER NOT NULL DEFAULT 0,
+          aiVerdict      TEXT,                       -- correct | partly | wrong | NULL
+          durationMs     INTEGER,
+          createdAt      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_recognize_attempts_created ON recognize_attempts (createdAt);
+
+        CREATE TABLE IF NOT EXISTS recognize_cards (
+          problemId      TEXT PRIMARY KEY,
+          topic          TEXT NOT NULL,
+          step           INTEGER NOT NULL DEFAULT 0,
+          dueAt          TEXT NOT NULL,
+          reps           INTEGER NOT NULL DEFAULT 0,
+          lapses         INTEGER NOT NULL DEFAULT 0,
+          lastGrade      TEXT,
+          lastReviewedAt TEXT,
+          retiredAt      TEXT,
+          createdAt      TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS recognize_notes (
+          problemId  TEXT PRIMARY KEY,
+          keyInsight TEXT NOT NULL,
+          time       TEXT NOT NULL,
+          space      TEXT NOT NULL,
+          createdAt  TEXT NOT NULL
+        );
+      `);
+
       // --- VERSIONED ----------------------------------------------------------
       // Expensive or destructive. Gated on the version marker so a warm database
       // doesn't pay on every boot — but each step still asks the DATABASE
