@@ -17,7 +17,7 @@
 import type { ProblemRecord } from '../../shared/types.js';
 import type { RecognizeNote, RecognizeVerdict } from '../../shared/recognize.js';
 import { structured } from './llm.client.js';
-import type { CallMeta, ToolSpec } from './llm.types.js';
+import { cutToolCallFraming, type CallMeta, type ToolSpec } from './llm.types.js';
 import { coerceVerdict } from './recognize.compute.js';
 
 export const RECOGNIZE_CHECK_SYSTEM = `You check a candidate's quick read of an algorithm problem. They did NOT write code: they named the pattern and wrote 1-3 sentences of approach plus time/space complexity, in about two minutes. Judge the IDEA, not the prose.
@@ -31,21 +31,26 @@ export const RECOGNIZE_CHECK_SYSTEM = `You check a candidate's quick read of an 
 
 Be terse and specific. Call emit_recognize_check exactly once.`;
 
+// Strict (exactSchema): all required, no extras. The longest free text,
+// keyInsight, is last — the leak sink (see ToolSpec.leakSink).
 export const EMIT_RECOGNIZE_CHECK_TOOL: ToolSpec = {
   name: 'emit_recognize_check',
   description: 'Emit the verdict on the candidate\'s approach.',
+  exactSchema: true,
+  leakSink: 'keyInsight',
   schema: {
     type: 'object',
     properties: {
       verdict: { type: 'string', enum: ['correct', 'partly', 'wrong'] },
       missing: { type: 'array', items: { type: 'string' }, description: '0-3 things the approach left out.' },
+      optimalTime: { type: 'string', description: 'Reference time complexity.' },
+      optimalSpace: { type: 'string', description: 'Reference space complexity.' },
       edgeCaseThatBites: { type: 'string', description: 'One input that breaks this approach.' },
       oneLineFix: { type: 'string', description: 'One sentence that fixes the approach.' },
       keyInsight: { type: 'string', description: 'The tell + why the pattern works, 1-2 sentences.' },
-      optimalTime: { type: 'string', description: 'Reference time complexity.' },
-      optimalSpace: { type: 'string', description: 'Reference space complexity.' },
     },
-    required: ['verdict', 'missing', 'edgeCaseThatBites', 'oneLineFix', 'keyInsight', 'optimalTime', 'optimalSpace'],
+    required: ['verdict', 'missing', 'optimalTime', 'optimalSpace', 'edgeCaseThatBites', 'oneLineFix', 'keyInsight'],
+    additionalProperties: false,
   },
 };
 
@@ -93,11 +98,14 @@ export function coerceRecognizeCheck(raw: unknown): RecognizeCheckResult {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   return {
     verdict: coerceVerdict(o.verdict),
-    missing: (Array.isArray(o.missing) ? o.missing : []).map((m) => str(m, 200)).filter(Boolean).slice(0, 3),
+    missing: (Array.isArray(o.missing) ? o.missing : typeof o.missing === 'string' ? [o.missing] : [])
+      .map((m) => str(m, 200))
+      .filter(Boolean)
+      .slice(0, 3),
     edgeCaseThatBites: str(o.edgeCaseThatBites),
     oneLineFix: str(o.oneLineFix),
     note: {
-      keyInsight: str(o.keyInsight, 500),
+      keyInsight: str(cutToolCallFraming(typeof o.keyInsight === 'string' ? o.keyInsight : ''), 500),
       time: str(o.optimalTime, 40),
       space: str(o.optimalSpace, 40),
     },

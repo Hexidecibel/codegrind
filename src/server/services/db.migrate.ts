@@ -483,6 +483,49 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
         }
       }
 
+      // Phase G (Envelope math drill). Two new tables, no backfill → always-run.
+      //   envelope_cards     the SRS schedule for misses (gap-card ladder, with
+      //                      a one-day floor like recognize_cards), seeded cards
+      //                      and cards made from estimation gaps in mocks. The
+      //                      item itself is stored as JSON (shared/envelope.ts).
+      //   envelope_attempts  one row per checked answer: accuracy, the orders-of-
+      //                      magnitude error and the likely cause, for Reflect
+      //                      and Today; plus the AI note once it is written.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS envelope_cards (
+          key            TEXT PRIMARY KEY,           -- seed:* | g:<kind>:<seed> | mock:<gapId>
+          item           TEXT NOT NULL,              -- JSON EnvelopeItem
+          source         TEXT NOT NULL,              -- seed | miss | mock
+          mockId         TEXT,
+          step           INTEGER NOT NULL DEFAULT 0,
+          dueAt          TEXT NOT NULL,
+          reps           INTEGER NOT NULL DEFAULT 0,
+          lapses         INTEGER NOT NULL DEFAULT 0,
+          lastGrade      TEXT,
+          lastReviewedAt TEXT,
+          retiredAt      TEXT,
+          createdAt      TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS envelope_attempts (
+          id        INTEGER PRIMARY KEY AUTOINCREMENT,
+          itemKey   TEXT NOT NULL,
+          cardKey   TEXT,                            -- set when a due card was answered
+          kind      TEXT NOT NULL,
+          question  TEXT NOT NULL,
+          answer    TEXT NOT NULL,                   -- as typed
+          working   TEXT NOT NULL DEFAULT '',
+          expected  REAL NOT NULL,
+          given     REAL NOT NULL,
+          ok        INTEGER NOT NULL,
+          orders    REAL NOT NULL,                   -- log10(given / expected)
+          cause     TEXT,
+          aiNote    TEXT,                            -- JSON EnvelopeNote
+          createdAt TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_envelope_attempts_created ON envelope_attempts (createdAt);
+      `);
+
       // --- VERSIONED ----------------------------------------------------------
       // Expensive or destructive. Gated on the version marker so a warm database
       // doesn't pay on every boot — but each step still asks the DATABASE

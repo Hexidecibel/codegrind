@@ -22,6 +22,7 @@ import {
   type TodayStepStatus,
 } from '../../shared/today.js';
 import { computeDayStreak } from './reflect.compute.js';
+import { cutToolCallFraming } from './llm.types.js';
 
 // -----------------------------------------------------------------------------
 // The local day
@@ -128,6 +129,11 @@ export interface DeriveInput {
   /** Due review-queue problems not already attempted today. */
   reviewsDue: number;
   cardsReviewedToday: number;
+  /**
+   * Envelope ×N (Phase G): what is left of today's reps (due envelope cards
+   * lead them) and how many were answered. Absent = no envelope part.
+   */
+  envelope?: { remaining: number; doneToday: number };
   skips: readonly TodayStepId[];
   endedEarly: boolean;
   mockKind: MockKind;
@@ -194,14 +200,18 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
   // --- warm-up --------------------------------------------------------------
   const reviewsCleared = input.attempts.filter((a) => a.firstAt < input.dayStart);
   const reviewedProblems = new Set(reviewsCleared.map((a) => a.problemId)).size;
-  const pile = input.cardsDue + input.reviewsDue;
+  const env = input.envelope ?? { remaining: 0, doneToday: 0 };
+  const pile = input.cardsDue + env.remaining + input.reviewsDue;
   const warmHref =
     input.cardsDue > 0
       ? `/mock?${from('warmup')}#cards`
-      : input.reviewsDue > 0
-        ? `/grind?${from('warmup')}`
-        : '/today';
-  const cleared = input.cardsReviewedToday + reviewedProblems;
+      : env.remaining > 0
+        ? `/envelope?${from('warmup')}&n=${env.remaining}`
+        : input.reviewsDue > 0
+          ? `/grind?${from('warmup')}`
+          : '/today';
+  const cleared = input.cardsReviewedToday + reviewedProblems + env.doneToday;
+  const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
   base.set('warmup', {
     status: pile === 0 ? 'done' : skipped.has('warmup') ? 'skipped' : 'todo',
     href: warmHref,
@@ -209,15 +219,22 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
       pile === 0
         ? 'Nothing due.'
         : [
-            input.cardsDue ? `${input.cardsDue} drill card${input.cardsDue === 1 ? '' : 's'}` : null,
-            input.reviewsDue ? `${input.reviewsDue} review problem${input.reviewsDue === 1 ? '' : 's'}` : null,
+            input.cardsDue || input.reviewsDue
+              ? [
+                  input.cardsDue ? plural(input.cardsDue, 'drill card') : null,
+                  input.reviewsDue ? plural(input.reviewsDue, 'review problem') : null,
+                ]
+                  .filter(Boolean)
+                  .join(' + ') + ' due'
+              : null,
+            env.remaining ? `Envelope ×${env.remaining}` : null,
           ]
             .filter(Boolean)
-            .join(' + ') + ' due',
+            .join(' + '),
     result:
       pile === 0
         ? cleared > 0
-          ? `Cleared ${cleared} (${input.cardsReviewedToday} card${input.cardsReviewedToday === 1 ? '' : 's'}, ${reviewedProblems} review${reviewedProblems === 1 ? '' : 's'})`
+          ? `Cleared ${cleared} (${plural(input.cardsReviewedToday, 'card')}, ${plural(reviewedProblems, 'review')}${env.doneToday ? `, ${env.doneToday} envelope` : ''})`
           : 'Nothing was due'
         : null,
     ok: pile === 0 ? true : null,
@@ -396,7 +413,7 @@ export function coerceDebrief(raw: unknown): Debrief {
     ...new Set((Array.isArray(tf.patterns) ? tf.patterns : []).filter((p): p is Topic => typeof p === 'string' && valid.has(p))),
   ].slice(0, 3);
   return {
-    verdict: str(o.verdict, 200) || 'Day logged.',
+    verdict: str(cutToolCallFraming(typeof o.verdict === 'string' ? o.verdict : ''), 200) || 'Day logged.',
     wins,
     fixes,
     tomorrowFocus: { patterns, mockKind: isMockKind(tf.mockKind) ? tf.mockKind : null },

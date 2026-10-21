@@ -57,6 +57,7 @@ import type {
   RecognizeSession,
   RecognizeStats,
 } from '@/shared/recognize';
+import type { EnvelopeCheckResponse, EnvelopeNote, EnvelopeSession, EnvelopeStats } from '@/shared/envelope';
 
 /** Shape returned by GET /api/session/:id (resume). */
 export interface SessionState {
@@ -660,4 +661,28 @@ export function gradeRecognize(req: RecognizeGradeRequest): Promise<RecognizeGra
 /** GET /api/recognize/stats — per-pattern accuracy. Free. */
 export function getRecognizeStats(): Promise<RecognizeStats> {
   return request<RecognizeStats>('/api/recognize/stats');
+}
+
+// ---------------------------------------------------------------------------
+// Envelope — back-of-the-envelope math reps (Phase G)
+// ---------------------------------------------------------------------------
+
+/** GET /api/envelope/session — due cards first, then fresh reps. Free. */
+export function getEnvelopeSession(n: number): Promise<EnvelopeSession> {
+  return request<EnvelopeSession>(`/api/envelope/session?n=${n}`);
+}
+
+/** POST /api/envelope/check — parse, classify, record, schedule. Free. */
+export function checkEnvelope(key: string, answer: string, working: string): Promise<EnvelopeCheckResponse> {
+  return request<EnvelopeCheckResponse>('/api/envelope/check', { method: 'POST', body: JSON.stringify({ key, answer, working }) });
+}
+
+/** POST /api/envelope/note — ONE small model call on a miss (cached per attempt). */
+export function noteEnvelope(attemptId: number): Promise<EnvelopeNote> {
+  return request<EnvelopeNote>('/api/envelope/note', { method: 'POST', body: JSON.stringify({ attemptId }) });
+}
+
+/** GET /api/envelope/stats — accuracy and orders-of-magnitude error over time. Free. */
+export function getEnvelopeStats(): Promise<EnvelopeStats> {
+  return request<EnvelopeStats>('/api/envelope/stats');
 }

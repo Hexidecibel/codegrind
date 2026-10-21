@@ -33,6 +33,7 @@ import { MistakeLedger } from '@/client/components/reflect/MistakeLedger';
 import { FirstRun } from '@/client/components/reflect/FirstRun';
 import { HistoryRow } from '@/client/components/reflect/HistoryRow';
 import { RecognizeAccuracy } from '@/client/components/reflect/RecognizeAccuracy';
+import { EnvelopeAccuracy } from '@/client/components/reflect/EnvelopeAccuracy';
 import {
   DataTable,
   Section,
@@ -349,6 +350,7 @@ export function ProgressPage() {
         </Section>
 
         <RecognizeAccuracy />
+        <EnvelopeAccuracy />
 
         <Section title="Recent attempts">
           {attempts.length === 0 ? (

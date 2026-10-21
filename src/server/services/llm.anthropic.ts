@@ -314,7 +314,8 @@ export function createAnthropicClient(model: string, seam?: AnthropicSeam): LlmC
           `${model} did not call ${req.tool.name} as expected (stop_reason: ${
             meta.stop ?? 'none'
           }).`,
-          meta
+          meta,
+          false
         );
       }
       return { input: (call.input ?? {}) as Record<string, unknown>, meta };

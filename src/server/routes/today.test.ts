@@ -94,6 +94,11 @@ beforeEach(() => {
   }
   // The pre-Phase-F tests pin click-only behaviour; Phase F's own block turns reviews on.
   setSetting('ai.reviews', false);
+  // Phase G's Envelope ×5 is part of the warm-up; these tests pin the rest of
+  // it, so it is off here and on in its own block below.
+  setSetting('envelope.daily', 0);
+  db.prepare(`DELETE FROM envelope_cards`).run();
+  db.prepare(`DELETE FROM envelope_attempts`).run();
 });
 
 describe('GET /api/today', () => {

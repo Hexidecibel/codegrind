@@ -49,6 +49,7 @@ import {
 import { aiReviewsEnabled, aiSpend, costOfMeta } from './ai-usage.service.js';
 import { runStepReview, type StepReviewInput } from './llm.review.js';
 import { todayRecognize } from './recognize.service.js';
+import { envelopeDigest, todayEnvelope } from './envelope.service.js';
 import * as store from './today.store.js';
 import { runDebrief, type DebriefInput } from './llm.debrief.js';
 
@@ -112,6 +113,7 @@ export function getToday(now = new Date()): TodayState {
 
   const attempts = store.attemptsSince(dayStart);
   const mocks = store.mocksSince(dayStart);
+  const envelope = todayEnvelope(dayStart, now);
   const derived = deriveSteps({
     dayStart,
     attempts,
@@ -119,6 +121,7 @@ export function getToday(now = new Date()): TodayState {
     cardsDue: store.cardsDueBefore(dayStart, now),
     reviewsDue: store.reviewsDue(language, dayStart, now),
     cardsReviewedToday: store.cardsReviewedSince(dayStart).length,
+    envelope: { remaining: envelope.remaining, doneToday: envelope.doneToday },
     skips: row.skips,
     endedEarly: !!row.endedEarlyAt,
     mockKind,
@@ -160,6 +163,7 @@ export function getToday(now = new Date()): TodayState {
       new Date(dayStartMs(previousDay(previousDay(date)), todayTz())).toISOString(),
       now
     ),
+    envelope,
     stepNotes: row.stepNotes,
     aiPending: [...(running.get(date) ?? [])],
     aiReviews: aiReviewsEnabled(),
@@ -345,6 +349,7 @@ export function stepDigest(id: StepNoteId, now = new Date()): string[] {
       const prev = reviews.get(a.problemId);
       reviews.set(a.problemId, { ...a, hints: Math.max(prev?.hints ?? 0, a.hintsUsed), solvedAny: (prev?.solvedAny ?? false) || a.solved });
     }
+    lines.push(...envelopeDigest(dayStart));
     for (const r of reviews.values()) {
       lines.push(`Review re-solve "${r.title}" (${r.pattern}, ${r.difficulty}): ${r.solvedAny ? 'passed' : 'failed'}, ${r.hints} hints`);
     }
@@ -415,7 +420,7 @@ function pendingFor(state: TodayState, now: Date): AiReviewTarget[] {
   const reviewedProblems = new Set(store.attemptsSince(dayStart).filter((a) => a.firstAt < dayStart).map((a) => a.problemId)).size;
   return pendingReviews({
     steps: state.steps,
-    warmupActivity: store.cardsReviewedSince(dayStart).length + reviewedProblems,
+    warmupActivity: store.cardsReviewedSince(dayStart).length + reviewedProblems + state.envelope.doneToday,
     recognizeDone: state.recognize.done,
     noted: Object.keys(row.stepNotes),
     hasDebrief: !!row.debrief,

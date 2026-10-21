@@ -55,6 +55,14 @@ function observationItem(v: Vocab) {
   };
 }
 
+/**
+ * How a drill-card FRONT is worded, for every kind's interviewer and grader.
+ * The user tripped over fronts written as notes ("Capacity out loud: turn 100M
+ * new links/month and 10B redirects/month into rps…"); a front is read cold
+ * days later, so it must sound like the question an interviewer would ask.
+ */
+export const CARD_FRONT_STYLE = `Word every card front the way an interviewer would actually ask it out loud: a full, plain-English question that sets up the situation ("Say a URL shortener gets 100 million new links and 10 billion redirects a month. Roughly how many redirects per second is that?"). Never terse note-speak ("Capacity out loud: 100M links/month → rps"), never a "Topic:" label in front, and no unexplained abbreviations (say "requests per second", not "rps").`;
+
 /** A gap the interviewer handed over: a drill card's front and back. */
 function gapItem(v: Vocab) {
   return {
@@ -63,7 +71,7 @@ function gapItem(v: Vocab) {
     properties: {
       concept: { type: 'string', enum: [...v.concepts] },
       type: { type: 'string', enum: [...GAP_TYPES] },
-      title: { type: 'string', description: 'Drill-card front: a self-contained question.' },
+      title: { type: 'string', description: 'Drill-card front: a self-contained question, worded the way an interviewer would ask it out loud.' },
       answer: { type: 'string', description: 'Drill-card back: 2–4 sentences, including why it matters.' },
     },
     required: ['concept', 'type', 'title', 'answer'],

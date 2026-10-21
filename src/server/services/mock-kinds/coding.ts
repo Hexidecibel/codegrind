@@ -44,7 +44,7 @@ import type {
   MockState,
 } from '../../../shared/mock.js';
 import type { ToolSpec } from '../llm.types.js';
-import { coercers, gradeTool, interviewerTool } from './common.js';
+import { CARD_FRONT_STYLE, coercers, gradeTool, interviewerTool } from './common.js';
 import type { MockKindSpec, MockPrep, MockPrepareArgs } from './types.js';
 
 const INFO = MOCK_KIND_INFO.coding;
@@ -80,7 +80,7 @@ THINKING OUT LOUD is what is being practised. The candidate often dictates, so l
 
 ANSWER BEFORE YOU REDIRECT. When the candidate asks you something, your reply OPENS by answering it in one or two sentences (without leaking the solution), then continues. Never ignore an explicit question.
 
-GAPS: on every reply, list in gaps every fact or reasoning move YOU handed over that the candidate did not have — taught in teach mode, explained while answering, or given away in a nudge ("a hash map gives you O(1) lookups of what you've seen", "an empty input returns 0 here"). type fact for a language or library fact or a specific known result; type skill for a reasoning move (spotting the pattern, choosing the invariant, deriving complexity, tracing to find a bug). title: the drill-card front, a self-contained question that names this problem's shape ("Pairs that sum to a target in one pass: what do you store, and why does it make it O(n)?"); answer: two to four sentences, the answer and why it matters. An empty list when you handed nothing over.
+GAPS: on every reply, list in gaps every fact or reasoning move YOU handed over that the candidate did not have — taught in teach mode, explained while answering, or given away in a nudge ("a hash map gives you O(1) lookups of what you've seen", "an empty input returns 0 here"). type fact for a language or library fact or a specific known result; type skill for a reasoning move (spotting the pattern, choosing the invariant, deriving complexity, tracing to find a bug). title: the drill-card front, a self-contained question that names this problem's shape ("If you need the pairs that sum to a target in one pass, what would you store as you go, and why does that make it O(n)?") — ${CARD_FRONT_STYLE}; answer: two to four sentences, the answer and why it matters. An empty list when you handed nothing over.
 
 OBSERVATIONS: on every reply, record what the candidate's LAST message (and editor) showed about concepts in the closed list — nailed (did it well, unprompted), weak (partly, or only when pushed), missing (should have, did not). Zero observations is fine.
 
@@ -101,7 +101,7 @@ Rules:
 - verdict: below / at / above the stated level overall. Failing hidden tests at the end is a heavy weight against "at"; a correct solution reached only with the pattern handed over is at best "below" at Staff.
 - conceptObservations: the concepts the transcript gives evidence on, each nailed / weak / missing.
 - drills: 3 to 6 short drills, most valuable first, each one concept — something they can do in a few minutes ("Say the brute force for this problem and its complexity in two sentences before touching the editor"), plus why.
-- gaps: every fact or reasoning move the INTERVIEWER handed over that is NOT already in RECORDED GAPS — including inside a nudge or an answer. Each with type, title (a self-contained drill-card question naming the problem's shape), answer (two to four sentences) and the interviewer turn.
+- gaps: every fact or reasoning move the INTERVIEWER handed over that is NOT already in RECORDED GAPS — including inside a nudge or an answer. Each with type, title (a self-contained drill-card question naming the problem's shape, worded as an interviewer would ask it — ${CARD_FRONT_STYLE}), answer (two to four sentences) and the interviewer turn.
 - summary: three or four sentences — correctness, the skill gaps as practice areas, the fact gaps as cheap fixes.
 
 Return the grade by calling emit_mock_grade exactly once.`;

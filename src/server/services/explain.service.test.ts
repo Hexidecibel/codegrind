@@ -49,6 +49,15 @@ suite('the model answered in prose', () => {
   });
 });
 
+suite('a hosted model sent one malformed answer', () => {
+  it('says to retry or self-grade, with no --jinja advice', () => {
+    const e = explainError(new LlmToolCallError('"missing" arrived as a string', meta('tool_use'), false));
+    expect(e.message).toMatch(/malformed/);
+    expect(e.message).not.toMatch(/jinja|llama/);
+    expect(e.detail).toMatch(/arrived as a string/);
+  });
+});
+
 suite('the model took too long', () => {
   it('names the budget in seconds and says to retry', () => {
     const e = explainError(

@@ -20,7 +20,7 @@
 
 import { GAP_CARD_GRADES, type GapCardGrade } from '../../shared/gap-cards.js';
 import { structured } from './llm.client.js';
-import type { CallMeta, ToolSpec } from './llm.types.js';
+import { cutToolCallFraming, type CallMeta, type ToolSpec } from './llm.types.js';
 
 const str = (x: unknown, max = 300): string => (typeof x === 'string' ? x.trim().replace(/\s+/g, ' ').slice(0, max) : '');
 
@@ -35,17 +35,24 @@ export const CARD_CHECK_SYSTEM = `You grade one spaced-repetition drill card for
 
 Be strict but fair: a confident answer that names the right mechanism is "got" even if terse. Call emit_card_grade exactly once.`;
 
+// Strict (exactSchema): every property required, no extras, so the endpoint
+// guarantees the types — a `missing` that arrived as a STRING failed two of two
+// live calls before this (2026-10-21). The free-text `why` is LAST, the slot
+// where a model's post-call markup lands (see ToolSpec.leakSink).
 export const EMIT_CARD_GRADE_TOOL: ToolSpec = {
   name: 'emit_card_grade',
   description: 'Emit the grade for one drill-card answer.',
+  exactSchema: true,
+  leakSink: 'why',
   schema: {
     type: 'object',
     properties: {
       grade: { type: 'string', enum: ['got', 'shaky', 'missed'] },
-      why: { type: 'string', description: 'One specific line.' },
       missing: { type: 'array', items: { type: 'string' }, description: '0-3 things the answer left out.' },
+      why: { type: 'string', description: 'One specific line.' },
     },
-    required: ['grade', 'why', 'missing'],
+    required: ['grade', 'missing', 'why'],
+    additionalProperties: false,
   },
 };
 
@@ -92,10 +99,12 @@ export function coerceCardCheck(raw: unknown): CardCheckResult {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const g = typeof o.grade === 'string' ? o.grade.trim().toLowerCase() : '';
   const grade: GapCardGrade = (GAP_CARD_GRADES as readonly string[]).includes(g) ? (g as GapCardGrade) : 'shaky';
+  // A string `missing` (a lax endpoint) is one item, not nothing.
+  const missing = Array.isArray(o.missing) ? o.missing : typeof o.missing === 'string' ? [o.missing] : [];
   return {
     grade,
-    why: str(o.why, 240),
-    missing: (Array.isArray(o.missing) ? o.missing : []).map((m) => str(m, 160)).filter(Boolean).slice(0, 3),
+    why: str(cutToolCallFraming(typeof o.why === 'string' ? o.why : ''), 240),
+    missing: missing.map((m) => str(m, 160)).filter(Boolean).slice(0, 3),
   };
 }
 
@@ -124,16 +133,20 @@ One step just finished. You get what happened in it, plus the notes from earlier
 
 If an earlier note's carry was or was not followed here, say so in the note. Call emit_step_review exactly once.`;
 
+// Strict, like the card grade. `note` (the longer free text) is last: the leak sink.
 export const EMIT_STEP_REVIEW_TOOL: ToolSpec = {
   name: 'emit_step_review',
   description: 'Emit the review of one finished step.',
+  exactSchema: true,
+  leakSink: 'note',
   schema: {
     type: 'object',
     properties: {
-      note: { type: 'string', description: 'What happened, 2-3 short lines.' },
       carry: { type: 'string', description: 'One concrete thing to watch in the next step.' },
+      note: { type: 'string', description: 'What happened, 2-3 short lines.' },
     },
-    required: ['note', 'carry'],
+    required: ['carry', 'note'],
+    additionalProperties: false,
   },
 };
 
@@ -165,7 +178,7 @@ export function renderStepReviewInput(i: StepReviewInput): string {
 
 export function coerceStepReview(raw: unknown): StepReviewResult {
   const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  return { note: str(o.note, 500), carry: str(o.carry, 240) };
+  return { note: str(cutToolCallFraming(typeof o.note === 'string' ? o.note : ''), 500), carry: str(o.carry, 240) };
 }
 
 export async function runStepReview(input: StepReviewInput): Promise<{ result: StepReviewResult; meta: CallMeta }> {

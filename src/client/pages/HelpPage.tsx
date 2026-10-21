@@ -19,7 +19,7 @@
 // scrolling.
 
 import { useEffect, type ReactNode } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Quote } from 'lucide-react';
 import { Card } from '@/client/components/ui/card';
 import { VERDICT_META } from '@/client/components/ResultsPanel';
@@ -728,6 +728,16 @@ export function HelpPage() {
             mock is estimated at about ${MOCK_TYPICAL_COST} including the grade,
             and each mock shows what it actually cost.
           </KeyIdea>
+          <p>
+            Estimation is its own drill: <Link to="/envelope" className="underline underline-offset-4">Envelope</Link>{' '}
+            asks interview-style back-of-the-envelope questions (requests per second, storage, bandwidth, ID sizes)
+            and checks the number within 30%. The method: write each number as a small number × 10ⁿ, do the small
+            math, add exponents to multiply and subtract them to divide, then read the answer back off the 3/6/9/12
+            ladder. Anchors: a day ≈ 10⁵ s, a month ≈ 2.5 × 10⁶ s, a year ≈ 3 × 10⁷ s, per day → per year × 400,
+            1 Gbps ≈ 125 MB/s. A miss says how many powers of ten you were off and the likely slip, shows the worked
+            split, and comes back as a review card. Today's warm-up includes Envelope ×5, and a mock gap about
+            capacity becomes an Envelope card too.
+          </p>
         </HelpBlock>
       </div>
     </div>

@@ -351,7 +351,14 @@ export const MAX_OUTPUT_TOKENS: Record<ProviderId, number | null> = {
 export class LlmToolCallError extends Error {
   constructor(
     message: string,
-    readonly meta: CallMeta
+    readonly meta: CallMeta,
+    /**
+     * Did a LOCAL / OpenAI-compatible endpoint answer? Only then is the
+     * `--jinja` advice (explain.service) worth giving; a hosted model that
+     * malformed one answer just needs a retry. Defaults to true, so a throw
+     * site that does not know keeps the old advice.
+     */
+    readonly local: boolean = true
   ) {
     super(message);
     this.name = 'LlmToolCallError';
@@ -659,6 +666,15 @@ const SINK_FRAMING =
 
 export function looksLikeToolCallFraming(s: string): boolean {
   return SINK_FRAMING.test(s);
+}
+
+/**
+ * A `leakSink` field with any trailing tool-call markup cut off (the content
+ * before it is the real answer). Unchanged when there is none.
+ */
+export function cutToolCallFraming(s: string): string {
+  const m = SINK_FRAMING.exec(s);
+  return m ? s.slice(0, m.index).trim() : s;
 }
 
 /** The call did not finish inside its budget. Names the model and the endpoint. */

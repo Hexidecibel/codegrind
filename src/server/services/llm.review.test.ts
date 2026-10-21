@@ -11,6 +11,15 @@ import {
 } from './llm.review.js';
 
 describe('coerceCardCheck', () => {
+  it('a string `missing` (a lax endpoint) becomes one item, and trailing tool markup is cut from why', () => {
+    const markup = '<' + '/invoke>';
+    expect(coerceCardCheck({ grade: 'shaky', missing: 'TTL on writes', why: `Close. ${markup}` })).toEqual({
+      grade: 'shaky',
+      why: 'Close.',
+      missing: ['TTL on writes'],
+    });
+  });
+
   it('passes a well-formed answer through', () => {
     expect(coerceCardCheck({ grade: 'got', why: ' Named the mechanism. ', missing: ['a', '', 'b'] })).toEqual({
       grade: 'got',
@@ -22,7 +31,7 @@ describe('coerceCardCheck', () => {
   it('never throws, and an unreadable grade is shaky (the user still confirms)', () => {
     expect(coerceCardCheck(null)).toEqual({ grade: 'shaky', why: '', missing: [] });
     expect(coerceCardCheck({ grade: 'GOT' }).grade).toBe('got');
-    expect(coerceCardCheck({ grade: 'excellent', missing: 'x' })).toEqual({ grade: 'shaky', why: '', missing: [] });
+    expect(coerceCardCheck({ grade: 'excellent', missing: 'x' })).toEqual({ grade: 'shaky', why: '', missing: ['x'] });
     expect(coerceCardCheck({ grade: 'missed', missing: ['1', '2', '3', '4', '5'] }).missing).toHaveLength(3);
   });
 });

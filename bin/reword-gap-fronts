@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Reword terse drill-card fronts into interviewer phrasing (mock_gaps.title only).
+# Thin wrapper around bin/reword-gap-fronts.ts. No model call.
+#
+#   bin/reword-gap-fronts --dry-run   # print before/after, write nothing
+#   bin/reword-gap-fronts             # back up the DB, then write (idempotent)
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+# shellcheck source=lib/node.sh
+source "$REPO/bin/lib/node.sh"
+cg_require_node
+
+if [[ -f "$REPO/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO/.env"
+  set +a
+fi
+
+if [[ " $* " != *" --dry-run "* ]]; then
+  "$REPO/bin/backup-db" pre-reword-fronts
+fi
+
+exec npx tsx bin/reword-gap-fronts.ts "$@"
