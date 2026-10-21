@@ -49,6 +49,8 @@ export interface DebriefInput {
   quick?: boolean;
   /** Phase H2: the nearest interview loop. Absent renders nothing. */
   nextLoop?: { company: string; date: string; daysLeft: number; rounds: string[] };
+  /** Phase H3: one line per concept rep today. Absent renders nothing. */
+  conceptReps?: string[];
 }
 
 export const DEBRIEF_SYSTEM = `You are a blunt, specific interview-prep coach reviewing ONE day of practice for a candidate targeting Staff engineer roles. The day's routine: a warm-up of drill cards and review problems, two adaptive algorithm problems (predict complexity before solving), and one mock interview.
@@ -127,6 +129,11 @@ export function renderDebriefInput(d: DebriefInput): string {
     lines.push(
       `- ${a.review ? '[review] ' : ''}${a.title} (${a.pattern}, ${a.difficulty}): ${a.solved ? 'PASSED' : 'FAILED'} ${a.testsPassed}/${a.testsTotal} tests, ${a.hints} hints, ${pred}${a.mistakeTags.length ? `; mistakes: ${a.mistakeTags.join(', ')}` : ''}`
     );
+  }
+  // Phase H3: only when there was a rep, so other days render as before.
+  if (d.conceptReps?.length) {
+    lines.push('', 'Concept reps today (explain a system-design / AI-systems concept out loud, graded against a rubric):');
+    for (const r of d.conceptReps.slice(0, 3)) lines.push(`- ${r}`);
   }
   lines.push('', 'Mock today:');
   if (!d.mock) lines.push('- none');

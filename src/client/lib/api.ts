@@ -58,6 +58,7 @@ import type {
   RecognizeSession,
   RecognizeStats,
 } from '@/shared/recognize';
+import type { ConceptLesson, ConceptRepView, ConceptToday, ConceptTrack } from '@/shared/concepts';
 import type { EnvelopeCheckResponse, EnvelopeNote, EnvelopeSession, EnvelopeStats } from '@/shared/envelope';
 
 /** Shape returned by GET /api/session/:id (resume). */
@@ -531,6 +532,8 @@ export interface MockPromptOption {
   title: string;
   brief: string;
   familiar: boolean;
+  /** Phase H3: an AI/LLM system-design prompt. */
+  ai?: boolean;
 }
 
 /** GET /api/mocks — recent mocks, newest first. Free. */
@@ -539,8 +542,8 @@ export function listMocks(): Promise<MockListResponse> {
 }
 
 /** GET /api/mock/prompts?kind= — a kind's static prompt bank. Free. */
-export function getMockPrompts(kind: MockKind = 'system-design'): Promise<{ prompts: MockPromptOption[] }> {
-  return request<{ prompts: MockPromptOption[] }>(`/api/mock/prompts?kind=${encodeURIComponent(kind)}`);
+export function getMockPrompts(kind: MockKind = 'system-design'): Promise<{ prompts: MockPromptOption[]; aiUnlocked?: boolean }> {
+  return request<{ prompts: MockPromptOption[]; aiUnlocked?: boolean }>(`/api/mock/prompts?kind=${encodeURIComponent(kind)}`);
 }
 
 /** GET /api/mock/plan?kind= — a planned kind's competencies and story-bank status. Free (no model). */
@@ -647,6 +650,8 @@ export interface LoopBody {
   rounds: RoundType[];
   postingId: string | null;
   postingTitle: string | null;
+  /** Phase H3: an AI-focused company. */
+  aiFocus?: boolean;
 }
 
 export function getLoops(): Promise<LoopsResponse> {
@@ -728,4 +733,32 @@ export function noteEnvelope(attemptId: number): Promise<EnvelopeNote> {
 /** GET /api/envelope/stats — accuracy and orders-of-magnitude error over time. Free. */
 export function getEnvelopeStats(): Promise<EnvelopeStats> {
   return request<EnvelopeStats>('/api/envelope/stats');
+}
+
+// ---------------------------------------------------------------------------
+// Concept reps + the AI-systems track (Phase H3)
+// ---------------------------------------------------------------------------
+/** GET /api/concept/today — the day's pick (next=true: another one once this one is done). Free. */
+export function getConceptToday(next = false): Promise<ConceptToday> {
+  return request<ConceptToday>(`/api/concept/today${next ? '?next=1' : ''}`);
+}
+
+/** POST /api/concept/learn — the primer or the lesson was read. Free. */
+export function learnConcept(concept: string, via: 'primer' | 'lesson'): Promise<ConceptTrack> {
+  return request<ConceptTrack>('/api/concept/learn', { method: 'POST', body: JSON.stringify({ concept, via }) });
+}
+
+/** POST /api/concept/grade — ONE model call on the explanation. */
+export function gradeConcept(body: { concept: string; promptIdx: number; answer: string; primed: boolean }): Promise<ConceptRepView> {
+  return request<ConceptRepView>('/api/concept/grade', { method: 'POST', body: JSON.stringify(body) });
+}
+
+/** GET /api/concept/track — learning state per concept and the AI-prompt gate. Free. */
+export function getConceptTrack(): Promise<ConceptTrack> {
+  return request<ConceptTrack>('/api/concept/track');
+}
+
+/** GET /api/concept/lesson/:concept — cached, or generated once (one model call). */
+export function getConceptLesson(concept: string): Promise<ConceptLesson> {
+  return request<ConceptLesson>(`/api/concept/lesson/${encodeURIComponent(concept)}`);
 }

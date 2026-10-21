@@ -1531,5 +1531,160 @@
         "content": "Question: Say your service handles 50 million requests a day. Roughly how many is that per second?\nCorrect answer: ≈ 500 per second (exactly 579 per second)\nWorked split:\n- 50 million requests = 5 × 10⁷; a day ≈ 10⁵ seconds = 10⁵\n- 5 ÷ 1 = 5\n- 10⁷ ÷ 10⁵ → 7 − 5 = 2 → 10²\n- 5 × 10² = 500 per second\n\nCandidate's answer: 20\nChecker: Off by 10¹, too low. Likely cause: Looks like the month constant (2.5 × 10⁶ s) was used where a day (10⁵ s) belongs.\n\nCandidate's working:\n50M / 2.5M = 20"
       }
     ]
+  },
+  "runConceptGrade": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 6000,
+    "thinking": {
+      "type": "adaptive"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You grade one \"concept rep\" for a candidate preparing for Staff engineer system-design interviews at AI- and agent-focused companies. The candidate was asked one interviewer-style question about one concept and answered OUT LOUD by dictation — ignore filler words, false starts, repetition and transcription noise. Judge whether they could explain it to an interviewer, not how polished it sounds.\n\nYou get the question, the concept's rubric (the key points a Staff answer contains, the common mistake, a worked example), whether the candidate read a primer on it just before answering, and their answer.\n\n- hit: the rubric key points the answer actually covered, each restated in a few words. Credit a point when the idea is there in different words; do not credit a point that is only gestured at (\"you'd handle failures\").\n- missed: the key points absent, wrong or too vague to count, each in a few words. Also add, as a missed item, the common mistake if the answer MAKES it.\n- grade: \"got\" when the answer covers most key points (at least 3 of 4-5) with no central claim wrong; \"shaky\" when the core idea is right but two or more key points are missing or vague; \"missed\" when the core idea is absent or wrong, or the answer makes the common mistake as its main move. A short answer that hits the points is \"got\"; a long one that circles them is not.\n- modelAnswer: what a strong Staff candidate would SAY in about 60-90 seconds — spoken, first person, concrete, with a number where the rubric's example has one. Plain prose, no headings or bullets.\n- followUp: ONE follow-up question an interviewer would ask next, aimed at the weakest part of this answer (or one level deeper if the answer was strong).\n- why: ONE line, specific: what made it got / shaky / missed.\n\nNever invent facts about the candidate's own work. Call emit_concept_grade exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_concept_grade",
+        "description": "Emit the grade for one concept rep.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "grade": {
+              "type": "string",
+              "enum": [
+                "got",
+                "shaky",
+                "missed"
+              ]
+            },
+            "hit": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Rubric key points the answer covered."
+            },
+            "missed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Key points absent, wrong or too vague; the common mistake if made."
+            },
+            "modelAnswer": {
+              "type": "string",
+              "description": "A strong spoken Staff answer, 60-90 seconds."
+            },
+            "followUp": {
+              "type": "string",
+              "description": "One follow-up question an interviewer would ask next."
+            },
+            "why": {
+              "type": "string",
+              "description": "One specific line."
+            }
+          },
+          "required": [
+            "grade",
+            "hit",
+            "missed",
+            "modelAnswer",
+            "followUp",
+            "why"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_concept_grade"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Concept: caching / invalidation\nQuestion: Walk me through how you would keep a cache consistent with the database when writes are frequent.\n\nRUBRIC\nKey points a Staff answer contains:\n1. Cache-aside with delete-on-write\n2. TTL as the safety net\n3. Stampede on a hot key\nCommon mistake: Updating the cache on write with no ordering.\nWorked example: Price service, 50k reads/s, 60 s TTL, DEL on write.\n\nCold recall: no primer was shown for this rep.\n\nCandidate's answer (dictated):\nso um basically you read from the cache and if it misses you go to the database and on writes you delete the key"
+      }
+    ]
+  },
+  "generateConceptLesson": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 5000,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You write one lesson in an \"AI systems\" study track for a senior engineer preparing for Staff system-design interviews at AI- and agent-focused companies. They have built some LLM systems but have not had to explain these concepts under interview pressure. The lesson is read once, in about five minutes, and must leave them able to explain the concept out loud.\n\nYou get the concept and its rubric (the key points a Staff answer contains, the common mistake, a worked example). The lesson MUST teach every key point and warn about the common mistake; it may go beyond them.\n\nFields:\n- card: the concept card, markdown. One plain sentence on what it is, then the key points as 4-6 short bullets. No headings.\n- inInterview: 2-4 sentences — how it shows up in an AI system-design round: which prompts bring it up and what the interviewer is probing for.\n- failureModes: 3-5 short items — how it goes wrong in production, each one line.\n- workedExample: one concrete example with numbers, walked through in 4-8 sentences (build on the rubric's example; keep its numbers consistent).\n- drawOn: 0-2 items, each starting \"You could draw on …\", tying the concept to the candidate's OWN work listed below where it genuinely fits. Use only those facts; never invent usage, customers, scale or results. Empty when nothing fits.\n- staffAnswer: what a Staff answer sounds like — a spoken paragraph of 80-140 words, first person, to the question given below, with a decision and a number.\n\nTHE CANDIDATE'S OWN WORK (the only facts you may use about them):\n- dox / supdox: their own document-processing product — COA/spec extraction for food-safety teams, a self-hosted Qwen model, a human review queue, built on a Cloudflare stack. It has NO live customers: never claim usage, users, volume or results.\n- An LLM model router across a fleet of local GPU hosts, with honest backpressure: 429 (busy, retry later) vs 503 (no healthy host) and capacity headers so clients back off.\n- codegrind (this practice app): forced tool use with strict schemas, golden request-body fixtures, a vendor-agnostic model seam, and a live per-call-site quality comparison of a small model (Haiku) against a larger one (Sonnet) before moving calls to the cheaper model — a real eval story.\n- sentinel: a self-healing ops agent that had a runaway-spend incident (re-diagnosing one dead service every 10 minutes drained its API budget), fixed with fingerprint dedupe, escalating backoff and a spend cap — agent-safety and cost material.\n- Jarvis (on OpenClaw): a homelab ops agent that runs commands only with per-command human approval.\n\nPlain language, no hype, no filler. Call emit_concept_lesson exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_concept_lesson",
+        "description": "Emit one AI-systems track lesson.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "card": {
+              "type": "string",
+              "description": "One sentence, then 4-6 markdown bullets."
+            },
+            "inInterview": {
+              "type": "string"
+            },
+            "failureModes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "workedExample": {
+              "type": "string"
+            },
+            "drawOn": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "0-2 \"You could draw on …\" items."
+            },
+            "staffAnswer": {
+              "type": "string",
+              "description": "A spoken Staff answer, 80-140 words."
+            }
+          },
+          "required": [
+            "card",
+            "inInterview",
+            "failureModes",
+            "workedExample",
+            "drawOn",
+            "staffAnswer"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_concept_lesson"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Concept: eval design\nThe question for staffAnswer: How would you know whether a prompt change made your LLM feature better or worse before you ship it?\n\nRUBRIC\nKey points:\n1. Cache-aside with delete-on-write\n2. TTL as the safety net\n3. Stampede on a hot key\nCommon mistake: Updating the cache on write with no ordering.\nWorked example: Price service, 50k reads/s, 60 s TTL, DEL on write."
+      }
+    ]
   }
 }

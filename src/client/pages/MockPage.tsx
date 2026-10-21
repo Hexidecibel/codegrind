@@ -261,6 +261,8 @@ function StartCard() {
   const [level, setLevel] = useState<MockLevel>(DEFAULT_MOCK_LEVEL);
   const [promptId, setPromptId] = useState('');
   const [prompts, setPrompts] = useState<MockPromptOption[]>([]);
+  // Phase H3: AI prompts are labelled practice until enough AI concepts are known.
+  const [aiUnlocked, setAiUnlocked] = useState(false);
   // Planned kinds (behavioral): the competencies it will ask about, and whether
   // the story bank loaded. `null` while loading; the start sends the plan back.
   const [plan, setPlan] = useState<MockPlanPreview | null>(null);
@@ -284,7 +286,12 @@ function StartCard() {
   useEffect(() => {
     setPromptId('');
     setPrompts([]);
-    getMockPrompts(kind).then((r) => setPrompts(r.prompts)).catch(setError);
+    getMockPrompts(kind)
+      .then((r) => {
+        setPrompts(r.prompts);
+        setAiUnlocked(r.aiUnlocked === true);
+      })
+      .catch(setError);
   }, [kind]);
 
   useEffect(() => {
@@ -423,6 +430,7 @@ function StartCard() {
                 <option key={p.id} value={p.id}>
                   {p.title}
                   {p.familiar ? info.start.familiarTag : ''}
+                  {p.ai ? (aiUnlocked ? ' (AI system)' : ' (AI — practice: concepts still being learned)') : ''}
                 </option>
               ))}
             </select>
@@ -430,6 +438,9 @@ function StartCard() {
               {promptId
                 ? prompts.find((p) => p.id === promptId)?.brief
                 : info.start.pickHint}
+              {kind === 'system-design' && !aiUnlocked && !promptId && (
+                <> AI-system prompts join the random pick once 5 AI concepts are known (<Link to="/concepts" className="underline underline-offset-4">AI-systems track</Link>).</>
+              )}
             </span>
           </label>
         )}

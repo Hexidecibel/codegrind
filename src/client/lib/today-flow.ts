@@ -17,7 +17,7 @@ export interface TodayLink {
 }
 
 /** Where each noted thing sits in the day (recognize rides with the warm-up). */
-const NOTE_ORDER: Readonly<Record<StepNoteId, number>> = { warmup: 0, recognize: 0.5, problem1: 1, problem2: 2, mock: 3 };
+const NOTE_ORDER: Readonly<Record<StepNoteId, number>> = { warmup: 0, recognize: 0.5, concept: 1, problem1: 2, problem2: 3, mock: 4 };
 
 /** The carry from the latest note BEFORE `step`, or null. Pure. */
 export function carryInto(state: Pick<TodayState, 'stepNotes'>, step: TodayStepId | null): TodayLink['carry'] {
@@ -26,6 +26,8 @@ export function carryInto(state: Pick<TodayState, 'stepNotes'>, step: TodayStepI
   let best: TodayLink['carry'] = null;
   for (const id of STEP_NOTE_IDS) {
     const n = state.stepNotes[id];
+    // A concept rep's carry is system-design advice: it only leads into the mock.
+    if (id === 'concept' && step !== 'mock') continue;
     if (n?.carry && NOTE_ORDER[id] < at) best = { from: STEP_NOTE_LABEL[id], text: n.carry };
   }
   return best;

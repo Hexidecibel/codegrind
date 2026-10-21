@@ -79,6 +79,14 @@ function insertMock(id: string, status: string, at: string, verdict?: 'below' | 
   }
 }
 
+/** Phase H3: one graded concept rep (the concept step's evidence). */
+function insertRep(at: string, grade = 'got', day = '2026-10-21') {
+  db.prepare(
+    `INSERT INTO concept_reps (day, concept, promptIdx, question, answer, primed, grade, result, createdAt)
+     VALUES (?, 'idempotency', 0, 'Q?', 'A.', 0, ?, '{}', ?)`
+  ).run(day, grade, at);
+}
+
 function insertCard(mockId: string, createdAt: string, dueAt: string) {
   db.prepare(
     `INSERT INTO mock_gaps (mockId, concept, summary, dueAt, createdAt) VALUES (?, 'caching', 's', ?, ?)`
@@ -90,7 +98,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   fake.runDebrief.mockReset();
   review.runStepReview.mockReset();
-  for (const t of ['daily_sessions', 'mock_gaps', 'mock_grades', 'mocks', 'attempts', 'review_queue', 'problems', 'recognize_attempts', 'ai_usage', 'interview_loops', 'card_reviews']) {
+  for (const t of ['daily_sessions', 'mock_gaps', 'mock_grades', 'mocks', 'attempts', 'review_queue', 'problems', 'recognize_attempts', 'ai_usage', 'interview_loops', 'card_reviews', 'concept_reps', 'concept_learning']) {
     db.prepare(`DELETE FROM ${t}`).run();
   }
   // The pre-Phase-F tests pin click-only behaviour; Phase F's own block turns reviews on.
@@ -103,12 +111,14 @@ beforeEach(() => {
 });
 
 describe('GET /api/today', () => {
-  it('a fresh day: warm-up done (nothing due), problem 1 current, debrief locked', async () => {
+  it('a fresh day: warm-up done (nothing due), the concept rep current, debrief locked', async () => {
     const body = await (await app.request('/api/today')).json();
     expect(body.date).toBe('2026-10-21');
-    expect(body.current).toBe('problem1');
+    expect(body.current).toBe('concept');
     expect(body.mockKind).toBe('system-design');
-    expect(body.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'current', 'todo', 'todo', 'locked']);
+    expect(body.steps.map((s: { id: string }) => s.id)).toEqual(['warmup', 'concept', 'problem1', 'problem2', 'mock', 'debrief']);
+    expect(body.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'current', 'todo', 'todo', 'todo', 'locked']);
+    expect(body.steps[1].href).toBe('/concept?from=today&step=concept');
     expect(body.readiness.map((a: { id: string }) => a.id)).toEqual(['algos', 'system-design', 'behavioral', 'coding']);
   });
 
@@ -134,13 +144,15 @@ describe('GET /api/today', () => {
     insertAttempt('a0', 'p0', '2026-10-21T03:00:00.000Z', true);
     insertMock('m1', 'graded', '2026-10-21T17:00:00.000Z', 'above');
     insertCard('m1', '2026-10-21T18:00:00.000Z', '2026-10-21T18:00:00.000Z');
+    insertRep('2026-10-21T16:05:00.000Z', 'shaky');
 
     body = await (await app.request('/api/today')).json();
-    expect(body.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'done', 'done', 'done', 'current']);
+    expect(body.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'done', 'done', 'done', 'done', 'current']);
     expect(body.steps[0].result).toMatch(/Cleared 1/);
-    expect(body.steps[1].result).toMatch(/^Passed · Problem p1/);
-    expect(body.steps[2].result).toMatch(/^Failed · Problem p2/);
-    expect(body.steps[3].result).toBe('above level');
+    expect(body.steps[1].result).toBe('Shaky · idempotency');
+    expect(body.steps[2].result).toMatch(/^Passed · Problem p1/);
+    expect(body.steps[3].result).toMatch(/^Failed · Problem p2/);
+    expect(body.steps[4].result).toBe('above level');
     expect(body.attemptedProblemIds).toEqual(['p1', 'p2']);
     expect(body.streak).toBeGreaterThanOrEqual(2);
   });
@@ -148,10 +160,12 @@ describe('GET /api/today', () => {
 
 describe('skip and end early', () => {
   it('a skip persists and moves the current step; un-skip restores it', async () => {
-    let body = await (await post('/api/today/skip', { step: 'problem1' })).json();
+    let body = await (await post('/api/today/skip', { step: 'concept' })).json();
+    expect(body.current).toBe('problem1');
+    body = await (await post('/api/today/skip', { step: 'problem1' })).json();
     expect(body.current).toBe('problem2');
     body = await (await app.request('/api/today')).json();
-    expect(body.steps[1].status).toBe('skipped');
+    expect(body.steps[2].status).toBe('skipped');
     body = await (await post('/api/today/skip', { step: 'problem1', skip: false })).json();
     expect(body.current).toBe('problem1');
   });
@@ -549,13 +563,15 @@ describe('Phase H2 — loops, final review, 30-min day', () => {
     insertProblem('q1');
     const on = await (await post('/api/today/quick', { on: true })).json();
     expect(on.quick).toBe(true);
-    expect(on.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'current', 'skipped', 'skipped', 'todo']);
+    // The concept rep is off on a 30-min day (Phase H3), like Problem 2 and the mock.
+    expect(on.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'skipped', 'current', 'skipped', 'skipped', 'todo']);
+    expect(on.steps[1].detail).toMatch(/^Off today/);
     insertAttempt('qa', 'q1', '2026-10-21T19:00:00.000Z');
     const after = await (await app.request('/api/today')).json();
     expect(after.current).toBe('debrief');
     const off = await (await post('/api/today/quick', { on: false })).json();
     expect(off.quick).toBe(false);
-    expect(off.current).toBe('problem2');
+    expect(off.current).toBe('concept');
   });
 
   it('the breadth slot opens after exactly one new problem, not on a 30-min day', async () => {

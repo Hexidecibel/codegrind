@@ -88,6 +88,13 @@ export function buildSdContext(prompt: SdPrompt, level: MockLevel): string {
     prompt.familiar
       ? 'This is a system the candidate has built before. Let them use that.'
       : 'This is not a system the candidate has built.',
+    // Phase H3: only AI prompts carry this line, so every other context is
+    // byte-identical to before.
+    ...(prompt.ai
+      ? [
+          'This is an AI/LLM system, the round an AI-focused company runs. Probe what such an interviewer probes: how quality is measured (evals), cost per request, the latency budget, untrusted text reaching the model, and what happens when a model or vendor is slow or down. Hold the bar; do not teach unless asked.',
+        ]
+      : []),
     '',
     'Begin: give your opening (mode interview, stage requirements).',
   ].join('\n');

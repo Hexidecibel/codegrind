@@ -570,6 +570,48 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
         addColumnIfMissing(db, 'daily_sessions', 'recognizeStocked', 'INTEGER NOT NULL DEFAULT 0');
       }
 
+      // Phase H3 (concept reps + the AI-systems track). Additive, always-run:
+      //   concept_reps          one row per GRADED rep (the grade, the rubric
+      //                         hits/misses, the model answer) — learning state,
+      //                         the daily pick, readiness and the debrief read it
+      //   concept_learning      when a concept was learned (primer acknowledged
+      //                         or its track lesson read): new -> learning
+      //   concept_lessons       one generated AI-systems lesson per concept, cached
+      //   daily_sessions.conceptPick   the day's frozen pick (JSON)
+      //   interview_loops.aiFocus      the loop is at an AI-focused company
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS concept_reps (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          day        TEXT NOT NULL,                -- local YYYY-MM-DD
+          concept    TEXT NOT NULL,
+          promptIdx  INTEGER NOT NULL DEFAULT 0,
+          question   TEXT NOT NULL,
+          answer     TEXT NOT NULL,
+          primed     INTEGER NOT NULL DEFAULT 0,   -- opened with the teach-first primer
+          grade      TEXT NOT NULL,                -- got | shaky | missed
+          result     TEXT NOT NULL,                -- JSON: hit, missed, why, modelAnswer, followUp
+          cardId     INTEGER,                      -- the drill card minted from a miss
+          model      TEXT NOT NULL DEFAULT '',
+          costUsd    REAL,
+          createdAt  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_concept_reps_created ON concept_reps (createdAt);
+
+        CREATE TABLE IF NOT EXISTS concept_learning (
+          concept    TEXT PRIMARY KEY,
+          learnedAt  TEXT NOT NULL,
+          via        TEXT NOT NULL                 -- primer | lesson
+        );
+
+        CREATE TABLE IF NOT EXISTS concept_lessons (
+          concept    TEXT PRIMARY KEY,
+          lesson     TEXT NOT NULL,                -- JSON ConceptLesson
+          createdAt  TEXT NOT NULL
+        );
+      `);
+      if (tableExists(db, 'daily_sessions')) addColumnIfMissing(db, 'daily_sessions', 'conceptPick', 'TEXT');
+      if (tableExists(db, 'interview_loops')) addColumnIfMissing(db, 'interview_loops', 'aiFocus', 'INTEGER NOT NULL DEFAULT 0');
+
       // --- VERSIONED ----------------------------------------------------------
       // Expensive or destructive. Gated on the version marker so a warm database
       // doesn't pay on every boot — but each step still asks the DATABASE

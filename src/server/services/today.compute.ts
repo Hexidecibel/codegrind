@@ -148,6 +148,11 @@ export interface DeriveInput {
   quick?: boolean;
   /** Today is a loop's final-review day: every open item was pulled due. */
   finalReview?: { company: string; daysLeft: number } | null;
+  /**
+   * Phase H3 concept rep: graded reps today and the last one. Absent = none
+   * yet (the step is still to do).
+   */
+  concept?: { doneToday: number; last: { label: string; grade: string } | null };
 }
 
 export interface DerivedSteps {
@@ -262,6 +267,21 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
           : 'Nothing was due'
         : null,
     ok: pile === 0 ? true : null,
+  });
+
+  // --- concept rep (Phase H3) -------------------------------------------------
+  // Off on a 30-min day (a planned skip, like Problem 2 and the mock) — unless
+  // a rep was already done, which still counts.
+  const rep = input.concept ?? { doneToday: 0, last: null };
+  const repDone = rep.doneToday > 0;
+  base.set('concept', {
+    status: repDone ? 'done' : skipped.has('concept') || input.quick ? 'skipped' : 'todo',
+    href: `/concept?${from('concept')}`,
+    detail: input.quick
+      ? 'Off today — a 30-min day has no concept rep.'
+      : 'Explain one system-design or AI-systems concept out loud (~2 min), graded against a rubric · ~10 min',
+    result: repDone && rep.last ? `${rep.last.grade === 'got' ? 'Got' : rep.last.grade === 'shaky' ? 'Shaky' : 'Missed'} · ${rep.last.label}${rep.doneToday > 1 ? ` · ${rep.doneToday} reps` : ''}` : null,
+    ok: repDone && rep.last ? (rep.last.grade === 'got' ? true : rep.last.grade === 'missed' ? false : null) : null,
   });
 
   // --- problems ---------------------------------------------------------------
@@ -503,6 +523,7 @@ export function pendingReviews(input: PendingReviewsInput): AiReviewTarget[] {
   const eligible: AiReviewTarget[] = [];
   if (status.get('warmup') === 'done' && input.warmupActivity > 0) eligible.push('warmup');
   if (input.recognizeDone) eligible.push('recognize');
+  if (status.get('concept') === 'done') eligible.push('concept');
   for (const id of ['problem1', 'problem2', 'mock'] as const) if (status.get(id) === 'done') eligible.push(id);
 
   // Settled = every step done or skipped AND no mock still running or grading
@@ -514,6 +535,7 @@ export function pendingReviews(input: PendingReviewsInput): AiReviewTarget[] {
   const anyDone =
     input.warmupActivity > 0 ||
     input.recognizeDone ||
+    status.get('concept') === 'done' ||
     (['problem1', 'problem2', 'mock'] as const).some((id) => status.get(id) === 'done');
   if (allSettled && anyDone && (!input.hasDebrief || input.debriefStale)) eligible.push('debrief');
 

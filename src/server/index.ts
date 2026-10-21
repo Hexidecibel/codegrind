@@ -18,6 +18,7 @@ import { mockRoutes } from './routes/mock.js';
 import { todayRoutes } from './routes/today.js';
 import { recognizeRoutes } from './routes/recognize.js';
 import { envelopeRoutes } from './routes/envelope.js';
+import { conceptRoutes } from './routes/concept.js';
 import { loopsRoutes } from './routes/loops.js';
 import { hydrate as hydrateApiKey } from './services/apikey.service.js';
 import { hydrateProviderConfig } from './services/provider.service.js';
@@ -62,6 +63,7 @@ app.route('/api', mockRoutes);
 app.route('/api', todayRoutes);
 app.route('/api', recognizeRoutes);
 app.route('/api', envelopeRoutes);
+app.route('/api', conceptRoutes);
 app.route('/api', loopsRoutes);
 
 app.get('/api/health', (c) => c.json({ status: 'ok' }));

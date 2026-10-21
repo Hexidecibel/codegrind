@@ -79,6 +79,24 @@ function parseMock(r: RawMock | undefined): MockRow | null {
   return { ...r, state: JSON.parse(r.state) as MockState, usage: JSON.parse(r.usage) as MockUsage };
 }
 
+/**
+ * Phase H3: concept-rep misses become drill cards in mock_gaps, whose mockId is
+ * NOT NULL REFERENCES mocks(id). Rather than rebuild the table (and turn every
+ * card JOIN into a nullable one), every rep card hangs off ONE hidden anchor
+ * row: kind system-design (so card checks, readiness retention and the
+ * debrief treat it as SD), status abandoned, created in 2000 so no "since
+ * today" read ever sees it, and filtered out of the mock list. Cards show
+ * "from: Concept reps".
+ */
+export const CONCEPT_REPS_ANCHOR = 'concept-reps';
+
+export function ensureConceptRepsAnchor(): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO mocks (id, kind, level, promptId, prompt, status, context, digest, state, usage, turnCount, createdAt, updatedAt, endedAt)
+     VALUES (?, 'system-design', 'staff', NULL, 'Concept reps', 'abandoned', '', NULL, '{}', ?, 0, '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z', NULL)`
+  ).run(CONCEPT_REPS_ANCHOR, JSON.stringify(emptyUsage()));
+}
+
 let stmts: ReturnType<typeof prepare> | null = null;
 function prepare() {
   return {
@@ -96,6 +114,7 @@ function prepare() {
     listMocks: db.prepare(`
       SELECT m.*, g.verdict AS verdict FROM mocks m
       LEFT JOIN mock_grades g ON g.mockId = m.id
+      WHERE m.id <> '${CONCEPT_REPS_ANCHOR}'
       ORDER BY m.createdAt DESC LIMIT ?
     `),
     recentPromptIds: db.prepare(`
@@ -148,6 +167,11 @@ function prepare() {
       WHERE m.kind = ? ORDER BY g.createdAt DESC LIMIT ?
     `),
     recentStatesOfKind: db.prepare(`SELECT state FROM mocks WHERE kind = ? ORDER BY createdAt DESC LIMIT ?`),
+    recentTurnObservations: db.prepare(`
+      SELECT t.meta AS meta FROM mock_turns t JOIN mocks m ON m.id = t.mockId
+      WHERE m.kind = ? AND t.role = 'interviewer' AND t.meta IS NOT NULL
+      ORDER BY t.createdAt DESC, t.seq DESC LIMIT ?
+    `),
   };
 }
 const S = () => (stmts ??= prepare());
@@ -279,9 +303,9 @@ export interface NewGap {
   source?: GapSource;
 }
 
-/** Insert one gap as a fresh card, due now. */
-export function insertGap(mockId: string, g: NewGap, now: Date): void {
-  S().insertGap.run({
+/** Insert one gap as a fresh card, due now (or at `dueAt`). Returns the card id. */
+export function insertGap(mockId: string, g: NewGap, now: Date, dueAt?: string): number {
+  return Number(S().insertGap.run({
     mockId,
     seq: g.seq,
     concept: g.concept,
@@ -291,8 +315,9 @@ export function insertGap(mockId: string, g: NewGap, now: Date): void {
     answer: g.answer,
     source: g.source ?? 'turn',
     ...newCardSchedule(now),
+    ...(dueAt ? { dueAt } : {}),
     createdAt: now.toISOString(),
-  });
+  }).lastInsertRowid);
 }
 
 interface RawGap extends Omit<GapCard, 'mockTitle'> {
@@ -389,6 +414,24 @@ export function recentConceptSignals(
   return rows.flatMap((r) => {
     try {
       return (JSON.parse(r.grade) as MockGrade).conceptObservations ?? [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** Concept observations from a kind's recent interviewer turns, newest first (Phase H3 concept pick). */
+export function recentTurnSignals(kind: MockKind, limit = 200): { concept: string; signal: 'nailed' | 'weak' | 'missing' }[] {
+  const rows = S().recentTurnObservations.all(kind, limit) as { meta: string }[];
+  return rows.flatMap((r) => {
+    try {
+      const obs = (JSON.parse(r.meta) as { observations?: unknown }).observations;
+      return (Array.isArray(obs) ? obs : []).flatMap((o) => {
+        const x = (o ?? {}) as { concept?: unknown; signal?: unknown };
+        return typeof x.concept === 'string' && (x.signal === 'nailed' || x.signal === 'weak' || x.signal === 'missing')
+          ? [{ concept: x.concept, signal: x.signal }]
+          : [];
+      });
     } catch {
       return [];
     }

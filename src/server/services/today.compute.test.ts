@@ -39,6 +39,10 @@ function input(over: Partial<DeriveInput> = {}): DeriveInput {
     mockKindLabel: 'System design',
     hasDebrief: false,
     debriefVerdict: null,
+    // Phase H3: the concept rep is done in the default fixture, so the tests
+    // that predate it still read the problem/mock flow they were written for.
+    // The concept-rep tests below set it explicitly.
+    concept: { doneToday: 1, last: { label: 'idempotency', grade: 'got' } },
     ...over,
   };
 }
@@ -79,9 +83,9 @@ describe('the local day', () => {
 describe('deriveSteps', () => {
   it('a fresh day: nothing due → warm-up done, problem 1 current, debrief locked', () => {
     const d = deriveSteps(input());
-    expect(status(d)).toEqual({ warmup: 'done', problem1: 'current', problem2: 'todo', mock: 'todo', debrief: 'locked' });
+    expect(status(d)).toEqual({ warmup: 'done', concept: 'done', problem1: 'current', problem2: 'todo', mock: 'todo', debrief: 'locked' });
     expect(d.current).toBe('problem1');
-    expect(d.completed).toBe(1);
+    expect(d.completed).toBe(2);
   });
 
   it('a due pile makes the warm-up current and links to the cards first', () => {
@@ -114,10 +118,10 @@ describe('deriveSteps', () => {
       })
     );
     expect(status(d)).toMatchObject({ problem1: 'done', problem2: 'done', mock: 'current' });
-    expect(d.steps[1].result).toBe('Passed · T-a · 2 submits, 1 hint');
-    expect(d.steps[1].ok).toBe(true);
-    expect(d.steps[2].result).toBe('Failed · T-b · no hints');
-    expect(d.steps[2].ok).toBe(false);
+    expect(d.steps[2].result).toBe('Passed · T-a · 2 submits, 1 hint');
+    expect(d.steps[2].ok).toBe(true);
+    expect(d.steps[3].result).toBe('Failed · T-b · no hints');
+    expect(d.steps[3].ok).toBe(false);
   });
 
   it('an active mock is in progress and links back into it', () => {
@@ -128,8 +132,8 @@ describe('deriveSteps', () => {
       })
     );
     expect(d.current).toBe('mock');
-    expect(d.steps[3].status).toBe('in-progress');
-    expect(d.steps[3].href).toBe('/mock/m1?from=today&step=mock');
+    expect(d.steps[4].status).toBe('in-progress');
+    expect(d.steps[4].href).toBe('/mock/m1?from=today&step=mock');
   });
 
   it('a graded mock unlocks the debrief and shows the verdict', () => {
@@ -140,31 +144,31 @@ describe('deriveSteps', () => {
       })
     );
     expect(status(d)).toMatchObject({ mock: 'done', debrief: 'current' });
-    expect(d.steps[3].result).toBe('below level');
-    expect(d.steps[3].ok).toBe(false);
+    expect(d.steps[4].result).toBe('below level');
+    expect(d.steps[4].ok).toBe(false);
   });
 
   it('skips move the current step on; a skipped mock unlocks the debrief', () => {
     const d = deriveSteps(input({ skips: ['problem1', 'mock'] }));
-    expect(status(d)).toEqual({ warmup: 'done', problem1: 'skipped', problem2: 'current', mock: 'skipped', debrief: 'todo' });
+    expect(status(d)).toEqual({ warmup: 'done', concept: 'done', problem1: 'skipped', problem2: 'current', mock: 'skipped', debrief: 'todo' });
   });
 
   it('a skip is overridden by doing the step', () => {
     const d = deriveSteps(input({ skips: ['problem1'], attempts: [att('a', '2026-10-21T15:00:00Z')] }));
-    expect(d.steps[1].status).toBe('done');
+    expect(d.steps[2].status).toBe('done');
   });
 
   it('end day early skips every unfinished step and makes the debrief current', () => {
     const d = deriveSteps(input({ endedEarly: true, attempts: [att('a', '2026-10-21T15:00:00Z')] }));
-    expect(status(d)).toEqual({ warmup: 'done', problem1: 'done', problem2: 'skipped', mock: 'skipped', debrief: 'current' });
+    expect(status(d)).toEqual({ warmup: 'done', concept: 'done', problem1: 'done', problem2: 'skipped', mock: 'skipped', debrief: 'current' });
   });
 
   it('a debrief finishes the day', () => {
     const d = deriveSteps(input({ endedEarly: true, hasDebrief: true, debriefVerdict: 'Solid.' }));
     expect(d.current).toBeNull();
-    expect(d.completed).toBe(5);
+    expect(d.completed).toBe(6);
     // The verdict is the first line of the panel below; the row only points at it.
-    expect(d.steps[4].result).toBe('Written — read it below');
+    expect(d.steps[5].result).toBe('Written — read it below');
   });
 
   it('Skip wins over an open mock (Phase H: Skip did nothing while one was active)', () => {
@@ -253,9 +257,10 @@ describe('the scheduler hook', () => {
 describe('pendingReviews (Phase F)', () => {
   const NOW = Date.parse('2026-10-21T20:00:00.000Z');
   const st = (statuses: Record<string, string>) =>
-    (['warmup', 'problem1', 'problem2', 'mock', 'debrief'] as const).map((id) => ({
+    (['warmup', 'concept', 'problem1', 'problem2', 'mock', 'debrief'] as const).map((id) => ({
       id,
-      status: (statuses[id] ?? 'todo') as PendingReviewsInput['steps'][number]['status'],
+      // The concept rep (Phase H3) reads as skipped unless a test sets it.
+      status: (statuses[id] ?? (id === 'concept' ? 'skipped' : 'todo')) as PendingReviewsInput['steps'][number]['status'],
     }));
   const base = (over: Partial<PendingReviewsInput> = {}): PendingReviewsInput => ({
     steps: st({ warmup: 'done', problem1: 'done', problem2: 'current' }),
@@ -301,7 +306,7 @@ describe('pendingReviews (Phase F)', () => {
 
 describe('debrief timing and stale notes (Phase H)', () => {
   const NOW = Date.parse('2026-10-21T20:00:00.000Z');
-  const settled = (['warmup', 'problem1', 'problem2', 'mock', 'debrief'] as const).map((id) => ({
+  const settled = (['warmup', 'concept', 'problem1', 'problem2', 'mock', 'debrief'] as const).map((id) => ({
     id,
     status: (id === 'debrief' ? 'todo' : id === 'mock' ? 'done' : 'done') as PendingReviewsInput['steps'][number]['status'],
   }));
@@ -309,7 +314,7 @@ describe('debrief timing and stale notes (Phase H)', () => {
     steps: settled,
     warmupActivity: 2,
     recognizeDone: false,
-    noted: ['warmup', 'problem1', 'problem2', 'mock'],
+    noted: ['warmup', 'concept', 'problem1', 'problem2', 'mock'],
     hasDebrief: false,
     failures: {},
     enabled: true,

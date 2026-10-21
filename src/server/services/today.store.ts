@@ -56,7 +56,7 @@ function prepare() {
     `),
     ensureDay: db.prepare(`
       INSERT INTO daily_sessions (date, mockKind, createdAt, updatedAt) VALUES (@date, @mockKind, @now, @now)
-      ON CONFLICT(date) DO NOTHING
+      ON CONFLICT(date) DO UPDATE SET mockKind = COALESCE(daily_sessions.mockKind, excluded.mockKind)
     `),
     setSkips: db.prepare(`UPDATE daily_sessions SET skips = @skips, updatedAt = @now WHERE date = @date`),
     setEnded: db.prepare(`UPDATE daily_sessions SET endedEarlyAt = @at, updatedAt = @now WHERE date = @date`),

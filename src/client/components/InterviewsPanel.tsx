@@ -21,7 +21,7 @@ import { createLoop, deleteLoop, getLoops, getPostings, updateLoop, type LoopBod
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
 
-const EMPTY: LoopBody = { company: '', date: '', rounds: ['coding', 'system-design', 'behavioral'], postingId: null, postingTitle: null };
+const EMPTY: LoopBody = { company: '', date: '', rounds: ['coding', 'system-design', 'behavioral'], postingId: null, postingTitle: null, aiFocus: false };
 
 function LoopForm({
   initial,
@@ -105,6 +105,18 @@ function LoopForm({
           <p className="text-[11px] text-muted-foreground">Project deep-dive mocks are not built yet; the rotation ignores that round for now.</p>
         )}
       </div>
+      <label className="flex items-start gap-2 text-xs text-muted-foreground">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={!!body.aiFocus}
+          onChange={(e) => setBody({ ...body, aiFocus: e.target.checked })}
+        />
+        <span>
+          AI-focused company — prioritise the AI-systems concept reps and track, and favour AI system-design prompts once
+          they are unlocked.
+        </span>
+      </label>
       <label className="block space-y-1 text-xs text-muted-foreground">
         Job posting (resume-builder, optional)
         {postingsDown ? (
@@ -182,7 +194,7 @@ export function InterviewsPanel({ today, onChange }: { today: string; onChange: 
             editing === l.id ? (
               <LoopForm
                 key={l.id}
-                initial={{ company: l.company, date: l.date, rounds: l.rounds, postingId: l.postingId, postingTitle: l.postingTitle }}
+                initial={{ company: l.company, date: l.date, rounds: l.rounds, postingId: l.postingId, postingTitle: l.postingTitle, aiFocus: l.aiFocus }}
                 onSave={async (b) => done(await updateLoop(l.id, b))}
                 onCancel={() => setEditing(null)}
               />
@@ -195,6 +207,7 @@ export function InterviewsPanel({ today, onChange }: { today: string; onChange: 
                   <div className="text-xs text-muted-foreground">
                     {l.rounds.map((r) => ROUND_LABEL[r]).join(', ')}
                     {l.postingTitle ? ` · ${l.postingTitle}` : ''}
+                    {l.aiFocus ? ' · AI-focused' : ''}
                   </div>
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => setEditing(l.id)} aria-label="Edit">

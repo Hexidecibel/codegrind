@@ -1,9 +1,11 @@
 // =============================================================================
 // today — the guided daily routine, as the client sees it
 // =============================================================================
-// One local day = five steps, in order:
+// One local day = six steps, in order:
 //
 //   warmup    clear the due pile: mock drill cards + Envelope ×5 + due review-queue problems
+//   concept   one concept rep (Phase H3): explain one SD / AI-systems concept out
+//             loud, graded against its rubric; teach-first when the concept is new
 //   problem1  an adaptive grind problem (Minimal editor, predict-before-solve)
 //   problem2  another one
 //   mock      one mock interview; the kind rotates daily over MOCK_KINDS
@@ -20,7 +22,7 @@ import type { TodayRecognize } from './recognize.js';
 import type { TodayEnvelope } from './envelope.js';
 import type { LoopCountdown } from './loops.js';
 
-export const TODAY_STEPS = ['warmup', 'problem1', 'problem2', 'mock', 'debrief'] as const;
+export const TODAY_STEPS = ['warmup', 'concept', 'problem1', 'problem2', 'mock', 'debrief'] as const;
 export type TodayStepId = (typeof TODAY_STEPS)[number];
 
 export function isTodayStep(x: unknown): x is TodayStepId {
@@ -28,15 +30,16 @@ export function isTodayStep(x: unknown): x is TodayStepId {
 }
 
 /** The steps a user may skip. The debrief is the end of the day, not a step to skip. */
-export const SKIPPABLE_STEPS: readonly TodayStepId[] = ['warmup', 'problem1', 'problem2', 'mock'];
+export const SKIPPABLE_STEPS: readonly TodayStepId[] = ['warmup', 'concept', 'problem1', 'problem2', 'mock'];
 
 /** Envelope reps in a "30-min day" (Phase H2), instead of the daily setting. */
 export const QUICK_ENVELOPE_REPS = 3;
 /** The steps a "30-min day" turns off. */
-export const QUICK_OFF_STEPS: readonly TodayStepId[] = ['problem2', 'mock'];
+export const QUICK_OFF_STEPS: readonly TodayStepId[] = ['concept', 'problem2', 'mock'];
 
 export const TODAY_STEP_LABEL: Readonly<Record<TodayStepId, string>> = {
   warmup: 'Warm-up',
+  concept: 'Concept rep',
   problem1: 'Problem 1',
   problem2: 'Problem 2',
   mock: 'Mock interview',
@@ -85,7 +88,7 @@ export const READINESS_VERDICT_LABEL: Readonly<Record<ReadinessVerdict, string>>
 
 /** One measured signal behind a verdict ("first-try pass 62% (n=8)"). */
 export interface ReadinessSignal {
-  id: 'pass' | 'trend' | 'retention' | 'calibration' | 'level';
+  id: 'pass' | 'trend' | 'retention' | 'calibration' | 'level' | 'concepts';
   label: string;
   /** Display value, e.g. "62%", "+1", "n/a". */
   value: string;
@@ -186,13 +189,14 @@ export interface TodayState {
 }
 
 /** The finished things a step review can be written for. `recognize` is the add-on, not a step. */
-export const STEP_NOTE_IDS = ['warmup', 'recognize', 'problem1', 'problem2', 'mock'] as const;
+export const STEP_NOTE_IDS = ['warmup', 'recognize', 'concept', 'problem1', 'problem2', 'mock'] as const;
 export type StepNoteId = (typeof STEP_NOTE_IDS)[number];
 export type AiReviewTarget = StepNoteId | 'debrief';
 
 export const STEP_NOTE_LABEL: Readonly<Record<StepNoteId, string>> = {
   warmup: 'Warm-up',
   recognize: 'Recognize',
+  concept: 'Concept rep',
   problem1: 'Problem 1',
   problem2: 'Problem 2',
   mock: 'Mock interview',
@@ -247,6 +251,8 @@ export function carryNotesOf(notes: StepNotes): CarryNote[] {
 export const CARRY_TARGET: Readonly<Record<StepNoteId, StepNoteId | 'debrief'>> = {
   warmup: 'problem1',
   recognize: 'problem1',
+  // A concept rep's advice is system-design advice: it is for the mock, never an algorithm step.
+  concept: 'mock',
   problem1: 'problem2',
   problem2: 'mock',
   mock: 'debrief',
@@ -286,6 +292,7 @@ export function applicableNotes(
       carry = '';
     } else if (target === 'algorithm') {
       if (id === 'mock' && n.kind && NON_ALGO_KINDS.has(n.kind)) return [];
+      if (id === 'concept') return []; // system-design content, not about code
       carry = algoSteps.has(CARRY_TARGET[id]) ? n.carry : '';
     } else {
       // A step review: only what came before this step in the day.

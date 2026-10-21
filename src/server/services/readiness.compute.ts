@@ -75,7 +75,15 @@ export interface ReadinessInput {
   cardReviews: readonly { kind: string; grade: string; intervalDays: number }[];
   /** The next loop, or null. */
   nextLoop: { company: string; daysLeft: number; rounds: readonly RoundType[] } | null;
+  /**
+   * Phase H3: COLD concept reps (no primer) in the window, any order. System
+   * design only: got 1 · shaky ½ · missed 0, over the last CONCEPT_WINDOW_DAYS.
+   */
+  conceptReps?: readonly { grade: string; createdAt: string }[];
 }
+
+/** Concept-rep accuracy reads this many days back. */
+export const CONCEPT_WINDOW_DAYS = 30;
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const signed = (x: number) => (x > 0 ? `+${x}` : `${x}`);
@@ -243,6 +251,15 @@ export function mockArea(input: ReadinessInput, id: (typeof MOCK_AREAS)[number][
     { id: 'trend', label: 'Trend, last 3', value: trend === null ? 'n/a' : signed(trend), n: last3.length },
     { id: 'retention', label: `Drill cards recalled after ${RETENTION_MIN_DAYS}+ days`, value: retention === null ? 'n/a' : pct(retention), n: cards.length },
   ];
+  // Phase H3: concept-rep accuracy, system design only — an extra signal that
+  // can hold "ready" back (≥ SIGNAL_MIN_N cold reps under 70%), never grant it.
+  const repCut = input.now - CONCEPT_WINDOW_DAYS * DAY_MS;
+  const reps = id === 'system-design' ? (input.conceptReps ?? []).filter((r) => Date.parse(r.createdAt) >= repCut) : [];
+  const repAcc = reps.length ? reps.reduce((s, r) => s + (r.grade === 'got' ? 1 : r.grade === 'shaky' ? 0.5 : 0), 0) / reps.length : null;
+  if (id === 'system-design') {
+    signals.push({ id: 'concepts', label: `Concept reps, last ${CONCEPT_WINDOW_DAYS} days (cold)`, value: repAcc === null ? 'n/a' : pct(repAcc), n: reps.length });
+  }
+  const conceptsOk = repAcc === null || reps.length < SIGNAL_MIN_N || repAcc >= 0.7;
   const inLoop = inLoopOf(input, spec.round);
   const latestBelow = mine[0]?.verdict === 'below';
   const retOk = retention === null || cards.length < SIGNAL_MIN_N || retention >= 0.7;
@@ -254,7 +271,7 @@ export function mockArea(input: ReadinessInput, id: (typeof MOCK_AREAS)[number][
     hint = `Do ${k} more ${spec.label.toLowerCase()}${spec.id === 'coding' ? '' : ' mock'}${k === 1 ? '' : 's'} to get a read${
       mine.length ? ` (last: ${mine[0].verdict} level)` : ''
     }.`;
-  } else if (level! >= 1 && !latestBelow && trend! >= 0 && retOk) {
+  } else if (level! >= 1 && !latestBelow && trend! >= 0 && retOk && conceptsOk) {
     verdict = 'ready';
     hint = 'Hold it: one of these a week, and clear its drill cards when due.';
   } else {
@@ -262,6 +279,7 @@ export function mockArea(input: ReadinessInput, id: (typeof MOCK_AREAS)[number][
     if (latestBelow) hint = 'The last one graded below level: drill its cards, then run one more of this kind.';
     else if (trend! < 0) hint = `Trending down over the last 3 (${signed(trend!)}): re-read the last grade's gaps before the next one.`;
     else if (level! < 1) hint = 'Averaging below the bar: one more of this kind this week, aimed at the last grade\'s top gap.';
+    else if (!conceptsOk) hint = `Cold concept reps land ${pct(repAcc!)} (bar 70%): keep the daily concept rep, and re-read the model answer on every miss.`;
     else hint = `Drill cards fade after ${RETENTION_MIN_DAYS}+ days (${pct(retention!)}): clear them the day they come due.`;
   }
   return {

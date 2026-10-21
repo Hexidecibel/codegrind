@@ -63,6 +63,16 @@ export interface MockPrompt {
   brief: string;
   /** A system / story / problem the candidate has done before (the warm-up pool). */
   familiar: boolean;
+  /** System design only (Phase H3): an AI/LLM system. */
+  ai?: boolean;
+}
+
+/** What the server knows when it picks for the candidate (system design reads it; others ignore it). */
+export interface MockPickOptions {
+  /** Enough AI concepts are known for AI prompts to enter the random pick. */
+  aiUnlocked?: boolean;
+  /** An upcoming loop is AI-focused. */
+  aiFocus?: boolean;
 }
 
 export interface MockKindInfo {
@@ -78,7 +88,7 @@ export interface MockKindInfo {
   prompts: readonly MockPrompt[];
   promptById(id: string): MockPrompt | null;
   /** The server's choice when the candidate did not pick (`recentIds` newest first). */
-  pickPrompt(recentIds: readonly string[], rand?: () => number): MockPrompt;
+  pickPrompt(recentIds: readonly string[], rand?: () => number, opts?: MockPickOptions): MockPrompt;
   /** The interview clock. Past it the interviewer is told to wrap up. */
   minutes: number;
   /** Candidate turns per mock. A cap, not a target. */

@@ -50,6 +50,7 @@ import { SMALL_CALL_SHAPES, aiReviewsEnabled, aiSpend, costOfMeta, smallCallEsti
 import { runStepReview, type StepReviewInput } from './llm.review.js';
 import { todayRecognize } from './recognize.service.js';
 import { envelopeDigest, todayEnvelope } from './envelope.service.js';
+import { conceptDigest, readinessReps, todayConcept } from './concept.service.js';
 import * as store from './today.store.js';
 import { runDebrief, type DebriefInput } from './llm.debrief.js';
 
@@ -170,6 +171,7 @@ export function getToday(now = new Date()): TodayState {
     hasDebrief: !!row.debrief,
     debriefVerdict: row.debrief?.verdict ?? null,
     quick: row.quick,
+    concept: todayConcept(now),
     finalReview: nextLoop?.isFinalReviewDay ? { company: nextLoop.company, daysLeft: nextLoop.daysLeft } : null,
   });
 
@@ -215,6 +217,7 @@ function readinessNow(language: Language, nextLoop: LoopCountdown | null, now: D
     attempts: store.readinessAttempts(language, since),
     grades: store.gradeHistory(60),
     cardReviews: store.cardReviews(since),
+    conceptReps: readinessReps(since),
     nextLoop: nextLoop ? { company: nextLoop.company, daysLeft: nextLoop.daysLeft, rounds: nextLoop.rounds } : null,
   });
 }
@@ -350,6 +353,8 @@ export function buildDebriefInput(now = new Date()): DebriefInput {
     },
     // Notes only, never carries: a carry is an instruction, not evidence.
     stepNotes: applicableNotes(row.stepNotes, 'debrief'),
+    // Phase H3: '' → absent, so a day without a rep renders as before.
+    ...(conceptDigest(now).length ? { conceptReps: conceptDigest(now) } : {}),
   };
 }
 
@@ -422,6 +427,7 @@ const running = new Map<string, Set<AiReviewTarget>>();
 const NEXT_OF: Readonly<Record<StepNoteId, string>> = {
   warmup: 'Problem 1 (an adaptive algorithm problem)',
   recognize: 'Problem 1 (an adaptive algorithm problem)',
+  concept: "the next system-design conversation (today's mock if it is system design; otherwise tomorrow's concept rep)",
   problem1: 'Problem 2 (another adaptive algorithm problem)',
   problem2: 'the mock interview',
   mock: "the debrief and tomorrow's practice",
@@ -455,6 +461,7 @@ export function stepDigest(id: StepNoteId, now = new Date()): string[] {
           }${r.approach.trim() ? `; approach: "${r.approach.trim().replace(/\s+/g, ' ').slice(0, 160)}"` : ''}`
       );
   }
+  if (id === 'concept') return conceptDigest(now);
   if (id === 'problem1' || id === 'problem2') {
     const p = newProblemsToday({ attempts, dayStart })[id === 'problem1' ? 0 : 1];
     if (!p) return [];
