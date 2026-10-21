@@ -32,6 +32,7 @@ import { TrendChart } from '@/client/components/reflect/TrendChart';
 import { MistakeLedger } from '@/client/components/reflect/MistakeLedger';
 import { FirstRun } from '@/client/components/reflect/FirstRun';
 import { HistoryRow } from '@/client/components/reflect/HistoryRow';
+import { RecognizeAccuracy } from '@/client/components/reflect/RecognizeAccuracy';
 import {
   DataTable,
   Section,
@@ -346,6 +347,8 @@ export function ProgressPage() {
             <MistakeLedger mistakes={mistakes} />
           </Card>
         </Section>
+
+        <RecognizeAccuracy />
 
         <Section title="Recent attempts">
           {attempts.length === 0 ? (

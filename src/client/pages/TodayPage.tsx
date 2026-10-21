@@ -6,7 +6,7 @@
 // top; the debrief at the bottom. Everything here is a free GET except the
 // "Debrief me" button, which is the day's one (small, cached) model call.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowRight,
@@ -16,6 +16,7 @@ import {
   Loader2,
   Lock,
   RotateCcw,
+  ScanSearch,
   SkipForward,
   Sparkles,
   Target,
@@ -112,12 +113,15 @@ function StepRow({
   busy,
   onSkip,
   onUnskip,
+  extra,
 }: {
   step: TodayStep;
   index: number;
   busy: boolean;
   onSkip: () => void;
   onUnskip: () => void;
+  /** A sub-row under the step (the warm-up's optional Recognize add-on). */
+  extra?: ReactNode;
 }) {
   const active = step.status === 'current' || step.status === 'in-progress';
   const isDebrief = step.id === 'debrief';
@@ -180,7 +184,46 @@ function StepRow({
           </Button>
         </div>
       )}
+      {extra}
     </li>
+  );
+}
+
+/**
+ * "Recognize ×5": optional, never a step (it does not block the day or count
+ * toward the progress bar). Highlighted when the server says you're rusty.
+ */
+function RecognizeRow({ r }: { r: TodayState['recognize'] }) {
+  return (
+    <div
+      className={cn(
+        'mt-3 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 pl-3 sm:ml-11',
+        r.recommended && !r.done ? 'border-primary/50 bg-primary/5' : 'border-border',
+      )}
+    >
+      <ScanSearch className={cn('h-4 w-4 shrink-0', r.recommended && !r.done ? 'text-primary' : 'text-muted-foreground')} />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium">
+          Recognize ×5{' '}
+          {r.done ? (
+            <span className="text-xs text-emerald-400">done · {r.doneToday} today</span>
+          ) : r.recommended ? (
+            <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] text-primary">recommended</span>
+          ) : (
+            <span className="text-xs text-muted-foreground">optional</span>
+          )}
+        </div>
+        <div className="text-xs text-muted-foreground">
+          {r.reason}
+          {!r.done && r.doneToday > 0 ? ` · ${r.doneToday} done today` : ''}
+        </div>
+      </div>
+      <Button asChild size="sm" variant={r.recommended && !r.done ? 'default' : 'outline'} className="gap-1">
+        <Link to={r.href}>
+          {r.done ? 'Again' : 'Start'} <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+      </Button>
+    </div>
   );
 }
 
@@ -370,6 +413,7 @@ export function TodayPage() {
               busy={busy}
               onSkip={() => act(() => skipTodayStep(s.id, true))}
               onUnskip={() => act(() => skipTodayStep(s.id, false))}
+              extra={s.id === 'warmup' && state.recognize ? <RecognizeRow r={state.recognize} /> : undefined}
             />
           ))}
         </ol>

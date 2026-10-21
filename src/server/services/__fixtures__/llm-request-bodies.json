@@ -1032,5 +1032,86 @@
         "content": "Day: 2026-10-21\n\nProblems today:\n- Pair Sum (two-pointer, easy): PASSED 10/10 tests, 0 hints, predicted O(n) time / O(1) space, confidence 4/5; mistakes: off-by-one\n\nMock today:\n- system-design: at level — Solid on scale.\n- gaps: Shard keys?\n\nDrill cards graded today: 3 (got 2, shaky 1, missed 0)\nSkipped steps: Problem 2\n\nLast 7 days: 4 active days, 12 submits, 9 solved, first-submit pass 61%, top mistakes: off-by-one"
       }
     ]
+  },
+  "runRecognizeCheck": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 600,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You check a candidate's quick read of an algorithm problem. They did NOT write code: they named the pattern and wrote 1-3 sentences of approach plus time/space complexity, in about two minutes. Judge the IDEA, not the prose.\n\n- verdict: \"correct\" if the approach would work at the optimal (or an acceptable) complexity; \"partly\" if the core idea is right but a key step, the invariant, or the complexity is off; \"wrong\" if it would not solve the problem or is badly suboptimal.\n- missing: 0-3 short items the approach left out that actually matter (the invariant, a sort step, what the hash map stores). Not style.\n- edgeCaseThatBites: the one input most likely to break THIS approach, in one line.\n- oneLineFix: the single sentence that turns their approach into the reference one.\n- keyInsight: one or two sentences — the tell in the statement that points at the pattern, and why the pattern works. About the problem, not the candidate.\n- optimalTime / optimalSpace: the reference solution's complexity, e.g. \"O(n log n)\", \"O(1)\".\n\nBe terse and specific. Call emit_recognize_check exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_recognize_check",
+        "description": "Emit the verdict on the candidate's approach.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "correct",
+                "partly",
+                "wrong"
+              ]
+            },
+            "missing": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "0-3 things the approach left out."
+            },
+            "edgeCaseThatBites": {
+              "type": "string",
+              "description": "One input that breaks this approach."
+            },
+            "oneLineFix": {
+              "type": "string",
+              "description": "One sentence that fixes the approach."
+            },
+            "keyInsight": {
+              "type": "string",
+              "description": "The tell + why the pattern works, 1-2 sentences."
+            },
+            "optimalTime": {
+              "type": "string",
+              "description": "Reference time complexity."
+            },
+            "optimalSpace": {
+              "type": "string",
+              "description": "Reference space complexity."
+            }
+          },
+          "required": [
+            "verdict",
+            "missing",
+            "edgeCaseThatBites",
+            "oneLineFix",
+            "keyInsight",
+            "optimalTime",
+            "optimalSpace"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_recognize_check"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Problem: Pair Sum\nFind the pair that sums to the target.\nExample 1: input [1,2,3], 5 → output [1,2]\nConstraints: 1 <= n <= 1000\n\nIntended pattern: two-pointer\nReference solution (javascript):\nfunction pairSum(nums, target) { return []; }\n\nCandidate's pattern pick: two-pointer\nCandidate's approach: Two pointers from both ends; move the smaller side. O(n) time, O(1) space."
+      }
+    ]
   }
 }

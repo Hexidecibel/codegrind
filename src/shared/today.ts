@@ -16,6 +16,7 @@
 
 import type { MockKind } from './mock-kinds.js';
 import type { Topic } from './types.js';
+import type { TodayRecognize } from './recognize.js';
 
 export const TODAY_STEPS = ['warmup', 'problem1', 'problem2', 'mock', 'debrief'] as const;
 export type TodayStepId = (typeof TODAY_STEPS)[number];
@@ -119,4 +120,9 @@ export interface TodayState {
   focus: Topic[];
   /** Typical cost of one debrief call, for the button. */
   debriefEstimateUsd: number;
+  /**
+   * The optional "Recognize ×5" add-on under the warm-up. Not a step: it never
+   * blocks the day or counts toward `completed`; it is recommended when rusty.
+   */
+  recognize: TodayRecognize;
 }
