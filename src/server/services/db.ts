@@ -20,7 +20,8 @@ import { DEFAULT_LANGUAGE, isLanguage, type Language } from '../../shared/langua
 // SDK and no API key.
 import { CORPUS_LANGUAGE } from './llm.language.js';
 import { ladderOnCleanSolve, ladderOnMiss, ladderSnoozeDue, type LadderRow } from './review-ladder.js';
-import { todayTz } from './today.compute.js';
+import { dayStartMs, localDay, todayTz } from './today.compute.js';
+import { finalReviewDay, isRoundType, nearestLoop, type InterviewLoop, type RoundType } from '../../shared/loops.js';
 import type {
   ProblemRecord,
   Problem,
@@ -1008,6 +1009,99 @@ export function bumpSession(id: string, lastTopic: Topic): void {
 }
 
 // -----------------------------------------------------------------------------
+// Interview loops (Phase H2) — target interview days. Here, not in a store of
+// their own, because the review ladder below reads the nearest one on every
+// write (the spacing cap) and db.ts must not import a module that imports it.
+// -----------------------------------------------------------------------------
+interface LoopDbRow {
+  id: string;
+  company: string;
+  date: string;
+  rounds: string;
+  postingId: string | null;
+  postingTitle: string | null;
+  createdAt: string;
+}
+
+function toLoop(r: LoopDbRow): InterviewLoop {
+  let rounds: RoundType[] = [];
+  try {
+    const raw = JSON.parse(r.rounds) as unknown;
+    if (Array.isArray(raw)) rounds = raw.filter(isRoundType);
+  } catch {
+    /* a corrupt row reads as no rounds */
+  }
+  return { id: r.id, company: r.company, date: r.date, rounds, postingId: r.postingId, postingTitle: r.postingTitle, createdAt: r.createdAt };
+}
+
+let loopStmts: ReturnType<typeof prepareLoops> | null = null;
+function prepareLoops() {
+  return {
+    list: db.prepare(`SELECT * FROM interview_loops ORDER BY date ASC, createdAt ASC`),
+    get: db.prepare(`SELECT * FROM interview_loops WHERE id = ?`),
+    insert: db.prepare(`
+      INSERT INTO interview_loops (id, company, date, rounds, postingId, postingTitle, createdAt, updatedAt)
+      VALUES (@id, @company, @date, @rounds, @postingId, @postingTitle, @now, @now)
+    `),
+    update: db.prepare(`
+      UPDATE interview_loops SET company = @company, date = @date, rounds = @rounds,
+        postingId = @postingId, postingTitle = @postingTitle, updatedAt = @now
+      WHERE id = @id
+    `),
+    remove: db.prepare(`DELETE FROM interview_loops WHERE id = ?`),
+  };
+}
+const LS = () => (loopStmts ??= prepareLoops());
+
+export function listLoops(): InterviewLoop[] {
+  return (LS().list.all() as LoopDbRow[]).map(toLoop);
+}
+
+export function getLoop(id: string): InterviewLoop | null {
+  const r = LS().get.get(id) as LoopDbRow | undefined;
+  return r ? toLoop(r) : null;
+}
+
+export interface LoopFields {
+  company: string;
+  date: string;
+  rounds: RoundType[];
+  postingId: string | null;
+  postingTitle: string | null;
+}
+
+export function insertLoop(id: string, f: LoopFields, now = new Date()): InterviewLoop {
+  LS().insert.run({ id, ...f, rounds: JSON.stringify(f.rounds), now: now.toISOString() });
+  return getLoop(id)!;
+}
+
+export function updateLoop(id: string, f: LoopFields, now = new Date()): InterviewLoop | null {
+  const res = LS().update.run({ id, ...f, rounds: JSON.stringify(f.rounds), now: now.toISOString() });
+  return res.changes ? getLoop(id) : null;
+}
+
+export function deleteLoop(id: string): boolean {
+  return LS().remove.run(id).changes > 0;
+}
+
+/**
+ * The spacing deadline: local midnight starting the nearest loop's final-review
+ * day, or null with no upcoming loop. Every SRS write caps its due date here
+ * (shared/loops.capDueAtMs). Never throws — a broken read means "no cap".
+ */
+export function loopDeadlineMs(nowMs = Date.now()): number | null {
+  try {
+    const tz = todayTz();
+    const today = localDay(nowMs, tz);
+    const loop = nearestLoop(listLoops(), today);
+    const fr = loop ? finalReviewDay(loop.date, today) : null;
+    return fr ? dayStartMs(fr, tz) : null;
+  } catch {
+    return null;
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Review queue — spaced re-solve of failed / hint-assisted problems (retrieval
 // loop). An item is "due" when clearedAt IS NULL and dueAt <= now. The spacing
 // rule itself is pure and lives in review-ladder.ts: a miss puts the item on
@@ -1052,7 +1146,7 @@ const moveReviewStmt = db.prepare(`
  */
 export function enqueueReview(problemId: string, reason: ReviewReason, nowMs = Date.now()): void {
   const existing = getReviewStmt.get(problemId) as ReviewDbRow | undefined;
-  const move = ladderOnMiss(existing ? ladderRow(existing) : null, nowMs, todayTz());
+  const move = ladderOnMiss(existing ? ladderRow(existing) : null, nowMs, todayTz(), loopDeadlineMs(nowMs));
   if (!existing) {
     insertReviewStmt.run({ problemId, reason, dueAt: move.dueAt, createdAt: new Date(nowMs).toISOString(), rung: move.rung, lastMissAt: move.lastMissAt });
     return;
@@ -1086,7 +1180,7 @@ export function snoozeReview(problemId: string): boolean {
   const existing = getReviewStmt.get(problemId) as ReviewDbRow | undefined;
   if (!existing || existing.clearedAt !== null) return false;
   const nowMs = Date.now();
-  const dueAt = ladderSnoozeDue(ladderRow(existing), nowMs);
+  const dueAt = ladderSnoozeDue(ladderRow(existing), nowMs, loopDeadlineMs(nowMs));
   // The due check lives in the WHERE so it is made against the row as it is at
   // write time, not as it was when read above.
   const res = snoozeReviewStmt.run({ problemId, dueAt, now: new Date(nowMs).toISOString() });
@@ -1101,7 +1195,7 @@ export function snoozeReview(problemId: string): boolean {
 export function clearReview(problemId: string, nowMs = Date.now()): void {
   const existing = getReviewStmt.get(problemId) as ReviewDbRow | undefined;
   if (!existing) return;
-  const move = ladderOnCleanSolve(ladderRow(existing), nowMs, todayTz());
+  const move = ladderOnCleanSolve(ladderRow(existing), nowMs, todayTz(), loopDeadlineMs(nowMs));
   if (move) moveReviewStmt.run({ problemId, reason: null, missed: 0, ...move });
 }
 

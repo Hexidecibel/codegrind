@@ -24,15 +24,25 @@ import {
   SkipForward,
   Sparkles,
   Target,
+  Timer,
   Trophy,
   Wrench,
 } from 'lucide-react';
-import type { StepNote, TodayState, TodayStep } from '@/shared/today';
+import { QUICK_OFF_STEPS, READINESS_VERDICT_LABEL, type ReadinessVerdict, type StepNote, type TodayState, type TodayStep } from '@/shared/today';
+import { ROUND_LABEL, countdownPhrase } from '@/shared/loops';
+import { InterviewsPanel } from '@/client/components/InterviewsPanel';
 import { mockKindInfo } from '@/shared/mock-kinds';
-import { endTodayEarly, getToday, runTodayDebrief, skipTodayStep, ApiError } from '@/client/lib/api';
+import { endTodayEarly, getToday, runTodayDebrief, setTodayQuick, skipTodayStep, ApiError } from '@/client/lib/api';
 import { humanize } from '@/client/lib/format';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
+
+const VERDICT_TONE: Readonly<Record<ReadinessVerdict, string>> = {
+  ready: 'text-emerald-400',
+  close: 'text-amber-300',
+  'not-yet': 'text-rose-300',
+  'not-enough': 'text-muted-foreground',
+};
 
 function longDate(date: string): string {
   const [y, m, d] = date.split('-').map(Number);
@@ -64,13 +74,29 @@ function Header({ state }: { state: TodayState }) {
         </span>
       </div>
 
+      {state.nextLoop && (
+        <div className="flex flex-wrap items-baseline gap-x-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
+          <span className="font-semibold">
+            {state.nextLoop.company} {countdownPhrase(state.nextLoop.daysLeft)}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {state.nextLoop.date} · {state.nextLoop.rounds.map((r) => ROUND_LABEL[r]).join(', ')}
+            {state.nextLoop.isFinalReviewDay
+              ? ' · final review today: every open card and review problem is due'
+              : state.nextLoop.finalReviewDay
+                ? ` · final review ${state.nextLoop.finalReviewDay}`
+                : ''}
+          </span>
+        </div>
+      )}
+
       <div className="space-y-1.5">
         <div className="flex justify-between text-xs text-muted-foreground">
           <span>
             {state.current === null ? 'Day complete' : `${state.completed} of ${state.total} steps`}
             {state.endedEarly ? ' · ended early' : ''}
           </span>
-          <span>~90 min</span>
+          <span>{state.quick ? '~30 min' : '~90 min'}</span>
         </div>
         <div
           className="h-2.5 overflow-hidden rounded-full bg-secondary"
@@ -85,19 +111,20 @@ function Header({ state }: { state: TodayState }) {
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {state.readiness.map((a) => (
-          <div key={a.id} className="rounded-lg border border-border px-3 py-2" title={a.note}>
+          <div
+            key={a.id}
+            className={cn('rounded-lg border border-border px-3 py-2', a.inLoop === false && 'opacity-60')}
+            title={[
+              ...a.signals.map((s) => `${s.label}: ${s.value}${s.n ? ` (n=${s.n})` : ''}`),
+              a.inLoop === false ? 'Not a round in your next interview.' : '',
+            ]
+              .filter(Boolean)
+              .join('\n')}
+          >
             <div className="text-xs text-muted-foreground">{a.label}</div>
-            {a.pct === null ? (
-              <div className="text-sm text-muted-foreground/70">not started</div>
-            ) : (
-              <>
-                <div className="text-sm font-semibold">{a.pct}%</div>
-                <div className="mt-1 h-1 overflow-hidden rounded-full bg-secondary">
-                  <div className="h-full bg-emerald-400/80" style={{ width: `${a.pct}%` }} />
-                </div>
-                <div className="mt-1 truncate text-[11px] text-muted-foreground">{a.note}</div>
-              </>
-            )}
+            <div className={cn('text-sm font-semibold', VERDICT_TONE[a.verdict])}>{READINESS_VERDICT_LABEL[a.verdict]}</div>
+            <div className="truncate text-[11px] text-muted-foreground">{a.evidence}</div>
+            <div className="mt-1 line-clamp-3 text-[11px] text-foreground/80">{a.hint}</div>
           </div>
         ))}
       </div>
@@ -152,7 +179,10 @@ function StepRow({
   extra,
   note,
   notePending = false,
+  offToday = false,
 }: {
+  /** Turned off by the 30-min day: no Undo (turn the mode off instead). */
+  offToday?: boolean;
   step: TodayStep;
   index: number;
   busy: boolean;
@@ -181,7 +211,7 @@ function StepRow({
             {step.status === 'in-progress' && (
               <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-300">in progress</span>
             )}
-            {step.status === 'skipped' && <span className="text-xs text-muted-foreground">skipped</span>}
+            {step.status === 'skipped' && <span className="text-xs text-muted-foreground">{offToday ? 'off today' : 'skipped'}</span>}
           </div>
           {step.result ? (
             <p
@@ -201,7 +231,7 @@ function StepRow({
           )}
           <StepNoteLine note={note} pending={notePending} />
         </div>
-        {step.status === 'skipped' && (
+        {step.status === 'skipped' && !offToday && (
           <Button variant="ghost" size="sm" onClick={onUnskip} disabled={busy} className="text-muted-foreground">
             Undo
           </Button>
@@ -347,6 +377,11 @@ function DebriefPanel({
         </div>
       ) : (
         <div className="space-y-4">
+          {state.nextLoop && (
+            <p className="text-xs text-muted-foreground">
+              {state.nextLoop.company} {countdownPhrase(state.nextLoop.daysLeft)} ({state.nextLoop.date})
+            </p>
+          )}
           <p className="text-base font-semibold">{d.verdict}</p>
           {d.wins.length > 0 && (
             <div className="space-y-1.5">
@@ -509,6 +544,21 @@ export function TodayPage() {
       <div className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
         <Header state={state} />
 
+        <InterviewsPanel today={state.date} onChange={() => void getToday().then(setState).catch(() => undefined)} />
+
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
+          <Timer className="h-4 w-4 text-muted-foreground" />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium">30-min day {state.quick && <span className="text-xs text-emerald-400">on</span>}</div>
+            <div className="text-xs text-muted-foreground">
+              Warm-up cards + Envelope ×3, one problem, the debrief. Streak and spacing are kept; review problems stay due.
+            </div>
+          </div>
+          <Button size="sm" variant={state.quick ? 'outline' : 'secondary'} disabled={busy} onClick={() => act(() => setTodayQuick(!state.quick))}>
+            {state.quick ? 'Back to the full day' : 'Short on time'}
+          </Button>
+        </div>
+
         {error && <p className="text-sm text-destructive-foreground">{error}</p>}
 
         <ol className="space-y-2.5">
@@ -520,6 +570,7 @@ export function TodayPage() {
               busy={busy}
               onSkip={() => act(() => skipTodayStep(s.id, true))}
               onUnskip={() => act(() => skipTodayStep(s.id, false))}
+              offToday={state.quick && QUICK_OFF_STEPS.includes(s.id) && s.status === 'skipped'}
               note={s.id === 'debrief' ? undefined : state.stepNotes[s.id]}
               notePending={s.id !== 'debrief' && state.aiPending.includes(s.id)}
               extra={

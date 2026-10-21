@@ -233,8 +233,9 @@ export function stats(now = new Date()): EnvelopeStats {
 }
 
 /** Today's "Envelope ×5" (a part of the warm-up). */
-export function todayEnvelope(dayStart: string, now: Date): TodayEnvelope {
-  const daily = envelopeDaily();
+export function todayEnvelope(dayStart: string, now: Date, maxDaily?: number): TodayEnvelope {
+  // A "30-min day" (Phase H2) caps the reps; it never raises them.
+  const daily = maxDaily === undefined ? envelopeDaily() : Math.min(envelopeDaily(), maxDaily);
   const today = store.attemptsSince(dayStart);
   const due = store.cardCounts(now).due;
   const remaining = envelopeRemaining(daily, today.length, due);

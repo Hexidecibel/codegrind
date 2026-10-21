@@ -116,7 +116,10 @@ describe('the spaced-repetition numbers match db.ts', () => {
     const body = DB.slice(start, DB.indexOf('\n}\n', start));
     expect(body, 'snoozeReview no longer snoozes by the rung').toMatch(/ladderSnoozeDue\(/);
     // The snooze is the row's own rung, and the lowest rung is RUNG_DAYS[0].
-    expect(LADDER).toMatch(/export function ladderSnoozeDue\(row: LadderRow, nowMs: number\): string \{\n  return dueIn\(row\.rung, nowMs\);/);
+    // (Phase H2: capped by an interview loop's final-review day when one is ahead.)
+    expect(LADDER).toMatch(
+      /export function ladderSnoozeDue\(row: LadderRow, nowMs: number, deadlineMs: number \| null = null\): string \{\n  return dueIn\(row\.rung, nowMs, deadlineMs\);/
+    );
     expect(facts.REVIEW_SKIP_MIN_RUNG).toBe(0);
     expect(facts.REVIEW_SKIP_MIN_DAYS).toBe(facts.REVIEW_LADDER_DAYS[facts.REVIEW_SKIP_MIN_RUNG]);
     expect(facts.REVIEW_SKIP_MIN_DAYS).toBeGreaterThan(0);

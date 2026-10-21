@@ -533,6 +533,43 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
         CREATE INDEX IF NOT EXISTS idx_envelope_attempts_created ON envelope_attempts (createdAt);
       `);
 
+      // Phase H2 (interview loops, 30-min day, readiness). Additive, always-run:
+      //   interview_loops                one row per target interview day
+      //   card_reviews                   one row per drill-card self-grade, with
+      //                                  the interval it was recalled over — the
+      //                                  readiness model's "retention at 5+ days"
+      //   daily_sessions.quick           the day's "30-min day" toggle
+      //   daily_sessions.finalReviewAt   the final review pulled items due (once)
+      //   daily_sessions.recognizeStocked bank problems generated today so
+      //                                  Recognize can reach an empty topic (bounded)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS interview_loops (
+          id           TEXT PRIMARY KEY,
+          company      TEXT NOT NULL,
+          date         TEXT NOT NULL,              -- YYYY-MM-DD, local
+          rounds       TEXT NOT NULL,              -- JSON RoundType[]
+          postingId    TEXT,
+          postingTitle TEXT,
+          createdAt    TEXT NOT NULL,
+          updatedAt    TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_interview_loops_date ON interview_loops (date);
+
+        CREATE TABLE IF NOT EXISTS card_reviews (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          cardId       INTEGER NOT NULL,
+          grade        TEXT NOT NULL,
+          intervalDays REAL NOT NULL,              -- since its last review (or creation)
+          at           TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_card_reviews_at ON card_reviews (at);
+      `);
+      if (tableExists(db, 'daily_sessions')) {
+        addColumnIfMissing(db, 'daily_sessions', 'quick', 'INTEGER NOT NULL DEFAULT 0');
+        addColumnIfMissing(db, 'daily_sessions', 'finalReviewAt', 'TEXT');
+        addColumnIfMissing(db, 'daily_sessions', 'recognizeStocked', 'INTEGER NOT NULL DEFAULT 0');
+      }
+
       // --- VERSIONED ----------------------------------------------------------
       // Expensive or destructive. Gated on the version marker so a warm database
       // doesn't pay on every boot — but each step still asks the DATABASE

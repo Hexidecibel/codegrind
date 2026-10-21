@@ -48,6 +48,7 @@ import type {
 } from '@/shared/mock';
 import type { GapCard, GapCardCheck, GapCardGrade, GapCardsResponse } from '@/shared/gap-cards';
 import type { TodayState, TodayStepId } from '@/shared/today';
+import type { LoopsResponse, PostingsResponse, RoundType } from '@/shared/loops';
 import type {
   RecognizeCheck,
   RecognizeCode,
@@ -630,6 +631,43 @@ export function endTodayEarly(ended = true): Promise<TodayState> {
 /** POST /api/today/debrief — ONE small model call, cached per day; `regenerate` pays again. */
 export function runTodayDebrief(regenerate = false): Promise<TodayState> {
   return request<TodayState>('/api/today/debrief', { method: 'POST', body: JSON.stringify({ regenerate }) });
+}
+
+/** POST /api/today/quick — the "30-min day" toggle for today. Free. */
+export function setTodayQuick(on: boolean): Promise<TodayState> {
+  return request<TodayState>('/api/today/quick', { method: 'POST', body: JSON.stringify({ on }) });
+}
+
+// ---------------------------------------------------------------------------
+// Interview loops (Phase H2)
+// ---------------------------------------------------------------------------
+export interface LoopBody {
+  company: string;
+  date: string;
+  rounds: RoundType[];
+  postingId: string | null;
+  postingTitle: string | null;
+}
+
+export function getLoops(): Promise<LoopsResponse> {
+  return request<LoopsResponse>('/api/loops');
+}
+
+export function createLoop(body: LoopBody): Promise<LoopsResponse> {
+  return request<LoopsResponse>('/api/loops', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export function updateLoop(id: string, body: LoopBody): Promise<LoopsResponse> {
+  return request<LoopsResponse>(`/api/loops/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) });
+}
+
+export function deleteLoop(id: string): Promise<LoopsResponse> {
+  return request<LoopsResponse>(`/api/loops/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** resume-builder's postings (via the server); `available: false` when it is down. */
+export function getPostings(): Promise<PostingsResponse> {
+  return request<PostingsResponse>('/api/loops/postings');
 }
 
 // -----------------------------------------------------------------------------

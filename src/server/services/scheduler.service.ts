@@ -22,8 +22,10 @@ import {
   getDueReview,
   getProblem,
   getReviewDueCount,
+  findUnusedProblem,
   type SkillRow,
 } from './db.js';
+import { pickBreadth } from './breadth.compute.js';
 import {
   PREREQS,
   ROOT_TOPICS,
@@ -428,6 +430,30 @@ export function nextIntent(opts: NextIntentOpts): SchedulerIntent {
 
   const rng = mulberry32(seedFrom(views, opts.avoidTopic));
   return toIntent(language, pickWeighted(candidates, rng));
+}
+
+/**
+ * Phase H2 breadth floor: Problem 2 of the day is the least-seen topic in this
+ * language (breadth.compute.pickBreadth), easy until one clean solve, then
+ * medium. It outranks a due review on purpose — a review re-solve is the
+ * warm-up's and never counts as Problem 2. Reuses an unused bank problem for the
+ * slot when there is one (free); otherwise generates, gently, as a new pattern.
+ */
+export function breadthIntent(language: Language, avoidTopic?: string | null): SchedulerIntent | null {
+  const views = buildViews(language);
+  const clean = getCleanSolvesByTopic(language);
+  const pick = pickBreadth(
+    views.map((v) => ({
+      topic: v.topic,
+      attempts: v.attempts,
+      cleanSolves: Object.values(clean.get(v.topic) ?? emptyCleanSolves()).reduce((a, b) => a + b, 0),
+    })),
+    avoidTopic
+  );
+  if (!pick) return null;
+  const banked = findUnusedProblem(language, pick.topic, pick.difficulty);
+  const kind: SchedulerIntentKind = banked || pick.attempts > 0 ? 'reinforce' : 'new-pattern';
+  return toIntent(language, { kind, topic: pick.topic, difficulty: pick.difficulty, score: 1, rationale: pick.rationale });
 }
 
 /**

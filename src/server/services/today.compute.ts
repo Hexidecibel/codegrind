@@ -16,7 +16,6 @@ import {
   TODAY_STEP_LABEL,
   type AiReviewTarget,
   type Debrief,
-  type ReadinessArea,
   type TodayStep,
   type TodayStepId,
   type TodayStepStatus,
@@ -141,6 +140,14 @@ export interface DeriveInput {
   mockKindLabel: string;
   hasDebrief: boolean;
   debriefVerdict: string | null;
+  /**
+   * Phase H2 "30-min day": warm-up (cards + Envelope ×3, no review problems —
+   * they stay due), ONE problem (a new one or a due review re-solve), the
+   * debrief. Problem 2 and the mock are off for the day, not failed.
+   */
+  quick?: boolean;
+  /** Today is a loop's final-review day: every open item was pulled due. */
+  finalReview?: { company: string; daysLeft: number } | null;
 }
 
 export interface DerivedSteps {
@@ -163,10 +170,18 @@ interface ProblemOutcome {
 
 /** Today's NEW problems (first attempted today), in the order they were first submitted. */
 export function newProblemsToday(input: Pick<DeriveInput, 'attempts' | 'dayStart'>): ProblemOutcome[] {
+  return problemsToday(input, false);
+}
+
+/**
+ * Today's problems in first-submit order: NEW ones only, or (the 30-min day's
+ * single problem) review re-solves too.
+ */
+export function problemsToday(input: Pick<DeriveInput, 'attempts' | 'dayStart'>, includeReviews: boolean): ProblemOutcome[] {
   const byProblem = new Map<string, ProblemOutcome & { first: string }>();
   const sorted = [...input.attempts].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   for (const a of sorted) {
-    if (a.firstAt < input.dayStart) continue; // a review re-solve — the warm-up's
+    if (!includeReviews && a.firstAt < input.dayStart) continue; // a review re-solve — the warm-up's
     const o = byProblem.get(a.problemId);
     if (o) {
       o.solved ||= a.solved;
@@ -204,13 +219,16 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
   const reviewsCleared = input.attempts.filter((a) => a.firstAt < input.dayStart);
   const reviewedProblems = new Set(reviewsCleared.map((a) => a.problemId)).size;
   const env = input.envelope ?? { remaining: 0, doneToday: 0 };
-  const pile = input.cardsDue + env.remaining + input.reviewsDue;
+  // A 30-min day leaves review problems due (spacing kept) — its one problem
+  // is served from the queue first anyway.
+  const reviewsDue = input.quick ? 0 : input.reviewsDue;
+  const pile = input.cardsDue + env.remaining + reviewsDue;
   const warmHref =
     input.cardsDue > 0
       ? `/mock?${from('warmup')}#cards`
       : env.remaining > 0
         ? `/envelope?${from('warmup')}&n=${env.remaining}`
-        : input.reviewsDue > 0
+        : reviewsDue > 0
           ? `/grind?${from('warmup')}`
           : '/today';
   const cleared = input.cardsReviewedToday + reviewedProblems + env.doneToday;
@@ -219,13 +237,16 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
     status: pile === 0 ? 'done' : skipped.has('warmup') ? 'skipped' : 'todo',
     href: warmHref,
     detail:
-      pile === 0
+      (input.finalReview && pile > 0
+        ? `Final review before ${input.finalReview.company} (${input.finalReview.daysLeft === 1 ? 'tomorrow' : `in ${input.finalReview.daysLeft} days`}): every open item. `
+        : '') +
+      (pile === 0
         ? 'Nothing due.'
         : [
-            input.cardsDue || input.reviewsDue
+            input.cardsDue || reviewsDue
               ? [
                   input.cardsDue ? plural(input.cardsDue, 'drill card') : null,
-                  input.reviewsDue ? plural(input.reviewsDue, 'review problem') : null,
+                  reviewsDue ? plural(reviewsDue, 'review problem') : null,
                 ]
                   .filter(Boolean)
                   .join(' + ') + ' due'
@@ -233,7 +254,7 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
             env.remaining ? `Envelope ×${env.remaining}` : null,
           ]
             .filter(Boolean)
-            .join(' + '),
+            .join(' + ')),
     result:
       pile === 0
         ? cleared > 0
@@ -245,12 +266,20 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
 
   // --- problems ---------------------------------------------------------------
   const problems = newProblemsToday(input);
+  // The 30-min day's one problem may be a due review re-solve: that is what
+  // the grind serves first, and spacing is the point of the short day.
+  const quickOne = input.quick ? problemsToday(input, true)[0] : undefined;
   (['problem1', 'problem2'] as const).forEach((id, i) => {
-    const p = problems[i];
+    const p = id === 'problem1' && input.quick ? quickOne : problems[i];
+    const off = input.quick && id === 'problem2';
     base.set(id, {
-      status: p ? 'done' : skipped.has(id) ? 'skipped' : 'todo',
+      status: p ? 'done' : skipped.has(id) || off ? 'skipped' : 'todo',
       href: `/grind?${from(id)}`,
-      detail: 'Adaptive pick · Minimal editor · predict before you solve',
+      detail: off
+        ? 'Off today — a 30-min day is one problem.'
+        : id === 'problem2'
+          ? 'Breadth pick: your least-practised topic · predict before you solve'
+          : 'Adaptive pick · Minimal editor · predict before you solve',
       result: p ? problemResult(p) : null,
       ok: p ? p.solved : null,
     });
@@ -264,13 +293,13 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
   // are done with it (Phase H: Skip did nothing while one was open).
   const offRotation = graded && graded.kind !== input.mockKind;
   base.set('mock', {
-    status: graded ? 'done' : skipped.has('mock') ? 'skipped' : open ? 'in-progress' : 'todo',
+    status: graded ? 'done' : skipped.has('mock') ? 'skipped' : open ? 'in-progress' : input.quick ? 'skipped' : 'todo',
     href: graded
       ? `/mock/${graded.id}?${from('mock')}`
       : open
         ? `/mock/${open.id}?${from('mock')}`
         : `/mock?${from('mock')}&kind=${input.mockKind}`,
-    detail: `${input.mockKindLabel} — today's kind`,
+    detail: input.quick && !graded && !open ? 'Off today — a 30-min day has no mock.' : `${input.mockKindLabel} — today's kind`,
     // A different kind than the day's pick is fine — but say so.
     result: graded
       ? `${graded.verdict ?? 'graded'} level${offRotation ? ` · ${mockKindLabelOf(graded.kind)} (today's pick was ${input.mockKindLabel})` : ''}`
@@ -327,6 +356,12 @@ export interface MockKindPickInput {
   grades: readonly { kind: string; verdict: MockVerdict }[];
   /** The last debrief's tomorrowFocus.mockKind. */
   focusKind: string | null;
+  /**
+   * Phase H2: the nearest interview loop's kinds when it is within
+   * LOOP_BIAS_DAYS (shared/loops.biasKinds). Non-empty = the pick comes from
+   * these, ahead of the debrief's focus and the rotation.
+   */
+  loopKinds?: readonly MockKind[];
 }
 
 const VERDICT_SCORE: Record<MockVerdict, number> = { below: 0, at: 1, above: 2 };
@@ -341,6 +376,7 @@ export function kindStrength(grades: MockKindPickInput['grades'], kind: string):
 /**
  * Today's mock kind. In order:
  *   1. one kind → that kind
+ *   1b. an interview loop within LOOP_BIAS_DAYS → one of its round kinds
  *   2. the last debrief named a (still existing) kind → that kind
  *   3. the weakest-graded kind, when it is trending below level (mean < 1 over
  *      its last three) and was not yesterday's → it jumps the queue
@@ -349,6 +385,16 @@ export function kindStrength(grades: MockKindPickInput['grades'], kind: string):
 export function pickMockKind(input: MockKindPickInput): MockKind {
   const kinds = input.kinds.length ? input.kinds : MOCK_KINDS;
   if (kinds.length === 1) return kinds[0];
+  // An interview in a few days: rehearse ITS rounds. Rotate among them so a
+  // loop with coding + system design alternates rather than repeating one; a
+  // kind not yesterday's wins, the weakest of them breaking the tie.
+  const loopKinds = (input.loopKinds ?? []).filter((k) => (kinds as readonly string[]).includes(k));
+  if (loopKinds.length === 1) return loopKinds[0];
+  if (loopKinds.length > 1) {
+    const fresh = loopKinds.filter((k) => k !== input.lastKind);
+    const score = (k: MockKind) => kindStrength(input.grades, k) ?? -1; // never graded = weakest
+    return [...fresh].sort((a, b) => score(a) - score(b) || loopKinds.indexOf(a) - loopKinds.indexOf(b))[0];
+  }
   if (input.focusKind && (kinds as readonly string[]).includes(input.focusKind)) return input.focusKind as MockKind;
 
   const lastIdx = input.lastKind ? (kinds as readonly string[]).indexOf(input.lastKind) : -1;
@@ -367,50 +413,7 @@ export function pickMockKind(input: MockKindPickInput): MockKind {
   return rotation;
 }
 
-// -----------------------------------------------------------------------------
-// Readiness — no LLM, from mastery + mock grades
-// -----------------------------------------------------------------------------
-export interface ReadinessInput {
-  /** Per topic: attempts and tier score 0..1. */
-  topics: readonly { topic: string; attempts: number; score: number; tiered: boolean }[];
-  grades: MockKindPickInput['grades'];
-}
-
-const AREA_KINDS = [
-  { id: 'system-design', label: 'System design' },
-  { id: 'behavioral', label: 'Behavioral' },
-  { id: 'coding', label: 'Coding' },
-] as const;
-
-/** Graded mocks of a kind before its readiness shows as a percentage. */
-export const READINESS_MIN_MOCKS = 3;
-
-export function computeReadiness(input: ReadinessInput): ReadinessArea[] {
-  const practiced = input.topics.filter((t) => t.attempts > 0);
-  const algos: ReadinessArea = practiced.length
-    ? {
-        id: 'algos',
-        label: 'Algorithms',
-        pct: Math.round((input.topics.reduce((s, t) => s + t.score, 0) / Math.max(1, input.topics.length)) * 100),
-        note: `${input.topics.filter((t) => t.tiered).length}/${input.topics.length} topics tiered`,
-      }
-    : { id: 'algos', label: 'Algorithms', pct: null, note: 'not started' };
-
-  // Evidence first (Phase H): one mock flipped an area between 100% and 0%.
-  // Until there are READINESS_MIN_MOCKS grades of a kind it shows the count,
-  // not a percentage.
-  const mocks = AREA_KINDS.map(({ id, label }): ReadinessArea => {
-    const mine = input.grades.filter((g) => g.kind === id);
-    if (!mine.length) return { id, label, pct: null, note: 'not started' };
-    const latest = mine[0];
-    if (mine.length < READINESS_MIN_MOCKS) {
-      return { id, label, pct: null, note: `${mine.length} of ${READINESS_MIN_MOCKS} mocks · last: ${latest.verdict} level` };
-    }
-    const s = kindStrength(input.grades, id)!;
-    return { id, label, pct: Math.round((s / 2) * 100), note: `${mine.length} mocks · last: ${latest.verdict} level` };
-  });
-  return [algos, ...mocks];
-}
+// Readiness moved to readiness.compute.ts (Phase H2: a verdict per area).
 
 // -----------------------------------------------------------------------------
 // Debrief coercion

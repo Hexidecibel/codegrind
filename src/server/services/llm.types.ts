@@ -76,9 +76,12 @@ export type ThinkingMode = 'off' | 'adaptive';
  * is the reason neither of those is a magic number at a call site.
  *
  *   workhorse — the big structured calls (>= 8000 output tokens): problem
- *               generation, the per-submit coaching brief, corpus translation.
- *   small     — the cheap forced-tool calls: hints, session plans, primers,
- *               outlines, lesson bodies.
+ *               generation, the per-submit coaching brief, corpus translation;
+ *               and (Phase H2) the cached-forever teaching content: primers,
+ *               track outlines, lesson bodies, mistake + walkthrough lessons —
+ *               a one-time cost per topic, so quality wins over price.
+ *   small     — the cheap forced-tool calls: hints, session plans, reviews,
+ *               checks, the debrief.
  *   tutor     — the conversational teaching call, one per question actually
  *               asked. The only `text` call in the app.
  */

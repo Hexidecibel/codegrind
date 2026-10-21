@@ -711,7 +711,7 @@
     ]
   },
   "generatePrimer": {
-    "model": "claude-haiku-5-5",
+    "model": "claude-sonnet-5",
     "max_tokens": 2500,
     "thinking": {
       "type": "disabled"
@@ -788,7 +788,7 @@
     ]
   },
   "generateTrackOutline": {
-    "model": "claude-haiku-5-5",
+    "model": "claude-sonnet-5",
     "max_tokens": 2500,
     "thinking": {
       "type": "disabled"
@@ -861,7 +861,7 @@
     ]
   },
   "generateLessonBody": {
-    "model": "claude-haiku-5-5",
+    "model": "claude-sonnet-5",
     "max_tokens": 3000,
     "thinking": {
       "type": "disabled"
@@ -914,7 +914,7 @@
     ]
   },
   "generateMistakeLesson": {
-    "model": "claude-haiku-5-5",
+    "model": "claude-sonnet-5",
     "max_tokens": 3000,
     "thinking": {
       "type": "disabled"
@@ -967,7 +967,7 @@
     ]
   },
   "generateWalkthroughLesson": {
-    "model": "claude-haiku-5-5",
+    "model": "claude-sonnet-5",
     "max_tokens": 3000,
     "thinking": {
       "type": "disabled"

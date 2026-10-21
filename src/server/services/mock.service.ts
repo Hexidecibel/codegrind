@@ -58,7 +58,8 @@ import {
   type GapCardsResponse,
   type GapCardCheck,
 } from '../../shared/gap-cards.js';
-import { db, enqueueReview, getActiveLanguage, getProblem, getSkillState } from './db.js';
+import { db, enqueueReview, getActiveLanguage, getProblem, getSkillState, loopDeadlineMs } from './db.js';
+import { capDueAtIso } from '../../shared/loops.js';
 import { getNextProblem } from './bank.service.js';
 import { runTests } from './sandbox.service.js';
 import type { CallMeta } from './llm.types.js';
@@ -95,6 +96,7 @@ import {
   recentPlannedQuestionIds,
   recentPromptIds,
   toStoredTurns,
+  logCardReview,
   updateCardSchedule,
   updateMock,
   type MockRow,
@@ -670,6 +672,11 @@ export function gradeGapCard(id: number, body: unknown, now = new Date()): GapCa
   // The double-grade guard: a second grade inside a few seconds is a double
   // tap (the client used to re-enable the buttons before the next card loaded).
   if (isDoubleGrade(card.lastReviewedAt, now)) throw new MockError('That card was just graded.', 409);
-  updateCardSchedule(id, scheduleGapCard(card, grade, now));
+  const next = scheduleGapCard(card, grade, now);
+  // Phase H2: with an interview loop ahead, no card is scheduled past its
+  // final-review day (shared/loops.capDueAtIso).
+  if (!next.retiredAt) next.dueAt = capDueAtIso(next.dueAt, now.getTime(), loopDeadlineMs(now.getTime()));
+  logCardReview(id, grade, card.lastReviewedAt ?? card.createdAt, now);
+  updateCardSchedule(id, next);
   return getCard(id)!;
 }
