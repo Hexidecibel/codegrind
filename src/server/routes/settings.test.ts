@@ -74,13 +74,13 @@ describe('GET /api/settings', () => {
   it('reports the default language on a fresh install', async () => {
     const res = await app.request('/api/settings');
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ language: 'javascript', apiKey: NO_KEY });
+    expect(await res.json()).toEqual({ language: 'javascript', apiKey: NO_KEY, aiReviews: true });
   });
 
   it('reports whatever was last written', async () => {
     db.setActiveLanguage('python');
     const res = await app.request('/api/settings');
-    expect(await res.json()).toEqual({ language: 'python', apiKey: NO_KEY });
+    expect(await res.json()).toEqual({ language: 'python', apiKey: NO_KEY, aiReviews: true });
   });
 });
 
@@ -88,7 +88,7 @@ describe('PUT /api/settings', () => {
   it('sets the language and echoes the new state', async () => {
     const res = await put({ language: 'python' });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ language: 'python', apiKey: NO_KEY });
+    expect(await res.json()).toEqual({ language: 'python', apiKey: NO_KEY, aiReviews: true });
     // And it is really persisted, not just reflected back.
     expect(db.getActiveLanguage()).toBe('python');
   });
@@ -96,7 +96,7 @@ describe('PUT /api/settings', () => {
   it('round-trips back to javascript', async () => {
     await put({ language: 'go' });
     const res = await put({ language: 'javascript' });
-    expect(await res.json()).toEqual({ language: 'javascript', apiKey: NO_KEY });
+    expect(await res.json()).toEqual({ language: 'javascript', apiKey: NO_KEY, aiReviews: true });
     expect(db.getActiveLanguage()).toBe('javascript');
   });
 
@@ -181,6 +181,7 @@ describe('the API key, which is a setting and is not like the others', () => {
     expect(await res.json()).toEqual({
       language: 'javascript',
       apiKey: { configured: true, source: 'settings', suffix: 'WXYZ' },
+      aiReviews: true,
     });
   });
 

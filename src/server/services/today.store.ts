@@ -9,7 +9,16 @@
 import { db } from './db.js';
 import type { Language } from '../../shared/languages.js';
 import type { MockVerdict } from '../../shared/mock.js';
-import { isTodayStep, type Debrief, type DebriefUsage, type TodayStepId } from '../../shared/today.js';
+import {
+  STEP_NOTE_IDS,
+  isTodayStep,
+  type AiReviewTarget,
+  type Debrief,
+  type DebriefUsage,
+  type StepNote,
+  type StepNotes,
+  type TodayStepId,
+} from '../../shared/today.js';
 import type { TodayAttemptRow, TodayMockRow } from './today.compute.js';
 
 export interface DailySessionRow {
@@ -20,7 +29,12 @@ export interface DailySessionRow {
   debrief: Debrief | null;
   debriefUsage: DebriefUsage | null;
   debriefAt: string | null;
+  stepNotes: StepNotes;
+  /** Failed automatic attempts per target: the retry budget (today.compute.pendingReviews). */
+  aiFailures: AiFailures;
 }
+
+export type AiFailures = Partial<Record<AiReviewTarget, { n: number; at: string }>>;
 
 let stmts: ReturnType<typeof prepare> | null = null;
 function prepare() {
@@ -41,6 +55,18 @@ function prepare() {
     setDebrief: db.prepare(`
       UPDATE daily_sessions SET debrief = @debrief, debriefUsage = @usage, debriefAt = @now, updatedAt = @now
       WHERE date = @date
+    `),
+    setStepNotes: db.prepare(`UPDATE daily_sessions SET stepNotes = @notes, updatedAt = @now WHERE date = @date`),
+    setAiFailures: db.prepare(`UPDATE daily_sessions SET aiFailures = @failures, updatedAt = @now WHERE date = @date`),
+    recognizeSince: db.prepare(`
+      SELECT r.problemId, COALESCE(p.title, '') AS title, r.topic, r.picked, r.patternCorrect, r.approach, r.grade, r.aiVerdict
+      FROM recognize_attempts r LEFT JOIN problems p ON p.id = r.problemId
+      WHERE r.createdAt >= ? ORDER BY r.createdAt ASC
+    `),
+    cardsDetailSince: db.prepare(`
+      SELECT g.concept, g.title, g.summary, g.answer, g.lastGrade, COALESCE(m.kind, '') AS kind
+      FROM mock_gaps g LEFT JOIN mocks m ON m.id = g.mockId
+      WHERE g.lastReviewedAt >= ? ORDER BY g.lastReviewedAt ASC
     `),
     attemptsSince: db.prepare(`
       SELECT a.problemId, COALESCE(p.title, '(deleted problem)') AS title, a.pattern, a.difficulty,
@@ -90,6 +116,8 @@ interface RawDay {
   debrief: string | null;
   debriefUsage: string | null;
   debriefAt: string | null;
+  stepNotes?: string | null;
+  aiFailures?: string | null;
 }
 
 function safeJson<T>(s: string | null): T | null {
@@ -112,7 +140,57 @@ function parseDay(r: RawDay | undefined): DailySessionRow | null {
     debrief: safeJson<Debrief>(r.debrief),
     debriefUsage: safeJson<DebriefUsage>(r.debriefUsage),
     debriefAt: r.debriefAt,
+    stepNotes: parseNotes(safeJson<Record<string, unknown>>(r.stepNotes ?? null)),
+    aiFailures: safeJson<AiFailures>(r.aiFailures ?? null) ?? {},
   };
+}
+
+function parseNotes(raw: Record<string, unknown> | null): StepNotes {
+  const out: StepNotes = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const id of STEP_NOTE_IDS) {
+    const n = raw[id] as StepNote | undefined;
+    if (n && typeof n.note === 'string' && typeof n.carry === 'string') out[id] = n;
+  }
+  return out;
+}
+
+export function setStepNotes(date: string, notes: StepNotes, now: Date): void {
+  S().setStepNotes.run({ date, notes: JSON.stringify(notes), now: now.toISOString() });
+}
+
+export function setAiFailures(date: string, failures: AiFailures, now: Date): void {
+  S().setAiFailures.run({ date, failures: JSON.stringify(failures), now: now.toISOString() });
+}
+
+export interface TodayRecognizeRow {
+  problemId: string;
+  title: string;
+  topic: string;
+  picked: string | null;
+  patternCorrect: boolean;
+  approach: string;
+  grade: string;
+  aiVerdict: string | null;
+}
+
+export function recognizeSince(iso: string): TodayRecognizeRow[] {
+  return (S().recognizeSince.all(iso) as Array<Omit<TodayRecognizeRow, 'patternCorrect'> & { patternCorrect: number }>).map(
+    (r) => ({ ...r, patternCorrect: r.patternCorrect === 1 })
+  );
+}
+
+export function cardsDetailSince(
+  iso: string
+): { concept: string; title: string; summary: string; answer: string; lastGrade: string | null; kind: string }[] {
+  return S().cardsDetailSince.all(iso) as {
+    kind: string;
+    concept: string;
+    title: string;
+    summary: string;
+    answer: string;
+    lastGrade: string | null;
+  }[];
 }
 
 export function getDay(date: string): DailySessionRow | null {

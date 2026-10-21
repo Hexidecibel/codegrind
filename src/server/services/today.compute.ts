@@ -14,6 +14,7 @@ import {
   SKIPPABLE_STEPS,
   TODAY_STEPS,
   TODAY_STEP_LABEL,
+  type AiReviewTarget,
   type Debrief,
   type ReadinessArea,
   type TodayStep,
@@ -414,4 +415,107 @@ export const DAILY_FOCUS_BIAS = 0.25;
 
 export function dailyFocusBias(topic: string, focus: readonly string[] | undefined): number {
   return focus?.includes(topic) ? DAILY_FOCUS_BIAS : 0;
+}
+
+// -----------------------------------------------------------------------------
+// Phase F: which automatic reviews to run, and the miss bias
+// -----------------------------------------------------------------------------
+/** Failed automatic attempts per target per day before it gives up for the day. */
+export const MAX_AI_ATTEMPTS = 2;
+/** Minimum wait after a failure before the next attempt (study.service's number). */
+export const FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
+
+export interface PendingReviewsInput {
+  /** The steps derived for the day. */
+  steps: readonly Pick<TodayStep, 'id' | 'status'>[];
+  /** Warm-up things actually cleared today (cards graded + review re-solves). */
+  warmupActivity: number;
+  /** The Recognize add-on reached its set size today. */
+  recognizeDone: boolean;
+  /** Ids that already have a note. */
+  noted: readonly string[];
+  hasDebrief: boolean;
+  failures: Partial<Record<AiReviewTarget, { n: number; at: string }>>;
+  enabled: boolean;
+  now: number;
+}
+
+/**
+ * The automatic reviews to run now, in order (step reviews first, the debrief
+ * last so it reads their notes). Pure. Never returns a target that has a
+ * result, that failed MAX_AI_ATTEMPTS times today, or that failed inside the
+ * cooldown — so polling GET /api/today can never become a retry loop.
+ */
+export function pendingReviews(input: PendingReviewsInput): AiReviewTarget[] {
+  if (!input.enabled) return [];
+  const status = new Map(input.steps.map((s) => [s.id, s.status]));
+  const eligible: AiReviewTarget[] = [];
+  if (status.get('warmup') === 'done' && input.warmupActivity > 0) eligible.push('warmup');
+  if (input.recognizeDone) eligible.push('recognize');
+  for (const id of ['problem1', 'problem2', 'mock'] as const) if (status.get(id) === 'done') eligible.push(id);
+
+  const allSettled = SKIPPABLE_STEPS.every((id) => ['done', 'skipped'].includes(status.get(id) ?? ''));
+  // Real activity, not just "done": a warm-up with nothing due is done but empty.
+  const anyDone =
+    input.warmupActivity > 0 ||
+    input.recognizeDone ||
+    (['problem1', 'problem2', 'mock'] as const).some((id) => status.get(id) === 'done');
+  if (!input.hasDebrief && allSettled && anyDone) eligible.push('debrief');
+
+  const allowed = (t: AiReviewTarget) => {
+    const f = input.failures[t];
+    if (!f) return true;
+    if (f.n >= MAX_AI_ATTEMPTS) return false;
+    return input.now - Date.parse(f.at) >= FAILURE_COOLDOWN_MS;
+  };
+  return eligible.filter((t) => (t === 'debrief' || !input.noted.includes(t)) && allowed(t));
+}
+
+/** One more failure for a target. Pure. */
+export function bumpFailure(
+  failures: PendingReviewsInput['failures'],
+  target: AiReviewTarget,
+  now: Date
+): PendingReviewsInput['failures'] {
+  return { ...failures, [target]: { n: (failures[target]?.n ?? 0) + 1, at: now.toISOString() } };
+}
+
+/**
+ * How much a topic missed TODAY (a Recognize miss/shaky, a drill card graded
+ * missed/shaky that names the pattern) leans problem1/2 toward it. Smaller
+ * than DAILY_FOCUS_BIAS: a same-day nudge, never a takeover.
+ */
+export const MISS_FOCUS_BIAS = 0.15;
+
+export function missFocusBias(topic: string, misses: readonly string[] | undefined): number {
+  return misses?.includes(topic) ? MISS_FOCUS_BIAS : 0;
+}
+
+const topicWords = (t: string) => t.replace(/-/g, ' ');
+
+/**
+ * Today's missed topics, deterministic and ordered (recognize first, then cards,
+ * each in the order missed; deduped). Cards carry mock concepts, not topics, so
+ * a card counts only when it came from a CODING mock and its text names a
+ * topic ("sliding window", "heap") — a system-design card about "consistent
+ * hashing" is not a hash-map problem.
+ */
+export function missTopicsToday(input: {
+  recognize: readonly { topic: string; grade: string }[];
+  cards: readonly { title: string; summary: string; answer: string; lastGrade: string | null; kind: string }[];
+}): Topic[] {
+  const valid = new Set<string>(TOPICS as readonly string[]);
+  const out: Topic[] = [];
+  const add = (t: string) => {
+    if (valid.has(t) && !out.includes(t as Topic)) out.push(t as Topic);
+  };
+  for (const r of input.recognize) if (r.grade === 'missed' || r.grade === 'shaky') add(r.topic);
+  for (const c of input.cards) {
+    if (c.kind !== 'coding' || (c.lastGrade !== 'missed' && c.lastGrade !== 'shaky')) continue;
+    const text = ` ${`${c.title} ${c.summary} ${c.answer}`.toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `;
+    for (const t of TOPICS) {
+      if (text.includes(` ${topicWords(t)} `) || text.includes(` ${t} `)) add(t);
+    }
+  }
+  return out.slice(0, 4);
 }

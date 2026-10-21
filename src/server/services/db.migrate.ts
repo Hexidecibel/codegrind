@@ -415,6 +415,74 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
         );
       `);
 
+      // Phase F (AI review on every step). Always-run, self-detecting:
+      //   daily_sessions.stepNotes   JSON StepNotes — one AI note per finished step
+      //   daily_sessions.aiFailures  JSON {target: {n, at}} — the retry budget, so a
+      //                              dead model can never turn GET /api/today into
+      //                              a retry loop
+      //   recognize_checks           the Recognize AI check, cached per
+      //                              (problem, pick, answer) so an identical answer
+      //                              is never paid for twice
+      //   ai_usage                   the spend ledger: one row per model call,
+      //                              written by llm.client's usage recorder. Created
+      //                              WITH a one-time backfill from the two places
+      //                              usage was stored before it (mocks.usage, the
+      //                              debrief) so "this month" is not zero on day one.
+      if (tableExists(db, 'daily_sessions')) {
+        addColumnIfMissing(db, 'daily_sessions', 'stepNotes', 'TEXT');
+        addColumnIfMissing(db, 'daily_sessions', 'aiFailures', 'TEXT');
+      }
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS recognize_checks (
+          key        TEXT PRIMARY KEY,           -- sha256(problemId|pick|normalized answer)
+          problemId  TEXT NOT NULL,
+          result     TEXT NOT NULL,              -- JSON RecognizeCheck (cost as paid)
+          createdAt  TEXT NOT NULL
+        );
+      `);
+      const hadLedger = tableExists(db, 'ai_usage');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ai_usage (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          at           TEXT NOT NULL,
+          source       TEXT NOT NULL,            -- the forced tool's name, 'text', or 'backfill:*'
+          role         TEXT NOT NULL,
+          model        TEXT NOT NULL,
+          inputTokens  INTEGER NOT NULL DEFAULT 0,
+          outputTokens INTEGER NOT NULL DEFAULT 0,
+          cacheRead    INTEGER NOT NULL DEFAULT 0,
+          cacheWrite   INTEGER NOT NULL DEFAULT 0,
+          costUsd      REAL                      -- NULL = unpriced (a local model)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_usage_at ON ai_usage (at);
+      `);
+      if (!hadLedger) {
+        if (tableExists(db, 'mocks') && columnExists(db, 'mocks', 'usage')) {
+          db.exec(`
+            INSERT INTO ai_usage (at, source, role, model, inputTokens, outputTokens, cacheRead, cacheWrite, costUsd)
+            SELECT createdAt, 'backfill:mock', 'workhorse',
+                   COALESCE(json_extract(usage, '$.models[0]'), 'unknown'),
+                   COALESCE(json_extract(usage, '$.inputTokens'), 0),
+                   COALESCE(json_extract(usage, '$.outputTokens'), 0),
+                   COALESCE(json_extract(usage, '$.cacheReadTokens'), 0),
+                   COALESCE(json_extract(usage, '$.cacheWriteTokens'), 0),
+                   json_extract(usage, '$.costUsd')
+            FROM mocks WHERE json_valid(usage) AND COALESCE(json_extract(usage, '$.calls'), 0) > 0;
+          `);
+        }
+        if (tableExists(db, 'daily_sessions')) {
+          db.exec(`
+            INSERT INTO ai_usage (at, source, role, model, inputTokens, outputTokens, costUsd)
+            SELECT COALESCE(debriefAt, updatedAt), 'backfill:debrief', 'small',
+                   COALESCE(json_extract(debriefUsage, '$.model'), 'unknown'),
+                   COALESCE(json_extract(debriefUsage, '$.inputTokens'), 0),
+                   COALESCE(json_extract(debriefUsage, '$.outputTokens'), 0),
+                   json_extract(debriefUsage, '$.costUsd')
+            FROM daily_sessions WHERE debriefUsage IS NOT NULL AND json_valid(debriefUsage);
+          `);
+        }
+      }
+
       // --- VERSIONED ----------------------------------------------------------
       // Expensive or destructive. Gated on the version marker so a warm database
       // doesn't pay on every boot — but each step still asks the DATABASE

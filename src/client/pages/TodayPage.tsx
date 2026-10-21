@@ -2,9 +2,11 @@
 // TodayPage — the guided daily routine, the app's landing page
 // =============================================================================
 // One highlighted current step with a big Start / Continue button; done steps
-// show how they went; a progress bar, the streak and per-area readiness on
-// top; the debrief at the bottom. Everything here is a free GET except the
-// "Debrief me" button, which is the day's one (small, cached) model call.
+// show how they went, each with a short AI step review and what to carry into
+// the next step; a progress bar, the streak, AI spend and per-area readiness on
+// top; the debrief at the bottom. The reviews and the debrief are written
+// server-side (once each, gated by Settings → AI reviews); this page only
+// reads, polling briefly while one is pending.
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -12,6 +14,7 @@ import {
   ArrowRight,
   CalendarCheck,
   Check,
+  Coins,
   Flame,
   Loader2,
   Lock,
@@ -23,7 +26,7 @@ import {
   Trophy,
   Wrench,
 } from 'lucide-react';
-import type { TodayState, TodayStep } from '@/shared/today';
+import type { StepNote, TodayState, TodayStep } from '@/shared/today';
 import { mockKindInfo } from '@/shared/mock-kinds';
 import { endTodayEarly, getToday, runTodayDebrief, skipTodayStep, ApiError } from '@/client/lib/api';
 import { humanize } from '@/client/lib/format';
@@ -44,6 +47,13 @@ function Header({ state }: { state: TodayState }) {
           <CalendarCheck className="h-6 w-6 text-primary" /> Today
         </h1>
         <span className="text-sm text-muted-foreground">{longDate(state.date)}</span>
+        <span
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+          title={`Every model call the app made: ${state.spend.todayCalls} today, ${state.spend.monthCalls} this month${state.aiReviews ? '' : ' · AI reviews are off (Settings)'}`}
+        >
+          <Coins className="h-3.5 w-3.5" /> AI ${state.spend.todayUsd.toFixed(2)} today · ${state.spend.monthUsd.toFixed(2)} this month
+          {!state.aiReviews && <span className="ml-1 rounded bg-secondary px-1.5 py-0.5 text-[10px]">reviews off</span>}
+        </span>
         <span
           className="ml-auto inline-flex items-center gap-1 text-sm font-semibold"
           title="Consecutive days with practice"
@@ -94,6 +104,31 @@ function Header({ state }: { state: TodayState }) {
   );
 }
 
+/** The AI step review under a finished step: what happened + what to carry. */
+function StepNoteLine({ note, pending }: { note: StepNote | undefined; pending: boolean }) {
+  if (!note && !pending) return null;
+  if (!note) {
+    return (
+      <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" /> AI reviewing this step…
+      </p>
+    );
+  }
+  return (
+    <div className="mt-1.5 space-y-0.5 rounded-md border border-border/60 bg-secondary/30 px-2.5 py-1.5 text-xs">
+      <p className="whitespace-pre-line text-foreground/85">
+        <Sparkles className="mr-1 inline h-3 w-3 text-primary" />
+        {note.note}
+      </p>
+      {note.carry && (
+        <p className="text-muted-foreground">
+          <span className="font-medium text-foreground/90">Carry:</span> {note.carry}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function StepIcon({ step, index }: { step: TodayStep; index: number }) {
   const base = 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold';
   if (step.status === 'done') return <div className={cn(base, 'bg-emerald-500/15 text-emerald-400')}><Check className="h-4 w-4" /></div>;
@@ -114,12 +149,16 @@ function StepRow({
   onSkip,
   onUnskip,
   extra,
+  note,
+  notePending = false,
 }: {
   step: TodayStep;
   index: number;
   busy: boolean;
   onSkip: () => void;
   onUnskip: () => void;
+  note?: StepNote;
+  notePending?: boolean;
   /** A sub-row under the step (the warm-up's optional Recognize add-on). */
   extra?: ReactNode;
 }) {
@@ -159,6 +198,7 @@ function StepRow({
               {step.status === 'locked' ? 'Unlocks after the mock (or end the day early).' : step.detail}
             </p>
           )}
+          <StepNoteLine note={note} pending={notePending} />
         </div>
         {step.status === 'skipped' && (
           <Button variant="ghost" size="sm" onClick={onUnskip} disabled={busy} className="text-muted-foreground">
@@ -193,7 +233,7 @@ function StepRow({
  * "Recognize ×5": optional, never a step (it does not block the day or count
  * toward the progress bar). Highlighted when the server says you're rusty.
  */
-function RecognizeRow({ r }: { r: TodayState['recognize'] }) {
+function RecognizeRow({ r, note, pending }: { r: TodayState['recognize']; note?: StepNote; pending: boolean }) {
   return (
     <div
       className={cn(
@@ -217,6 +257,7 @@ function RecognizeRow({ r }: { r: TodayState['recognize'] }) {
           {r.reason}
           {!r.done && r.doneToday > 0 ? ` · ${r.doneToday} done today` : ''}
         </div>
+        <StepNoteLine note={note} pending={pending} />
       </div>
       <Button asChild size="sm" variant={r.recommended && !r.done ? 'default' : 'outline'} className="gap-1">
         <Link to={r.href}>
@@ -248,12 +289,21 @@ function DebriefPanel({
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
             One short AI read of today — what went well, what to fix (each with a concrete drill), and what
-            tomorrow should lean on. Runs only when you click, once per day.
+            tomorrow should lean on.{' '}
+            {state.aiReviews
+              ? 'Written automatically once every step is done or skipped (or you end the day early).'
+              : 'AI reviews are off, so it runs only when you click.'}
           </p>
-          <Button size="lg" onClick={() => onRun(false)} disabled={busy} className="gap-2">
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            {busy ? 'Reading your day…' : `Debrief me (~$${state.debriefEstimateUsd.toFixed(2)})`}
-          </Button>
+          {state.aiPending.includes('debrief') ? (
+            <p className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Writing your debrief…
+            </p>
+          ) : (
+            <Button size="lg" onClick={() => onRun(false)} disabled={busy} className="gap-2">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              {busy ? 'Reading your day…' : `Debrief me now (~$${state.debriefEstimateUsd.toFixed(2)})`}
+            </Button>
+          )}
         </div>
       ) : (
         <div className="space-y-4">
@@ -350,6 +400,23 @@ export function TodayPage() {
       .catch((e: Error) => setError(e.message));
   }, []);
 
+  // Step reviews / the auto debrief are written server-side in the background.
+  // While any is pending, re-read every few seconds — bounded, never a loop.
+  const [polls, setPolls] = useState(0);
+  const pendingKey = state?.aiPending.join(',') ?? '';
+  useEffect(() => {
+    if (!pendingKey || polls >= 20) return;
+    const t = setTimeout(() => {
+      getToday()
+        .then((s) => {
+          setState(s);
+          setPolls((n) => n + 1);
+        })
+        .catch(() => setPolls(20));
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [pendingKey, polls]);
+
   // A #debrief link from another screen scrolls once the panel exists.
   useEffect(() => {
     if (state && window.location.hash === '#debrief') {
@@ -413,7 +480,17 @@ export function TodayPage() {
               busy={busy}
               onSkip={() => act(() => skipTodayStep(s.id, true))}
               onUnskip={() => act(() => skipTodayStep(s.id, false))}
-              extra={s.id === 'warmup' && state.recognize ? <RecognizeRow r={state.recognize} /> : undefined}
+              note={s.id === 'debrief' ? undefined : state.stepNotes[s.id]}
+              notePending={s.id !== 'debrief' && state.aiPending.includes(s.id)}
+              extra={
+                s.id === 'warmup' && state.recognize ? (
+                  <RecognizeRow
+                    r={state.recognize}
+                    note={state.stepNotes.recognize}
+                    pending={state.aiPending.includes('recognize')}
+                  />
+                ) : undefined
+              }
             />
           ))}
         </ol>

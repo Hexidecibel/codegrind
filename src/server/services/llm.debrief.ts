@@ -5,17 +5,18 @@
 // this file to it): a prompt and a schema in, a coerced answer out, and not one
 // word about who answers.
 //
-//   runDebrief   once per local day, ONLY when the user clicks "Debrief me"
-//                (or Regenerate). role `small`, thinking OFF, forced tool
-//                `emit_debrief`, 1500 output tokens. Cached per day in
-//                daily_sessions; nothing ever calls it in the background.
+//   runDebrief   once per local day: automatically when the day is settled
+//                (Phase F, gated by the "AI reviews" toggle, at most twice on
+//                failure), or on "Debrief me" / Regenerate. role `small`,
+//                thinking OFF, forced tool `emit_debrief`, 1500 output tokens.
+//                Cached per day in daily_sessions.
 //
 // The input is a compact digest of the day — never code, never transcripts —
 // so a call is ~1-2k input tokens and a few hundred out.
 
 import { TOPICS } from '../../shared/types.js';
 import { MOCK_KINDS } from '../../shared/mock-kinds.js';
-import type { Debrief } from '../../shared/today.js';
+import { renderCarryBlock, type CarryNote, type Debrief } from '../../shared/today.js';
 import { structured } from './llm.client.js';
 import type { CallMeta, ToolSpec } from './llm.types.js';
 import { coerceDebrief } from './today.compute.js';
@@ -42,6 +43,8 @@ export interface DebriefInput {
   cards: { reviewed: number; got: number; shaky: number; missed: number };
   /** 7 days: attempts, solved, mean first-submit pass ratio, top mistake tags. */
   week: { activeDays: number; attempts: number; solved: number; firstSubmitPassPct: number | null; topMistakes: string[] };
+  /** Today's step notes (Phase F). Absent/empty renders nothing, byte-identical to before. */
+  stepNotes?: CarryNote[];
 }
 
 export const DEBRIEF_SYSTEM = `You are a blunt, specific interview-prep coach reviewing ONE day of practice for a candidate targeting Staff engineer roles. The day's routine: a warm-up of drill cards and review problems, two adaptive algorithm problems (predict complexity before solving), and one mock interview.
@@ -116,7 +119,7 @@ export function renderDebriefInput(d: DebriefInput): string {
       d.week.firstSubmitPassPct === null ? 'n/a' : `${d.week.firstSubmitPassPct}%`
     }, top mistakes: ${d.week.topMistakes.length ? d.week.topMistakes.join(', ') : 'none'}`
   );
-  return lines.join('\n');
+  return lines.join('\n') + renderCarryBlock(d.stepNotes ?? []);
 }
 
 export async function runDebrief(input: DebriefInput): Promise<{ debrief: Debrief; meta: CallMeta }> {

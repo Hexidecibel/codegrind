@@ -7,7 +7,9 @@
 //
 //   free     the session, the pattern check (auto), the reveal (stored primer +
 //            cached note), the self-grade, the SRS ladder
-//   1 call   "AI check my approach" — only on click, role `small`, never automatic
+//   1 call   the AI check, role `small`: automatic on reveal when "AI reviews"
+//            is on (Phase F) and the approach is not blank, else on click.
+//            Cached per (problem, pick, answer): an identical answer is free.
 //
 // It is NOT grinding. A recognize card never writes `attempts`, `skill_state`,
 // tier credit or `review_queue`. Its only footprint outside its own tables is
@@ -66,6 +68,8 @@ export interface RecognizeReveal {
   /** Problem-specific insight + optimal complexity, cached from an earlier AI check. */
   note: RecognizeNote | null;
   language: string;
+  /** "AI reviews" is on: the page runs the check automatically after reveal. */
+  autoCheck: boolean;
 }
 
 export interface RecognizeNote {
@@ -91,7 +95,10 @@ export interface RecognizeCheck {
   note: RecognizeNote;
   /** The grade the verdict suggests; the user still clicks. */
   suggested: GapCardGrade;
+  /** What THIS request cost: 0 when served from the cache. */
   costUsd: number | null;
+  /** Served from the per-answer cache, no call made. */
+  cached?: boolean;
 }
 
 export interface RecognizeGradeRequest {

@@ -24,7 +24,7 @@ import { planSession, type SessionSnapshotTopic } from '../services/llm.service.
 import { nextIntent, peekUpNext, type SchedulerIntent } from '../services/scheduler.service.js';
 import { getAdaptiveProblem } from '../services/bank.service.js';
 import { errorBody } from '../services/explain.service.js';
-import { dailyFocus } from '../services/today.service.js';
+import { dailyFocus, todayMissTopics } from '../services/today.service.js';
 
 export const sessionRoutes = new Hono();
 
@@ -94,7 +94,9 @@ sessionRoutes.post('/session/start', async (c) => {
 
     // The last debrief's tomorrowFocus: a light lean, never a pin.
     const focus = dailyFocus();
-    const intent = nextIntent({ language, plan, dailyFocus: focus });
+    // Today's Recognize / drill-card misses: a smaller same-day lean.
+    const misses = todayMissTopics();
+    const intent = nextIntent({ language, plan, dailyFocus: focus, missFocus: misses });
     const record = await getAdaptiveProblem(intent);
 
     createSession(language, sessionId, plan);
@@ -105,7 +107,7 @@ sessionRoutes.post('/session/start', async (c) => {
       plan,
       problem: toPlayerProblem(record),
       why: intentToWhy(intent),
-      upNext: peekUpNext({ language, plan, avoidTopic: intent.topic, dailyFocus: focus }),
+      upNext: peekUpNext({ language, plan, avoidTopic: intent.topic, dailyFocus: focus, missFocus: misses }),
     };
     return c.json(payload);
   } catch (err) {
@@ -137,12 +139,14 @@ sessionRoutes.post('/session/:id/next', async (c) => {
     if (typeof skipProblemId === 'string' && skipProblemId) snoozeReview(skipProblemId);
 
     const focus = dailyFocus();
+    const misses = todayMissTopics();
     const intent = nextIntent({
       // The language the sitting STARTED in — see createSession above.
       language: session.language,
       plan: session.plan,
       avoidTopic: session.lastTopic ?? undefined,
       dailyFocus: focus,
+      missFocus: misses,
     });
     const record = await getAdaptiveProblem(intent);
     bumpSession(id, intent.topic);
@@ -156,6 +160,7 @@ sessionRoutes.post('/session/:id/next', async (c) => {
         plan: session.plan,
         avoidTopic: intent.topic,
         dailyFocus: focus,
+        missFocus: misses,
       }),
     };
     return c.json(payload);

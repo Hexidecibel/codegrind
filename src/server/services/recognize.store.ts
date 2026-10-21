@@ -56,6 +56,10 @@ function prepare() {
       VALUES (@problemId, @keyInsight, @time, @space, @now)
       ON CONFLICT(problemId) DO UPDATE SET keyInsight = @keyInsight, time = @time, space = @space
     `),
+    getCheck: db.prepare(`SELECT result FROM recognize_checks WHERE key = ?`),
+    putCheck: db.prepare(`
+      INSERT OR REPLACE INTO recognize_checks (key, problemId, result, createdAt) VALUES (@key, @problemId, @result, @now)
+    `),
   };
 }
 const S = () => (stmts ??= prepare());
@@ -150,4 +154,19 @@ export function getNote(problemId: string): RecognizeNote | null {
 
 export function putNote(problemId: string, note: RecognizeNote, now: Date): void {
   S().putNote.run({ problemId, ...note, now: now.toISOString() });
+}
+
+/** A cached AI check for this exact (problem, pick, answer) key, or null. */
+export function getCheck<T>(key: string): T | null {
+  const row = S().getCheck.get(key) as { result: string } | undefined;
+  if (!row) return null;
+  try {
+    return JSON.parse(row.result) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function putCheck(key: string, problemId: string, result: unknown, now: Date): void {
+  S().putCheck.run({ key, problemId, result: JSON.stringify(result), now: now.toISOString() });
 }

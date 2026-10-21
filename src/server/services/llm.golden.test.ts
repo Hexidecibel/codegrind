@@ -135,6 +135,15 @@ const TOOL_RESULTS: Record<string, Record<string, unknown>> = {
     optimalTime: 'O(n)',
     optimalSpace: 'O(1)',
   },
+  emit_card_grade: {
+    grade: 'shaky',
+    why: 'Named the cache, not the invalidation.',
+    missing: ['TTL on writes'],
+  },
+  emit_step_review: {
+    note: 'Passed Pair Sum on the first submit; predicted O(n) and wrote O(n).',
+    carry: 'Say the loop invariant out loud before you type.',
+  },
   emit_translations: {
     translations: [
       { id: 'primer:arrays', code: 'i = 0' },
@@ -168,6 +177,17 @@ const llm = await import('./llm.service.js');
 const debriefLlm = await import('./llm.debrief.js');
 // The Recognize drill's optional AI check; same seam, same fixture.
 const recognizeLlm = await import('./llm.recognize.js');
+// Phase F's automatic reviews: card grading and step reviews; same seam.
+const reviewLlm = await import('./llm.review.js');
+// Every call reaches the usage ledger through ONE hook in llm.client.
+const usageEvents: { source: string; role: string }[] = [];
+(await import('./llm.client.js')).useUsageRecorder((e) => usageEvents.push({ source: e.source, role: e.role }));
+
+/** Today's notes as the carry-forward entries render them. */
+const CARRY = [
+  { step: 'Warm-up', note: 'Two cards shaky on caching.', carry: 'Name the invalidation rule first.' },
+  { step: 'Problem 1', note: 'Passed with one hint; predicted O(n), wrote O(n^2).', carry: 'Check the inner loop before Submit.' },
+];
 
 // -----------------------------------------------------------------------------
 // Fixed inputs. Every one of these is a constant on purpose: a body that varies
@@ -253,6 +273,8 @@ const CAPTURED: Record<string, unknown> = {
     })
   ),
   coach: await capture(() => llm.coach(PROBLEM, USER_CODE, RESULTS, PREDICTION)),
+  // An EMPTY carry must be byte-identical to `coach` above (asserted below).
+  'coach +carry': await capture(() => llm.coach(PROBLEM, USER_CODE, RESULTS, PREDICTION, CARRY)),
   hint: await capture(() => llm.hint(PROBLEM, USER_CODE, 2)),
   planSession: await capture(() =>
     llm.planSession([
@@ -325,6 +347,33 @@ const CAPTURED: Record<string, unknown> = {
       approach: 'Two pointers from both ends; move the smaller side. O(n) time, O(1) space.',
     })
   ),
+  'runDebrief +carry': await capture(() =>
+    debriefLlm.runDebrief({
+      date: '2026-10-21',
+      attempts: [],
+      mock: null,
+      skipped: [],
+      cards: { reviewed: 2, got: 0, shaky: 2, missed: 0 },
+      week: { activeDays: 1, attempts: 1, solved: 1, firstSubmitPassPct: null, topMistakes: [] },
+      stepNotes: CARRY,
+    })
+  ),
+  runCardCheck: await capture(() =>
+    reviewLlm.runCardCheck({
+      question: 'How do you keep a read-through cache consistent with the database?',
+      reference: 'Invalidate (or update) the cache entry on every write, with a TTL as the safety net; read-through fills misses.',
+      summary: 'Did not mention invalidation on writes.',
+      answer: 'um so basically you put a cache in front of the database and uh reads go there first and if it misses you load it',
+    })
+  ),
+  runStepReview: await capture(() =>
+    reviewLlm.runStepReview({
+      step: 'Problem 1',
+      next: 'Problem 2 (another adaptive algorithm problem)',
+      digest: ['"Pair Sum" (two-pointer, easy): PASSED after 1 submit, 0 hints, last run 10/10 tests', 'Predicted O(n) time / O(1) space'],
+      earlier: [CARRY[0]],
+    })
+  ),
 };
 
 if (UPDATE) {
@@ -336,13 +385,34 @@ const GOLDEN = JSON.parse(readFileSync(FIXTURE, 'utf8')) as Record<string, unkno
 
 // =============================================================================
 describe('the request body of every LLM call site', () => {
-  it('covers all thirteen call sites', () => {
-    // Fourteen entries, thirteen sites: generateProblem is captured twice. The
-    // twelfth is the Today debrief (llm.debrief.ts), the thirteenth the
-    // Recognize AI check (llm.recognize.ts). If a fourteenth site is added, it
-    // belongs here before it ships.
-    expect(Object.keys(CAPTURED)).toHaveLength(14);
+  it('covers all fifteen call sites', () => {
+    // Eighteen entries, fifteen sites: generateProblem is captured twice, and
+    // coach and runDebrief each once more WITH Phase F carry notes. The twelfth
+    // site is the Today debrief (llm.debrief.ts), the thirteenth the Recognize
+    // AI check (llm.recognize.ts), the fourteenth and fifteenth Phase F's card
+    // grading and step review (llm.review.ts). A sixteenth site belongs here
+    // before it ships.
+    expect(Object.keys(CAPTURED)).toHaveLength(18);
     expect(Object.keys(GOLDEN)).toEqual(Object.keys(CAPTURED));
+  });
+
+  it('carry notes only APPEND to the user message: system, tools and the prefix are untouched', () => {
+    const plain = CAPTURED.coach as { system: unknown; tools: unknown; messages: { content: string }[] };
+    const carried = CAPTURED['coach +carry'] as typeof plain;
+    expect(JSON.stringify(carried.system)).toBe(JSON.stringify(plain.system));
+    expect(JSON.stringify(carried.tools)).toBe(JSON.stringify(plain.tools));
+    const a = plain.messages[0].content;
+    const b = carried.messages[0].content;
+    expect(b.startsWith(a)).toBe(true);
+    expect(b.slice(a.length)).toMatch(/^\n\nEARLIER TODAY[\s\S]*Check the inner loop before Submit\.$/);
+  });
+
+  it('every call reached the usage recorder exactly once, named by its tool', () => {
+    // 18 captures + nothing else: the ledger sees each call once.
+    expect(usageEvents).toHaveLength(18);
+    expect(usageEvents.filter((e) => e.source === 'emit_card_grade')).toEqual([{ source: 'emit_card_grade', role: 'small' }]);
+    expect(usageEvents.filter((e) => e.source === 'emit_step_review')).toEqual([{ source: 'emit_step_review', role: 'small' }]);
+    expect(usageEvents.filter((e) => e.source === 'text')).toHaveLength(1); // the tutor chat
   });
 
   for (const name of Object.keys(CAPTURED)) {

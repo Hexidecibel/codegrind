@@ -19,6 +19,10 @@
 
 import { nanoid } from 'nanoid';
 import { DEFAULT_MOCK_LEVEL, isMockLevel, type MockLevel } from '../../shared/sd.js';
+import { renderCarryBlock } from '../../shared/today.js';
+import { todayCarryNotes } from './today.service.js';
+import { aiReviewsEnabled, costOfMeta } from './ai-usage.service.js';
+import { isNoAnswer, runCardCheck } from './llm.review.js';
 import {
   DEFAULT_MOCK_KIND,
   MOCK_KINDS,
@@ -50,6 +54,7 @@ import {
   scheduleGapCard,
   type GapCard,
   type GapCardsResponse,
+  type GapCardCheck,
 } from '../../shared/gap-cards.js';
 import { db, enqueueReview, getActiveLanguage, getProblem, getSkillState } from './db.js';
 import { getNextProblem } from './bank.service.js';
@@ -301,7 +306,10 @@ export async function startMock(body: {
     ...(prep ? { graderContext: prep.graderContext } : {}),
     ...(prep?.coding ? { coding: prep.coding } : {}),
   };
-  const context = spec.buildContext(prompt, level, prep);
+  // Phase F carry-forward: today's step notes, FROZEN into the context at
+  // start like everything else in it, so the per-mock cached prefix is stable.
+  // No notes → '' → the context is byte-identical to before.
+  const context = spec.buildContext(prompt, level, prep) + renderCarryBlock(todayCarryNotes(now));
   const row: MockRow = {
     id,
     kind,
@@ -608,7 +616,39 @@ export function storeGradeGaps(mockId: string, grade: MockGrade, now = new Date(
 
 /** GET /api/mock/cards — the due pile plus counts. A read; no model. */
 export function gapCards(now = new Date()): GapCardsResponse {
-  return { due: dueCards(now), ...cardCounts(now) };
+  return { due: dueCards(now), ...cardCounts(now), aiReviews: aiReviewsEnabled() };
+}
+
+const cardChecksInFlight = new Set<number>();
+
+/**
+ * POST /api/mock/cards/:id/check — grade a typed / dictated answer against the
+ * card back: one `small` call (llm.review.runCardCheck). Moves NOTHING: the
+ * user confirms or overrides, and /grade applies it. An empty or "I don't
+ * know" answer is `missed` with no call. Gated by the "AI reviews" toggle.
+ */
+export async function checkGapCard(id: number, body: unknown): Promise<GapCardCheck> {
+  const raw = (body as Record<string, unknown> | null)?.answer;
+  const answer = typeof raw === 'string' ? raw.slice(0, 6000) : '';
+  const card = getCard(id);
+  if (!card) throw new MockError('No such card.', 404);
+  if (isNoAnswer(answer)) {
+    return { grade: 'missed', why: 'No answer given — counted as missed.', missing: [], ai: false, costUsd: 0 };
+  }
+  if (!aiReviewsEnabled()) throw new MockError('AI reviews are off (Settings). Grade it yourself.', 409);
+  if (cardChecksInFlight.has(id)) throw new MockError('That card is already being checked.', 429);
+  cardChecksInFlight.add(id);
+  try {
+    const { result, meta } = await runCardCheck({
+      question: card.title || `${card.concept}: ${card.summary}`,
+      reference: card.answer,
+      summary: card.summary,
+      answer,
+    });
+    return { ...result, ai: true, costUsd: costOfMeta(meta) };
+  } finally {
+    cardChecksInFlight.delete(id);
+  }
 }
 
 /**

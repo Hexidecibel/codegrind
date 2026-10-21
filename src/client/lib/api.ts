@@ -46,7 +46,7 @@ import type {
   MockTurnRequest,
   MockView,
 } from '@/shared/mock';
-import type { GapCard, GapCardGrade, GapCardsResponse } from '@/shared/gap-cards';
+import type { GapCard, GapCardCheck, GapCardGrade, GapCardsResponse } from '@/shared/gap-cards';
 import type { TodayState, TodayStepId } from '@/shared/today';
 import type {
   RecognizeCheck,
@@ -359,6 +359,7 @@ export function getSettings(): Promise<SettingsResponse> {
 export function updateSettings(patch: {
   language?: Language;
   apiKey?: string;
+  aiReviews?: boolean;
 }): Promise<SettingsResponse> {
   return request<SettingsResponse>('/api/settings', {
     method: 'PUT',
@@ -588,6 +589,14 @@ export function gradeGapCard(id: number, grade: GapCardGrade): Promise<GapCard> 
   return request<GapCard>(`/api/mock/cards/${id}/grade`, { method: 'POST', body: JSON.stringify({ grade }) });
 }
 
+/**
+ * POST /api/mock/cards/:id/check — the AI's grade of a typed/dictated answer.
+ * ONE small call (none for an empty / "I don't know" answer). Moves nothing.
+ */
+export function checkGapCard(id: number, answer: string): Promise<GapCardCheck> {
+  return request<GapCardCheck>(`/api/mock/cards/${id}/check`, { method: 'POST', body: JSON.stringify({ answer }) });
+}
+
 /** POST /api/mock/:id/abandon — free. */
 export function abandonMock(id: string): Promise<MockView> {
   return request<MockView>(`/api/mock/${encodeURIComponent(id)}/abandon`, { method: 'POST' });
@@ -635,7 +644,7 @@ export function showRecognizeCode(problemId: string): Promise<RecognizeCode> {
   return request<RecognizeCode>('/api/recognize/code', { method: 'POST', body: JSON.stringify({ problemId }) });
 }
 
-/** POST /api/recognize/check — ONE small model call, on click only. */
+/** POST /api/recognize/check — ONE small model call (free when this exact answer was checked before). */
 export function checkRecognize(problemId: string, picked: string | null, approach: string): Promise<RecognizeCheck> {
   return request<RecognizeCheck>('/api/recognize/check', {
     method: 'POST',

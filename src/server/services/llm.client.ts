@@ -480,6 +480,8 @@ export function clientFor(role: CallRole): LlmClient {
  */
 export async function structured(req: StructuredRequest): Promise<StructuredResult> {
   const result = await clientFor(req.role).structured(req);
+  // Recorded BEFORE the guards below: a rejected answer was still paid for.
+  recordUsage({ source: req.tool.name, role: req.role, meta: result.meta });
 
   // TYPE FIRST, because it is the cheaper and blunter of the two questions and
   // it names the field the collapse STARTED at rather than a field the debris
@@ -515,6 +517,39 @@ export async function structured(req: StructuredRequest): Promise<StructuredResu
 }
 
 /** A prose call. Exactly one call site in the app uses it: the tutor chat. */
-export function text(req: TextRequest): Promise<TextResult> {
-  return clientFor(req.role).text(req);
+export async function text(req: TextRequest): Promise<TextResult> {
+  const result = await clientFor(req.role).text(req);
+  recordUsage({ source: 'text', role: req.role, meta: result.meta });
+  return result;
+}
+
+// -----------------------------------------------------------------------------
+// The usage recorder, injected rather than imported (same reason as the stored
+// reader above: this module must not import db.js)
+// -----------------------------------------------------------------------------
+// Every model call the app makes passes through `structured` or `text`, so this
+// is the one place a spend ledger can be complete. ai-usage.service.ts installs
+// a recorder that writes one `ai_usage` row per call; until it does (tests, CLI
+// tools), nothing is recorded. A recorder that throws never fails the call.
+
+export interface UsageEvent {
+  /** The forced tool's name, or 'text' for the tutor chat. */
+  source: string;
+  role: CallRole;
+  meta: StructuredResult['meta'];
+}
+
+let usageRecorder: ((e: UsageEvent) => void) | null = null;
+
+export function useUsageRecorder(recorder: ((e: UsageEvent) => void) | null): void {
+  usageRecorder = recorder;
+}
+
+function recordUsage(e: UsageEvent): void {
+  if (!usageRecorder) return;
+  try {
+    usageRecorder(e);
+  } catch (err) {
+    console.error('[llm] usage recorder failed:', err instanceof Error ? err.message : err);
+  }
 }

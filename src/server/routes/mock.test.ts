@@ -20,6 +20,11 @@ import path from 'node:path';
 
 const fake = vi.hoisted(() => ({ interviewerTurn: vi.fn(), gradeMock: vi.fn() }));
 vi.mock('../services/llm.mock.js', () => fake);
+const cardLlm = vi.hoisted(() => ({ runCardCheck: vi.fn() }));
+vi.mock('../services/llm.review.js', async (orig) => ({
+  ...(await orig<typeof import('../services/llm.review.js')>()),
+  runCardCheck: cardLlm.runCardCheck,
+}));
 
 const TEST_DATA_DIR = mkdtempSync(path.join(tmpdir(), 'codegrind-mock-test-'));
 if (!TEST_DATA_DIR.startsWith(tmpdir())) {
@@ -28,7 +33,7 @@ if (!TEST_DATA_DIR.startsWith(tmpdir())) {
 process.env.DATA_DIR = TEST_DATA_DIR;
 
 const { mockRoutes } = await import('./mock.js');
-const { db } = await import('../services/db.js');
+const { db, setSetting } = await import('../services/db.js');
 const { MOCK_TURN_CAP } = await import('../../shared/mock.js');
 const { LlmToolCallError } = await import('../services/llm.types.js');
 
@@ -471,6 +476,58 @@ describe('drill cards', () => {
   it('does not shadow GET /api/mock/:id', async () => {
     const id = await withCards();
     expect((await app.request(`/api/mock/${id}`)).status).toBe(200);
+  });
+
+  describe('AI grading of an answer (Phase F)', () => {
+    beforeEach(() => {
+      cardLlm.runCardCheck.mockReset();
+      setSetting('ai.reviews', true);
+    });
+
+    it('grades the answer against the card back, prices it, and moves nothing', async () => {
+      await withCards();
+      const [card] = (await (await app.request('/api/mock/cards')).json()).due;
+      cardLlm.runCardCheck.mockResolvedValue({
+        result: { grade: 'shaky', why: 'Named the cache but not invalidation.', missing: ['TTL'] },
+        meta: { ...META, usage: { inputTokens: 500, outputTokens: 80, cachedInputTokens: 0 } },
+      });
+      const res = await post(`/api/mock/cards/${card.id}/check`, { answer: 'Put a cache in front of it.' });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toMatchObject({ grade: 'shaky', ai: true, missing: ['TTL'] });
+      expect(body.costUsd).toBeCloseTo((500 * 2 + 80 * 10) / 1e6, 8);
+      const input = cardLlm.runCardCheck.mock.calls[0][0];
+      expect(input).toMatchObject({ question: card.title, reference: card.answer, answer: 'Put a cache in front of it.' });
+      // Nothing moved: the user's tap does that.
+      const after = (await (await app.request('/api/mock/cards')).json()).due.find((c: { id: number }) => c.id === card.id);
+      expect(after).toMatchObject({ step: 0, reps: 0, lastGrade: null });
+    });
+
+    it('"I don\'t know" and blank answers are missed with no call', async () => {
+      await withCards();
+      const [card] = (await (await app.request('/api/mock/cards')).json()).due;
+      for (const answer of ['', '   ', "I don't know.", 'idk', 'No idea!']) {
+        const body = await (await post(`/api/mock/cards/${card.id}/check`, { answer })).json();
+        expect(body).toMatchObject({ grade: 'missed', ai: false, costUsd: 0 });
+      }
+      expect(cardLlm.runCardCheck).not.toHaveBeenCalled();
+    });
+
+    it('a model failure is a 502 the page falls back from; the toggle off is a 409 with no call', async () => {
+      await withCards();
+      const [card] = (await (await app.request('/api/mock/cards')).json()).due;
+      cardLlm.runCardCheck.mockRejectedValue(new Error('model down'));
+      expect((await post(`/api/mock/cards/${card.id}/check`, { answer: 'Shard by user id.' })).status).toBe(502);
+      // Self-grading still works after a failed check.
+      expect((await post(`/api/mock/cards/${card.id}/grade`, { grade: 'shaky' })).status).toBe(200);
+
+      cardLlm.runCardCheck.mockReset();
+      setSetting('ai.reviews', false);
+      expect((await (await app.request('/api/mock/cards')).json()).aiReviews).toBe(false);
+      expect((await post(`/api/mock/cards/${card.id}/check`, { answer: 'Shard by user id.' })).status).toBe(409);
+      expect(cardLlm.runCardCheck).not.toHaveBeenCalled();
+      expect((await post(`/api/mock/cards/999999/check`, { answer: 'x' })).status).toBe(404);
+    });
   });
 });
 

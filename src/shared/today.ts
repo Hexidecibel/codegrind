@@ -125,4 +125,76 @@ export interface TodayState {
    * blocks the day or counts toward `completed`; it is recommended when rusty.
    */
   recognize: TodayRecognize;
+  /**
+   * Step reviews: one short AI note per finished step (what happened + one
+   * thing to carry into the next step). Written automatically, server-side,
+   * once per step per day, when "AI reviews" is on.
+   */
+  stepNotes: StepNotes;
+  /** Reviews (and the auto debrief) being written right now — the page polls while non-empty. */
+  aiPending: AiReviewTarget[];
+  /** The Settings toggle "AI reviews" (default on). Off = no automatic calls. */
+  aiReviews: boolean;
+  /** AI spend from the usage ledger: every model call the app makes. */
+  spend: AiSpend;
+}
+
+/** The finished things a step review can be written for. `recognize` is the add-on, not a step. */
+export const STEP_NOTE_IDS = ['warmup', 'recognize', 'problem1', 'problem2', 'mock'] as const;
+export type StepNoteId = (typeof STEP_NOTE_IDS)[number];
+export type AiReviewTarget = StepNoteId | 'debrief';
+
+export const STEP_NOTE_LABEL: Readonly<Record<StepNoteId, string>> = {
+  warmup: 'Warm-up',
+  recognize: 'Recognize',
+  problem1: 'Problem 1',
+  problem2: 'Problem 2',
+  mock: 'Mock interview',
+};
+
+export interface StepNote {
+  /** What happened, 2-3 lines. */
+  note: string;
+  /** One concrete thing to watch in the next step. */
+  carry: string;
+  at: string;
+  model: string;
+  costUsd: number | null;
+}
+
+export type StepNotes = Partial<Record<StepNoteId, StepNote>>;
+
+export interface AiSpend {
+  /** Dollars since local midnight; priced calls only. */
+  todayUsd: number;
+  /** Dollars since the 1st of the local month. */
+  monthUsd: number;
+  todayCalls: number;
+  monthCalls: number;
+}
+
+/** One earlier step's note, as the next step's AI context reads it. */
+export interface CarryNote {
+  step: string;
+  note: string;
+  carry: string;
+}
+
+/** Today's notes in step order, as carry-forward context. */
+export function carryNotesOf(notes: StepNotes): CarryNote[] {
+  return STEP_NOTE_IDS.flatMap((id) => {
+    const n = notes[id];
+    return n && (n.note || n.carry) ? [{ step: STEP_NOTE_LABEL[id], note: n.note, carry: n.carry }] : [];
+  });
+}
+
+/**
+ * The block appended to a prompt (coaching user message, mock context, debrief
+ * digest). '' when there are no notes, so a call without them is byte-identical
+ * to one made before carry-forward existed.
+ */
+export function renderCarryBlock(notes: readonly CarryNote[]): string {
+  if (!notes.length) return '';
+  const lines = notes.map((n) => `- ${n.step}: ${n.note}${n.carry ? ` Carry: ${n.carry}` : ''}`);
+  return `\n\nEARLIER TODAY (the candidate's step notes from today's routine; connect to them where relevant, do not repeat them):\n${lines.join('\n')}`;
 }

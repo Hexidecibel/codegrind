@@ -430,6 +430,147 @@
       }
     ]
   },
+  "coach +carry": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 16000,
+    "thinking": {
+      "type": "adaptive"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are a direct, encouraging technical interview coach. A candidate just submitted a JavaScript solution which was run against real hidden tests. You are given the problem, the reference solution, the candidate's code, and the ACTUAL per-test results.\n\nYour job: a structured coaching brief focused on INTERVIEW PATTERN MASTERY.\n- approach: paraphrase what the candidate's code actually does, in plain language. Be accurate about their real approach.\n- missed: concrete things they got wrong or overlooked, as an array of OBJECTS. TIE each item to the specific failing test(s) and the root cause. If everything passed, note remaining risks or edge cases they handled implicitly. Empty array only if truly flawless. Each object has:\n  - note (REQUIRED): the bullet itself — exactly the sentence or two you would have written anyway.\n  - quote: the line, or at most a few CONSECUTIVE lines, of THEIR submission that this item is about, copied CHARACTER FOR CHARACTER out of the CANDIDATE'S SUBMISSION block. It is used to find that line in their editor and light it up, so it must be a line they actually wrote — never a line you wish they had written, never a paraphrase, never your own corrected version. Use null when the item is about something ABSENT from their code (a missing guard, an unhandled empty case, a check they never made): there is no line to point at, and an invented one points at the wrong place.\n  - line: the gutter number of the first quoted line. It is used ONLY to disambiguate when the quoted text appears more than once, so give it whenever you give a quote, and null when quote is null.\n  - fix: what those exact quoted lines SHOULD have been — the replacement for them and nothing else, same indentation, no surrounding code, no commentary. Only when you gave a quote, and only when replacing those few lines genuinely fixes the item. Use null when quote is null, or when the fix is \"rewrite the approach\".\n- pattern: name the underlying pattern this problem tests.\n- patternRecognition: how to RECOGNIZE this pattern in a future problem — the signals/cues an interviewer plants. This is the most valuable part.\n- complexity: the candidate's time & space complexity (\"yours\") vs the optimal (\"optimal\"), each as a short string like \"O(n^2) time, O(1) space\".\n- improvement: one short, direct nudge on how to get better at this pattern.\n- mistakeTags: choose ZERO OR MORE tags describing the recurring failure modes this submission shows, chosen ONLY from this fixed vocabulary: off-by-one, empty-input, single-element, duplicates, negative-or-overflow, wrong-data-structure, brute-force-only, complexity-misjudged, runtime-error, syntax-error, edge-case-missed. Return an EMPTY array if the solution was clean. Do NOT invent tags outside this list.\n- calibration: ONLY when the candidate provided a pre-solve prediction (given below). Write one short sentence comparing their PREDICTED approach/time/space against what their code ACTUALLY does — name the gap plainly (e.g. \"You predicted O(n) but your nested scan is O(n^2)\"). If they were right, affirm it briefly. If no prediction was provided, return an empty string.\n\nThe CANDIDATE'S SUBMISSION is shown to you with a \"   7 | \" line-number gutter that the app added — it is NOT part of their code. Never copy the gutter into a quote or a fix; quote the code that follows it.\n\nBe specific and honest. Reference the real test names and outcomes. Call emit_coaching exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_coaching",
+        "description": "Emit the structured coaching brief.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "approach": {
+              "type": "string"
+            },
+            "missed": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "note": {
+                    "type": "string",
+                    "description": "The bullet: what they got wrong or overlooked."
+                  },
+                  "quote": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "The line(s) of THEIR submission this is about, copied verbatim without the line-number gutter. Use null when the item is about code that is ABSENT."
+                  },
+                  "line": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "description": "Gutter line number of the first quoted line (disambiguation only); null with no quote."
+                  },
+                  "fix": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "What those exact quoted lines should have been — the replacement and nothing else. Only alongside a quote; null otherwise."
+                  }
+                },
+                "required": [
+                  "note",
+                  "quote",
+                  "line",
+                  "fix"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "pattern": {
+              "type": "string"
+            },
+            "patternRecognition": {
+              "type": "string"
+            },
+            "complexity": {
+              "type": "object",
+              "properties": {
+                "yours": {
+                  "type": "string"
+                },
+                "optimal": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "yours",
+                "optimal"
+              ],
+              "additionalProperties": false
+            },
+            "improvement": {
+              "type": "string"
+            },
+            "mistakeTags": {
+              "type": "array",
+              "description": "Recurring failure-mode tags, chosen ONLY from: off-by-one, empty-input, single-element, duplicates, negative-or-overflow, wrong-data-structure, brute-force-only, complexity-misjudged, runtime-error, syntax-error, edge-case-missed. Empty if clean.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "off-by-one",
+                  "empty-input",
+                  "single-element",
+                  "duplicates",
+                  "negative-or-overflow",
+                  "wrong-data-structure",
+                  "brute-force-only",
+                  "complexity-misjudged",
+                  "runtime-error",
+                  "syntax-error",
+                  "edge-case-missed"
+                ]
+              }
+            },
+            "calibration": {
+              "type": "string",
+              "description": "Predicted-vs-actual complexity/approach note when a prediction was provided; empty string otherwise."
+            }
+          },
+          "required": [
+            "approach",
+            "missed",
+            "pattern",
+            "patternRecognition",
+            "complexity",
+            "improvement",
+            "mistakeTags",
+            "calibration"
+          ],
+          "additionalProperties": false
+        },
+        "strict": true
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_coaching"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "PROBLEM: Pair Sum (pattern: two-pointer, difficulty: easy)\n\nStatement:\nFind the pair that sums to the target.\n\nFunction under test: pairSum\n\nREFERENCE SOLUTION:\n```javascript\nfunction pairSum(nums, target) { return []; }\n```\n\nCANDIDATE'S SUBMISSION:\n```javascript\n   1 | function pairSum(nums, target) { return null; }\n```\n\nTEST RESULTS (1/2 passed):\n- [PASS] s1 (3ms)\n- [FAIL] h1 (5ms)\n    expected: []\n    actual:   null\n    error:    TypeError: nope\n\nCANDIDATE'S PRE-SOLVE PREDICTION (compare against their actual code for the calibration field):\n- intended approach: two pointers from both ends\n- predicted time: O(n)\n- predicted space: O(1)\n- confidence: 4/5\n\nEARLIER TODAY (the candidate's step notes from today's routine; connect to them where relevant, do not repeat them):\n- Warm-up: Two cards shaky on caching. Carry: Name the invalidation rule first.\n- Problem 1: Passed with one hint; predicted O(n), wrote O(n^2). Carry: Check the inner loop before Submit."
+      }
+    ]
+  },
   "hint": {
     "model": "claude-sonnet-5",
     "max_tokens": 1000,
@@ -1111,6 +1252,210 @@
       {
         "role": "user",
         "content": "Problem: Pair Sum\nFind the pair that sums to the target.\nExample 1: input [1,2,3], 5 → output [1,2]\nConstraints: 1 <= n <= 1000\n\nIntended pattern: two-pointer\nReference solution (javascript):\nfunction pairSum(nums, target) { return []; }\n\nCandidate's pattern pick: two-pointer\nCandidate's approach: Two pointers from both ends; move the smaller side. O(n) time, O(1) space."
+      }
+    ]
+  },
+  "runDebrief +carry": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 1500,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are a blunt, specific interview-prep coach reviewing ONE day of practice for a candidate targeting Staff engineer roles. The day's routine: a warm-up of drill cards and review problems, two adaptive algorithm problems (predict complexity before solving), and one mock interview.\n\nYou get a compact digest of the day and the last seven days. Write a short debrief:\n- verdict: one line, the honest headline of the day.\n- wins: 0-3 specific things that went well, each pointing at evidence in the digest. No generic praise.\n- fixes: 1-3 problems, each with a CONCRETE action: a named pattern to drill, a specific habit for the next problem, a mock concept to revisit. \"Practice more\" is not an action.\n- tomorrowFocus.patterns: 0-3 topic ids, EXACTLY from this list: arrays, hashing, two-pointer, sliding-window, binary-search, stack, linked-list, trees, graphs, bfs-dfs, backtracking, dynamic-programming, greedy, intervals, heap, trie, bit-manipulation, math.\n- tomorrowFocus.mockKind: one of system-design, behavioral, coding, or omit it to keep the normal rotation.\n\nGround everything in the digest. If the day was thin (steps skipped, nothing attempted), say so plainly and keep it short. Call emit_debrief exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_debrief",
+        "description": "Emit the end-of-day debrief.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "description": "One-line headline of the day."
+            },
+            "wins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "0-3 specific wins."
+            },
+            "fixes": {
+              "type": "array",
+              "description": "1-3 fixes, each with a concrete action.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "issue": {
+                    "type": "string",
+                    "description": "What went wrong, one line."
+                  },
+                  "action": {
+                    "type": "string",
+                    "description": "The concrete drill or action."
+                  }
+                },
+                "required": [
+                  "issue",
+                  "action"
+                ]
+              }
+            },
+            "tomorrowFocus": {
+              "type": "object",
+              "properties": {
+                "patterns": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "0-3 exact topic ids."
+                },
+                "mockKind": {
+                  "type": "string",
+                  "description": "Optional: tomorrow's mock kind."
+                }
+              },
+              "required": [
+                "patterns"
+              ]
+            }
+          },
+          "required": [
+            "verdict",
+            "wins",
+            "fixes",
+            "tomorrowFocus"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_debrief"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Day: 2026-10-21\n\nProblems today:\n- none\n\nMock today:\n- none\n\nDrill cards graded today: 2 (got 0, shaky 2, missed 0)\nSkipped steps: none\n\nLast 7 days: 1 active days, 1 submits, 1 solved, first-submit pass n/a, top mistakes: none\n\nEARLIER TODAY (the candidate's step notes from today's routine; connect to them where relevant, do not repeat them):\n- Warm-up: Two cards shaky on caching. Carry: Name the invalidation rule first.\n- Problem 1: Passed with one hint; predicted O(n), wrote O(n^2). Carry: Check the inner loop before Submit."
+      }
+    ]
+  },
+  "runCardCheck": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 500,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You grade one spaced-repetition drill card for a candidate preparing for Staff engineer interviews. The card came from a gap a mock interview exposed. You get the card's question, the stored model answer (the card back), and the candidate's answer — often dictated, so ignore filler, false starts and transcription noise. Judge whether they KNOW it, not how it is phrased.\n\n- grade: \"got\" if the answer carries the essential idea of the card back (wording may differ; extra correct detail is fine); \"shaky\" if the core is there but a key part is missing, vague or partly wrong; \"missed\" if the essential idea is absent or wrong.\n- why: ONE line, specific: what made it got/shaky/missed.\n- missing: 0-3 short items from the card back the answer left out that matter. Empty when nothing important is missing.\n\nBe strict but fair: a confident answer that names the right mechanism is \"got\" even if terse. Call emit_card_grade exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_card_grade",
+        "description": "Emit the grade for one drill-card answer.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "grade": {
+              "type": "string",
+              "enum": [
+                "got",
+                "shaky",
+                "missed"
+              ]
+            },
+            "why": {
+              "type": "string",
+              "description": "One specific line."
+            },
+            "missing": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "0-3 things the answer left out."
+            }
+          },
+          "required": [
+            "grade",
+            "why",
+            "missing"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_card_grade"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Card question: How do you keep a read-through cache consistent with the database?\nWhat the mock exposed: Did not mention invalidation on writes.\nCard back (model answer): Invalidate (or update) the cache entry on every write, with a TTL as the safety net; read-through fills misses.\n\nCandidate's answer:\num so basically you put a cache in front of the database and uh reads go there first and if it misses you load it"
+      }
+    ]
+  },
+  "runStepReview": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 600,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are an interview-prep coach watching ONE day of practice, step by step, for a candidate targeting Staff engineer roles. The day: a warm-up (drill cards from past mocks, review problems), an optional Recognize set (name the pattern of a problem, no code), two adaptive algorithm problems (predict complexity first), and one mock interview.\n\nOne step just finished. You get what happened in it, plus the notes from earlier steps today. Write:\n- note: 2-3 short lines on what happened in THIS step — specific, grounded in the digest (names, counts, the pattern, the mistake). No praise padding.\n- carry: ONE concrete thing to watch in the NEXT step (named below), phrased as an instruction the candidate can act on in the first five minutes of it. E.g. \"Before coding, state the loop invariant out loud\" — not \"keep practising\".\n\nIf an earlier note's carry was or was not followed here, say so in the note. Call emit_step_review exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_step_review",
+        "description": "Emit the review of one finished step.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "note": {
+              "type": "string",
+              "description": "What happened, 2-3 short lines."
+            },
+            "carry": {
+              "type": "string",
+              "description": "One concrete thing to watch in the next step."
+            }
+          },
+          "required": [
+            "note",
+            "carry"
+          ]
+        }
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_step_review"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Step just finished: Problem 1\nNext step: Problem 2 (another adaptive algorithm problem)\n\nWhat happened:\n- \"Pair Sum\" (two-pointer, easy): PASSED after 1 submit, 0 hints, last run 10/10 tests\n- Predicted O(n) time / O(1) space\n\nEarlier today:\n- Warm-up: Two cards shaky on caching. Carry: Name the invalidation rule first."
       }
     ]
   }

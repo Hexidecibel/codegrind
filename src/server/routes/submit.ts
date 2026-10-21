@@ -27,6 +27,7 @@ import {
 } from '../services/db.js';
 import { runTests } from '../services/sandbox.service.js';
 import { coach, askFollowup } from '../services/llm.service.js';
+import { todayCarryNotes } from '../services/today.service.js';
 import { stashFix, getFix } from '../services/coachfix.service.js';
 import { errorBody } from '../services/explain.service.js';
 import { MockError, codingSubmitTarget, recordCodingSubmit } from '../services/mock.service.js';
@@ -284,7 +285,7 @@ submitRoutes.post('/submit', async (c) => {
       // separate return value rather than a field to be deleted here, because
       // a field to be deleted is one forgotten code path away from shipping
       // the answer to devtools.
-      const { brief, fixes } = await coach(problem, code, result.results, prediction);
+      const { brief, fixes } = await coach(problem, code, result.results, prediction, todayCarryNotes());
       coaching = brief;
       for (const [index, fix] of fixes) {
         const item = coaching.missed[index];

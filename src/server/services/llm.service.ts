@@ -32,6 +32,7 @@ import {
   profileFor,
   type LanguageProfile,
 } from './llm.language.js';
+import { renderCarryBlock, type CarryNote } from '../../shared/today.js';
 import { structured, text as textCall } from './llm.client.js';
 import {
   LlmToolCallError,
@@ -898,7 +899,13 @@ export async function coach(
   problem: ProblemRecord,
   userCode: string,
   results: TestResult[],
-  prediction?: Prediction
+  prediction?: Prediction,
+  /**
+   * Today's step notes (Phase F carry-forward). Appended to the USER message,
+   * never the system prompt, so the cached system prefix holds; with none the
+   * body is byte-identical to before (the golden `coach` entry).
+   */
+  carry?: readonly CarryNote[]
 ): Promise<CoachResult> {
   const passed = results.filter((r) => r.passed).length;
   // Off the PROBLEM, never off the active setting — the problem is what the
@@ -942,7 +949,7 @@ ${numberLines(userCode)}
 \`\`\`
 
 TEST RESULTS (${passed}/${results.length} passed):
-${summarizeResults(results)}${predictionBlock}`;
+${summarizeResults(results)}${predictionBlock}${renderCarryBlock(carry ?? [])}`;
 
   /**
    * One attempt, with the truncation check that has to happen while the stop

@@ -30,12 +30,13 @@ import { LANGUAGES, isLanguage } from '../../shared/languages.js';
 import { getActiveLanguage, setActiveLanguage } from '../services/db.js';
 import { harnessExists, unsupportedLanguageMessage } from '../services/harness.service.js';
 import * as apikey from '../services/apikey.service.js';
+import { aiReviewsEnabled, setAiReviews } from '../services/ai-usage.service.js';
 
 export const settingsRoutes = new Hono();
 
 /** The whole live settings state, assembled from its individual accessors. */
 function readSettings(): SettingsResponse {
-  return { language: getActiveLanguage(), apiKey: apikey.describe() };
+  return { language: getActiveLanguage(), apiKey: apikey.describe(), aiReviews: aiReviewsEnabled() };
 }
 
 /**
@@ -54,6 +55,12 @@ interface SettingWriter {
 }
 
 const WRITERS: Record<string, SettingWriter> = {
+  aiReviews: {
+    validate: (value) => (typeof value === 'boolean' ? null : 'aiReviews must be true or false'),
+    commit: (value) => {
+      if (typeof value === 'boolean') setAiReviews(value);
+    },
+  },
   language: {
     // TWO checks, not one, because `isLanguage` and "this build can run it" are
     // different questions and only the second one costs money to get wrong.

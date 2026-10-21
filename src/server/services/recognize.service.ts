@@ -1,7 +1,8 @@
 // =============================================================================
 // recognize.service — the Recognize drill: serve, reveal, show code, check, grade
 // =============================================================================
-// Cost per card: $0 by default. The reveal reads the topic's cached primer
+// Cost per card: one cached `small` check when "AI reviews" is on (Phase F:
+// automatic on reveal; an identical answer is never re-paid), else $0. The reveal reads the topic's cached primer
 // (cues / skeleton / pitfalls — the same card Grind and Study show) and the
 // problem's cached note, if an earlier AI check left one. The only model calls
 // reachable from here are:
@@ -30,7 +31,9 @@
 // `used` is deliberately left alone: the bank's stocking is Grind's business.
 
 import { TOPICS, type ProblemRecord, type Topic } from '../../shared/types.js';
+import { createHash } from 'node:crypto';
 import { costOf } from '../../shared/mock.js';
+import { aiReviewsEnabled } from './ai-usage.service.js';
 import { isGapCardGrade } from '../../shared/gap-cards.js';
 import {
   DEFAULT_RECOGNIZE_SIZE,
@@ -177,6 +180,7 @@ export async function reveal(problemId: unknown, picked: unknown): Promise<Recog
       : null,
     note: store.getNote(p.id),
     language: p.language,
+    autoCheck: aiReviewsEnabled(),
   };
 }
 
@@ -189,24 +193,32 @@ export function showCode(problemId: unknown): RecognizeCode {
 
 let checkInFlight = false;
 
+/** The cache key: same problem, same pick, same answer (whitespace/case-insensitive) = same verdict. */
+export function checkKey(problemId: string, picked: string | null, approach: string): string {
+  const norm = approach.trim().toLowerCase().replace(/\s+/g, ' ');
+  return createHash('sha256').update(`${problemId}|${picked ?? ''}|${norm}`).digest('hex');
+}
+
 /**
- * "AI check my approach": one small call. Reading the reference solution into
- * the prompt is server-side only — nothing is shown, so no ledger write.
+ * The AI check: one small call, or a free read of the cached verdict for an
+ * identical answer. Runs automatically on reveal when "AI reviews" is on (the
+ * page calls it), else on click. Reading the reference solution into the
+ * prompt is server-side only — nothing is shown, so no ledger write.
  */
 export async function check(body: { problemId?: unknown; picked?: unknown; approach?: unknown }): Promise<RecognizeCheck> {
   const p = requireProblem(body.problemId);
   const approach = typeof body.approach === 'string' ? body.approach.slice(0, 1200) : '';
   if (!approach.trim()) throw new RecognizeError('Write your approach first — the check grades the idea.', 400);
+  const picked = isTopic(body.picked) ? body.picked : null;
+  const key = checkKey(p.id, picked, approach);
+  const hit = store.getCheck<RecognizeCheck>(key);
+  if (hit) return { ...hit, costUsd: 0, cached: true };
   if (checkInFlight) throw new RecognizeError('A check is already running.', 429);
   checkInFlight = true;
   try {
-    const { result, meta } = await runRecognizeCheck({
-      problem: p,
-      picked: isTopic(body.picked) ? body.picked : null,
-      approach,
-    });
+    const { result, meta } = await runRecognizeCheck({ problem: p, picked, approach });
     if (result.note.keyInsight) store.putNote(p.id, result.note, new Date());
-    return {
+    const out: RecognizeCheck = {
       verdict: result.verdict,
       missing: result.missing,
       edgeCaseThatBites: result.edgeCaseThatBites,
@@ -220,6 +232,8 @@ export async function check(body: { problemId?: unknown; picked?: unknown; appro
         cacheWriteTokens: meta.usage.cacheWriteInputTokens ?? 0,
       }),
     };
+    store.putCheck(key, p.id, out, new Date());
+    return out;
   } finally {
     checkInFlight = false;
   }

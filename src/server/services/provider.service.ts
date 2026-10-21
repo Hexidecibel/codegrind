@@ -48,6 +48,7 @@ import {
   type StoredProviderConfig,
   type StoredRoleConfig,
 } from './llm.client.js';
+import { installUsageRecorder } from './ai-usage.service.js';
 import { createOpenAiClient } from './llm.openai.js';
 import { LlmTimeoutError, LlmToolCallError, type ToolSpec } from './llm.types.js';
 import { getSetting, setSetting } from './db.js';
@@ -137,6 +138,9 @@ export function readStoredProviderConfig(): StoredProviderConfig {
  */
 export function hydrateProviderConfig(): void {
   useStoredProviderConfig(readStoredProviderConfig);
+  // Every entry point that can spend money calls this, so it is also where the
+  // spend ledger starts listening (ai-usage.service.ts).
+  installUsageRecorder();
 }
 
 // -----------------------------------------------------------------------------

@@ -794,6 +794,11 @@ export interface SettingsResponse {
   language: Language;
   /** Status only — never the key. */
   apiKey: ApiKeyStatus;
+  /**
+   * "AI reviews" (default on): the automatic small calls — warm-up card
+   * grading, the Recognize check on reveal, step reviews, the auto debrief.
+   */
+  aiReviews: boolean;
 }
 
 /** Body for PUT /api/settings. Every field optional — omitted means unchanged. */
@@ -805,6 +810,7 @@ export interface SettingsUpdateRequest {
    * Write-only: it is never echoed back.
    */
   apiKey?: string;
+  aiReviews?: boolean;
 }
 
 // -----------------------------------------------------------------------------
