@@ -63,7 +63,7 @@ function insertProblem(id: string, topic: string, used = 1) {
 const count = (table: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
 
 beforeEach(() => {
-  for (const t of ['recognize_attempts', 'recognize_cards', 'recognize_notes', 'revealed_solutions', 'attempts', 'problems', 'pattern_primers', 'skill_state', 'review_queue']) {
+  for (const t of ['recognize_attempts', 'recognize_cards', 'recognize_notes', 'recognize_checks', 'revealed_solutions', 'attempts', 'problems', 'pattern_primers', 'skill_state', 'review_queue']) {
     db.prepare(`DELETE FROM ${t}`).run();
   }
   fake.runRecognizeCheck.mockReset();
@@ -188,6 +188,39 @@ describe('POST /api/recognize/check', () => {
     const rev = await (await post('/api/recognize/reveal', { problemId: 'p-arrays', picked: 'arrays' })).json();
     expect(rev.note).toEqual({ keyInsight: 'One pass suffices.', time: 'O(n)', space: 'O(1)' });
     expect(fake.runRecognizeCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it('an identical answer is served from the cache for free; a different one pays (Phase F)', async () => {
+    fake.runRecognizeCheck.mockResolvedValue({
+      result: {
+        verdict: 'correct',
+        missing: [],
+        edgeCaseThatBites: 'empty input',
+        oneLineFix: '',
+        note: { keyInsight: 'One pass.', time: 'O(n)', space: 'O(1)' },
+      },
+      meta: { servedModel: 'claude-sonnet-5', stop: 'tool_use', latencyMs: 1, usage: { inputTokens: 900, outputTokens: 150, cachedInputTokens: 0 } },
+    });
+    const first = await (await post('/api/recognize/check', { problemId: 'p-arrays', picked: 'arrays', approach: 'Scan once, O(n).' })).json();
+    expect(first.costUsd).toBeGreaterThan(0);
+    expect(first.cached).toBeUndefined();
+    // Same answer, different spacing/case: free.
+    const again = await (await post('/api/recognize/check', { problemId: 'p-arrays', picked: 'arrays', approach: '  scan ONCE,   o(n). ' })).json();
+    expect(again).toMatchObject({ verdict: 'correct', suggested: 'got', costUsd: 0, cached: true });
+    expect(fake.runRecognizeCheck).toHaveBeenCalledTimes(1);
+    // A different pick or answer is a different question.
+    await post('/api/recognize/check', { problemId: 'p-arrays', picked: 'hashing', approach: 'Scan once, O(n).' });
+    expect(fake.runRecognizeCheck).toHaveBeenCalledTimes(2);
+  });
+
+  it('the reveal tells the page whether to run the check automatically (the AI reviews toggle)', async () => {
+    const { setSetting } = await import('../services/db.js');
+    setSetting('ai.reviews', true);
+    expect((await (await post('/api/recognize/reveal', { problemId: 'p-arrays', picked: 'arrays' })).json()).autoCheck).toBe(true);
+    setSetting('ai.reviews', false);
+    expect((await (await post('/api/recognize/reveal', { problemId: 'p-arrays', picked: 'arrays' })).json()).autoCheck).toBe(false);
+    setSetting('ai.reviews', true);
+    expect(fake.runRecognizeCheck).not.toHaveBeenCalled();
   });
 
   it('refuses an empty approach without calling the model', async () => {

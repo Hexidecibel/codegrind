@@ -43,7 +43,8 @@ import {
 } from 'lucide-react';
 import type { ApiKeyStatus, LlmProviderCheck, LlmRoleStatus, LlmStatus } from '@/shared/types';
 import { LANGUAGE_META } from '@/shared/languages';
-import { getProviders, getSettings, updateProvider } from '@/client/lib/api';
+import { getProviders, getSettings, updateProvider, updateSettings } from '@/client/lib/api';
+import { Switch } from '@/client/components/ui/switch';
 import { summariseRoles, coachCostSentence, type RoleSummary } from '@/client/lib/role-summary';
 import {
   ProviderPicker,
@@ -356,6 +357,8 @@ export function SettingsPage() {
   const [llm, setLlm] = useState<LlmStatus | null>(null);
   const [apiKey, setApiKey] = useState<ApiKeyStatus | null>(null);
   const [language, setLanguage] = useState<Language | null>(null);
+  const [aiReviews, setAiReviews] = useState(true);
+  const [aiBusy, setAiBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // The measurement from the last successful save, and the banner that says the
@@ -373,6 +376,20 @@ export function SettingsPage() {
     setLlm(providers);
     setApiKey(settings.apiKey);
     setLanguage(settings.language);
+    setAiReviews(settings.aiReviews !== false);
+  }, []);
+
+  const toggleAiReviews = useCallback(async (on: boolean) => {
+    setAiBusy(true);
+    setAiReviews(on);
+    try {
+      const next = await updateSettings({ aiReviews: on });
+      setAiReviews(next.aiReviews !== false);
+    } catch {
+      setAiReviews(!on);
+    } finally {
+      setAiBusy(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -565,6 +582,32 @@ export function SettingsPage() {
               />
             </div>
           )}
+        </Section>
+
+        <Section
+          title="AI reviews"
+          blurb={
+            <>
+              Small automatic model calls that make the daily routine smarter: grading your typed or
+              dictated drill-card answers, checking your Recognize approach on reveal, a short note
+              after every Today step (carried into the next one), and the end-of-day debrief. Each is
+              one small call, a cent or so; today&rsquo;s and this month&rsquo;s spend show on Today.
+            </>
+          }
+        >
+          <label className="flex items-center gap-3 rounded-xl border bg-card p-4 shadow">
+            <Switch
+              checked={aiReviews}
+              disabled={aiBusy}
+              onCheckedChange={(v) => void toggleAiReviews(v)}
+              aria-label="AI reviews"
+            />
+            <span className="text-sm">
+              {aiReviews
+                ? 'On — reviews run automatically.'
+                : 'Off — grade yourself; AI checks and the debrief run only when you click.'}
+            </span>
+          </label>
         </Section>
 
         <Section

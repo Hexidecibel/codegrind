@@ -36,7 +36,7 @@ import {
   tierProgress,
   type TierProgress,
 } from './curriculum.js';
-import { dailyFocusBias } from './today.compute.js';
+import { dailyFocusBias, missFocusBias } from './today.compute.js';
 
 // -----------------------------------------------------------------------------
 // Intent — what the scheduler decides to serve next.
@@ -77,6 +77,11 @@ export interface NextIntentOpts {
    * A light lean — see today.compute.DAILY_FOCUS_BIAS.
    */
   dailyFocus?: readonly string[];
+  /**
+   * Topics missed TODAY in Recognize or on a drill card (today.service.
+   * todayMissTopics). A smaller lean — see today.compute.MISS_FOCUS_BIAS.
+   */
+  missFocus?: readonly string[];
 }
 
 // -----------------------------------------------------------------------------
@@ -97,7 +102,7 @@ export {
 // -----------------------------------------------------------------------------
 // Per-topic view — skill row + derived tier/staleness, one per TOPIC.
 // -----------------------------------------------------------------------------
-interface TopicView {
+export interface TopicView {
   topic: Topic;
   attempts: number;
   solved: number;
@@ -204,13 +209,15 @@ interface Candidate {
   rationale: string;
 }
 
-function buildCandidates(
+/** Exported for the Phase F pick-bias test; pure given its views. */
+export function buildCandidates(
   views: TopicView[],
   plan?: SessionPlan,
-  dailyFocus?: readonly string[]
+  dailyFocus?: readonly string[],
+  missFocus?: readonly string[]
 ): Candidate[] {
   const focusBias = (topic: Topic, p?: SessionPlan): number =>
-    (p?.focus?.includes(topic) ? 0.5 : 0) + dailyFocusBias(topic, dailyFocus);
+    (p?.focus?.includes(topic) ? 0.5 : 0) + dailyFocusBias(topic, dailyFocus) + missFocusBias(topic, missFocus);
 
   const out: Candidate[] = [];
   const byTopic = new Map<Topic, TopicView>();
@@ -400,7 +407,7 @@ export function nextIntent(opts: NextIntentOpts): SchedulerIntent {
   }
 
   const views = buildViews(language);
-  let candidates = buildCandidates(views, opts.plan, opts.dailyFocus);
+  let candidates = buildCandidates(views, opts.plan, opts.dailyFocus, opts.missFocus);
 
   // "Don't repeat the topic just served" guard — drop it unless it's all we have.
   if (opts.avoidTopic) {
@@ -433,7 +440,7 @@ export function peekUpNext(opts: NextIntentOpts): string {
     return 'a review problem to solve cold';
   }
   const views = buildViews(opts.language);
-  let candidates = buildCandidates(views, opts.plan, opts.dailyFocus);
+  let candidates = buildCandidates(views, opts.plan, opts.dailyFocus, opts.missFocus);
   if (opts.avoidTopic) {
     const filtered = candidates.filter((c) => c.topic !== opts.avoidTopic);
     if (filtered.length) candidates = filtered;

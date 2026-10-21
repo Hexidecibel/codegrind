@@ -11,8 +11,11 @@
 //           but it is not confidence either, so it never earns a longer gap.
 //   missed  back to the bottom rung, due again now (the back of today's pile).
 //
-// Self-graded on purpose: grading a card never calls a model. Drilling is free,
-// so idle-$0 holds and there is no per-card cost to ration.
+// The grade that moves the schedule is always the user's. Phase F adds an
+// optional AI grade first (POST /api/mock/cards/:id/check, one `small` call on
+// the typed / dictated answer) that pre-selects a grade the user confirms or
+// overrides with one tap; self-grading stays the fallback when the AI is off,
+// errors, or the answer is "I don't know" (missed, no call).
 //
 // Pure — `now` is always passed in — so the whole schedule is unit-tested.
 
@@ -76,6 +79,19 @@ export interface GapCardsResponse {
   retired: number;
   /** When the next not-yet-due card comes up, or null. */
   nextDueAt: string | null;
+  /** The Settings "AI reviews" toggle: offer the AI grade on answers. */
+  aiReviews: boolean;
+}
+
+/** POST /api/mock/cards/:id/check — the AI's read of one answer. Moves nothing. */
+export interface GapCardCheck {
+  grade: GapCardGrade;
+  /** One line. */
+  why: string;
+  missing: string[];
+  /** False when no call was made (an empty / "I don't know" answer). */
+  ai: boolean;
+  costUsd: number | null;
 }
 
 /** The schedule a brand-new card starts with: bottom rung, due now. */

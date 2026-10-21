@@ -5,13 +5,30 @@
 // onward once the server says the day has moved past it. Pure, so the rule is
 // tested without a browser.
 
-import { TODAY_STEPS, type TodayState, type TodayStepId } from '@/shared/today';
+import { STEP_NOTE_IDS, STEP_NOTE_LABEL, TODAY_STEPS, type StepNoteId, type TodayState, type TodayStepId } from '@/shared/today';
 
 export interface TodayLink {
   label: string;
   href: string;
   /** The step it leads to; null = back to the Today page (day complete). */
   step: TodayStepId | null;
+  /** The latest earlier step's AI carry ("Carry into Problem 2: …"), if any. */
+  carry: { from: string; text: string } | null;
+}
+
+/** Where each noted thing sits in the day (recognize rides with the warm-up). */
+const NOTE_ORDER: Readonly<Record<StepNoteId, number>> = { warmup: 0, recognize: 0.5, problem1: 1, problem2: 2, mock: 3 };
+
+/** The carry from the latest note BEFORE `step`, or null. Pure. */
+export function carryInto(state: Pick<TodayState, 'stepNotes'>, step: TodayStepId | null): TodayLink['carry'] {
+  if (step === null || !state.stepNotes) return null;
+  const at = TODAY_STEPS.indexOf(step);
+  let best: TodayLink['carry'] = null;
+  for (const id of STEP_NOTE_IDS) {
+    const n = state.stepNotes[id];
+    if (n?.carry && NOTE_ORDER[id] < at) best = { from: STEP_NOTE_LABEL[id], text: n.carry };
+  }
+  return best;
 }
 
 /** `?from=today&step=…` → the step, or null when the screen was not opened from Today. */
@@ -33,7 +50,7 @@ const pathOf = (href: string) => href.split(/[?#]/)[0];
  * to Today once the day is complete.
  */
 export function nextStepLink(state: TodayState, here: TodayStepId, screenPath: string): TodayLink | null {
-  if (state.current === null) return { label: 'Day complete — back to Today', href: '/today', step: null };
+  if (state.current === null) return { label: 'Day complete — back to Today', href: '/today', step: null, carry: null };
   const step = state.steps.find((s) => s.id === state.current)!;
   const sameScreen = pathOf(step.href).startsWith(screenPath) && screenPath !== '/today';
   if (state.current === here && sameScreen) return null;
@@ -41,6 +58,7 @@ export function nextStepLink(state: TodayState, here: TodayStepId, screenPath: s
     label: state.current === here ? `Continue: ${step.label}` : `Next: ${step.label}`,
     href: step.href,
     step: step.id,
+    carry: carryInto(state, step.id),
   };
 }
 

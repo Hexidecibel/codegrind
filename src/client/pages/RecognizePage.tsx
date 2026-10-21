@@ -4,11 +4,12 @@
 // For rusty days: no editor, no tests. Per card: statement only → pick the
 // pattern (4 choices, auto-checked) + 1-3 sentences of approach/complexity →
 // Reveal (pattern, the tell, skeleton, pitfalls, cached insight/complexity;
-// full code behind a toggle) → self-grade got / shaky / missed. Free, except
-// the optional "AI check my approach" button (one small call, on click).
+// full code behind a toggle) → grade got / shaky / missed. With "AI reviews"
+// on, the AI check runs on reveal (one small call, cached per answer) and its
+// verdict pre-selects the grade; otherwise it is a button.
 //
-// Keys: 1-4 pick · Ctrl/⌘+Enter reveal · after reveal: g / s / m grade,
-// c show code. Not a solve: nothing here moves tier credit.
+// Keys: 1-4 pick · Ctrl/⌘+Enter reveal · after reveal: Enter confirms the AI's
+// grade, g / s / m grade, c show code. Not a solve: nothing here moves tier credit.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
@@ -348,14 +349,28 @@ export function RecognizePage() {
     if (!card || reveal || revealing) return;
     setRevealing(true);
     setError(null);
+    let r: RecognizeReveal | null = null;
     try {
-      setReveal(await revealRecognize(card.problemId, picked));
+      r = await revealRecognize(card.problemId, picked);
+      setReveal(r);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setRevealing(false);
     }
-  }, [card, picked, reveal, revealing]);
+    // "AI reviews" on: check the approach automatically (cached per answer, so
+    // an identical answer is free). Its verdict pre-selects the grade.
+    if (r?.autoCheck && approach.trim()) {
+      setCheckBusy(true);
+      try {
+        setCheck(await checkRecognize(card.problemId, picked, approach));
+      } catch (e) {
+        setError(`AI check unavailable (${(e as Error).message}) — grade it yourself.`);
+      } finally {
+        setCheckBusy(false);
+      }
+    }
+  }, [approach, card, picked, reveal, revealing]);
 
   const toggleCode = useCallback(async () => {
     if (!card || !reveal) return;
@@ -444,6 +459,11 @@ export function RecognizePage() {
         return;
       }
       const k = e.key.toLowerCase();
+      if (e.key === 'Enter' && check) {
+        e.preventDefault();
+        void doGrade(check.suggested);
+        return;
+      }
       if (k === 'g') void doGrade('got');
       else if (k === 's') void doGrade('shaky');
       else if (k === 'm') void doGrade('missed');
@@ -451,7 +471,7 @@ export function RecognizePage() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [card, doGrade, doReveal, reveal, toggleCode]);
+  }, [card, check, doGrade, doReveal, reveal, toggleCode]);
 
   const total = cards?.length ?? 0;
   const finished = cards !== null && idx >= total;
@@ -582,7 +602,18 @@ export function RecognizePage() {
                 <section className="space-y-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-semibold">How was your approach?</span>
-                    {!check && (
+                    {checkBusy && !check && (
+                      <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> AI checking your approach…
+                      </span>
+                    )}
+                    {check && (
+                      <span className="ml-auto text-xs text-muted-foreground">
+                        AI suggests <b>{GRADE_META[check.suggested].label}</b> — Enter confirms, or pick another
+                        {check.cached ? ' · cached, free' : ''}
+                      </span>
+                    )}
+                    {!check && !checkBusy && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -612,6 +643,7 @@ export function RecognizePage() {
                           check?.suggested === g && 'ring-2 ring-primary',
                         )}
                       >
+                        {check?.suggested === g ? 'Confirm: ' : ''}
                         {GRADE_META[g].label} <kbd className="ml-1 text-[10px] opacity-70">{GRADE_META[g].key}</kbd>
                       </button>
                     ))}

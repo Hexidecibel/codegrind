@@ -1245,3 +1245,41 @@ describe('v4 — mock gap cards', () => {
     db.close();
   });
 });
+
+// -----------------------------------------------------------------------------
+describe('Phase F: the ai_usage ledger', () => {
+  it('is created once, backfilled from mocks.usage and the debrief, and never backfilled twice', () => {
+    const db = oldDb();
+    db.exec(`
+      CREATE TABLE mocks (id TEXT PRIMARY KEY, kind TEXT, usage TEXT NOT NULL, createdAt TEXT NOT NULL);
+      INSERT INTO mocks VALUES ('m1', 'system-design',
+        '{"calls":3,"inputTokens":9000,"outputTokens":1200,"cacheReadTokens":4000,"cacheWriteTokens":500,"costUsd":0.05,"models":["claude-sonnet-5"]}',
+        '2026-10-20T18:00:00.000Z');
+      INSERT INTO mocks VALUES ('m2', 'behavioral', '{"calls":0,"costUsd":0,"models":[]}', '2026-10-20T19:00:00.000Z');
+    `);
+    migrate(db);
+    db.prepare(
+      `INSERT INTO daily_sessions (date, mockKind, debrief, debriefUsage, debriefAt, createdAt, updatedAt)
+       VALUES ('2026-10-20', 'coding', '{}', '{"model":"claude-sonnet-5","inputTokens":1800,"outputTokens":600,"costUsd":0.0096}', '2026-10-21T05:00:00.000Z', 'x', 'x')`
+    ).run();
+    const rows = () =>
+      db.prepare(`SELECT source, model, inputTokens, costUsd, at FROM ai_usage ORDER BY id`).all() as Array<Record<string, unknown>>;
+    expect(rows()).toEqual([
+      { source: 'backfill:mock', model: 'claude-sonnet-5', inputTokens: 9000, costUsd: 0.05, at: '2026-10-20T18:00:00.000Z' },
+    ]);
+    // The ledger now exists: a second boot backfills NOTHING (the debrief written
+    // since is the live recorder's business, not the migration's).
+    migrate(db);
+    expect(rows()).toHaveLength(1);
+    db.close();
+  });
+
+  it('adds the step-notes columns and the recognize check cache', () => {
+    const db = oldDb();
+    migrate(db);
+    expect(columnExists(db, 'daily_sessions', 'stepNotes')).toBe(true);
+    expect(columnExists(db, 'daily_sessions', 'aiFailures')).toBe(true);
+    expect(columnExists(db, 'recognize_checks', 'key')).toBe(true);
+    db.close();
+  });
+});

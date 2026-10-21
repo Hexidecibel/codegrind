@@ -9,6 +9,14 @@ import {
   localDay,
   localDayStreak,
   pickMockKind,
+  pendingReviews,
+  bumpFailure,
+  missTopicsToday,
+  missFocusBias,
+  MISS_FOCUS_BIAS,
+  MAX_AI_ATTEMPTS,
+  FAILURE_COOLDOWN_MS,
+  type PendingReviewsInput,
   type DeriveInput,
   type TodayAttemptRow,
 } from './today.compute.js';
@@ -250,5 +258,83 @@ describe('the scheduler hook', () => {
     expect(dailyFocusBias('arrays', ['hashing'])).toBe(0);
     expect(dailyFocusBias('arrays', undefined)).toBe(0);
     expect(DAILY_FOCUS_BIAS).toBeLessThan(0.5);
+  });
+});
+
+describe('pendingReviews (Phase F)', () => {
+  const NOW = Date.parse('2026-10-21T20:00:00.000Z');
+  const st = (statuses: Record<string, string>) =>
+    (['warmup', 'problem1', 'problem2', 'mock', 'debrief'] as const).map((id) => ({
+      id,
+      status: (statuses[id] ?? 'todo') as PendingReviewsInput['steps'][number]['status'],
+    }));
+  const base = (over: Partial<PendingReviewsInput> = {}): PendingReviewsInput => ({
+    steps: st({ warmup: 'done', problem1: 'done', problem2: 'current' }),
+    warmupActivity: 2,
+    recognizeDone: false,
+    noted: [],
+    hasDebrief: false,
+    failures: {},
+    enabled: true,
+    now: NOW,
+    ...over,
+  });
+
+  it('reviews finished steps with real activity, in order', () => {
+    expect(pendingReviews(base())).toEqual(['warmup', 'problem1']);
+    expect(pendingReviews(base({ warmupActivity: 0 }))).toEqual(['problem1']); // nothing was due
+    expect(pendingReviews(base({ recognizeDone: true }))).toEqual(['warmup', 'recognize', 'problem1']);
+  });
+
+  it('skips what already has a note, and everything when the toggle is off', () => {
+    expect(pendingReviews(base({ noted: ['warmup', 'problem1'] }))).toEqual([]);
+    expect(pendingReviews(base({ enabled: false }))).toEqual([]);
+  });
+
+  it('adds the debrief LAST once every step is settled and something was done', () => {
+    const settled = st({ warmup: 'done', problem1: 'done', problem2: 'skipped', mock: 'skipped' });
+    expect(pendingReviews(base({ steps: settled }))).toEqual(['warmup', 'problem1', 'debrief']);
+    expect(pendingReviews(base({ steps: settled, hasDebrief: true }))).toEqual(['warmup', 'problem1']);
+    const empty = st({ warmup: 'done', problem1: 'skipped', problem2: 'skipped', mock: 'skipped' });
+    expect(pendingReviews(base({ steps: empty, warmupActivity: 0 }))).toEqual([]);
+  });
+
+  it('a failure waits out the cooldown, and MAX_AI_ATTEMPTS failures end it for the day', () => {
+    const at = new Date(NOW - 60_000);
+    let failures = bumpFailure({}, 'problem1', at);
+    expect(pendingReviews(base({ failures }))).toEqual(['warmup']);
+    expect(pendingReviews(base({ failures, now: at.getTime() + FAILURE_COOLDOWN_MS }))).toEqual(['warmup', 'problem1']);
+    for (let i = 1; i < MAX_AI_ATTEMPTS; i++) failures = bumpFailure(failures, 'problem1', at);
+    expect(failures.problem1?.n).toBe(MAX_AI_ATTEMPTS);
+    expect(pendingReviews(base({ failures, now: NOW + 86_400_000 }))).toEqual(['warmup']);
+  });
+});
+
+describe('miss focus (Phase F)', () => {
+  it('collects today\'s recognize misses and pattern-naming card misses, deduped and ordered', () => {
+    expect(
+      missTopicsToday({
+        recognize: [
+          { topic: 'heap', grade: 'missed' },
+          { topic: 'trie', grade: 'got' },
+          { topic: 'sliding-window', grade: 'shaky' },
+          { topic: 'heap', grade: 'missed' },
+          { topic: 'not-a-topic', grade: 'missed' },
+        ],
+        cards: [
+          { kind: 'coding', title: 'When does a sliding window fail?', summary: '', answer: 'Use binary search on the answer.', lastGrade: 'missed' },
+          { kind: 'coding', title: 'Explain graphs', summary: '', answer: '', lastGrade: 'got' },
+          // A system-design card naming "hashing" is not a hash-map miss.
+          { kind: 'system-design', title: 'Consistent hashing ring', summary: '', answer: '', lastGrade: 'shaky' },
+        ],
+      })
+    ).toEqual(['heap', 'sliding-window', 'binary-search']);
+  });
+
+  it('is a small lean', () => {
+    expect(missFocusBias('heap', ['heap'])).toBe(MISS_FOCUS_BIAS);
+    expect(missFocusBias('heap', [])).toBe(0);
+    expect(missFocusBias('heap', undefined)).toBe(0);
+    expect(MISS_FOCUS_BIAS).toBeLessThan(DAILY_FOCUS_BIAS);
   });
 });

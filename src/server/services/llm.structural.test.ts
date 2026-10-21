@@ -28,6 +28,8 @@ const MOCK_SOURCE = readFileSync(fileURLToPath(new URL('./llm.mock.ts', import.m
 const DEBRIEF_SOURCE = readFileSync(fileURLToPath(new URL('./llm.debrief.ts', import.meta.url)), 'utf8');
 // The Recognize drill's optional AI check, same rules.
 const RECOGNIZE_SOURCE = readFileSync(fileURLToPath(new URL('./llm.recognize.ts', import.meta.url)), 'utf8');
+// Phase F's automatic reviews (card grading, step reviews).
+const REVIEW_SOURCE = readFileSync(fileURLToPath(new URL('./llm.review.ts', import.meta.url)), 'utf8');
 // The per-kind specs (mock-kinds/) hold the mock prompts and schemas — the same
 // "what to ask" half — so they are held to the same rules, every file of them.
 const KIND_DIR = fileURLToPath(new URL('./mock-kinds/', import.meta.url));
@@ -140,6 +142,27 @@ describe('llm.recognize.ts stays vendor-free too', () => {
     expect(calls[0]).toMatch(/role: 'small'/);
     expect(calls[0]).toMatch(/thinking: 'off'/);
     expect(calls[0]).toMatch(/maxTokens: \d+/);
+  });
+});
+
+describe('llm.review.ts stays vendor-free too', () => {
+  const h = (p: RegExp) => hits(p, REVIEW_SOURCE);
+
+  it('has no "provider", no SDK, no wire format and no model name', () => {
+    expect(h(/provider/i)).toEqual([]);
+    expect(h(/@anthropic-ai\/sdk|openai|from '\.\/llm\.anthropic/)).toEqual([]);
+    expect(h(/messages\.create|input_schema|cache_control|type: 'ephemeral'/)).toEqual([]);
+    expect(h(/claude-|ANTHROPIC_MODEL|ANTHROPIC_API_KEY/)).toEqual([]);
+  });
+
+  it('makes exactly two calls, both small role, thinking off, explicit budget', () => {
+    const calls = REVIEW_SOURCE.match(/await structured\(\{[\s\S]*?\n\s*\}\);/g) ?? [];
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call).toMatch(/role: 'small'/);
+      expect(call).toMatch(/thinking: 'off'/);
+      expect(call).toMatch(/maxTokens: \d+/);
+    }
   });
 });
 

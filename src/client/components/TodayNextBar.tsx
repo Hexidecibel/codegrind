@@ -5,12 +5,17 @@
 
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight, CalendarCheck } from 'lucide-react';
+import { ArrowRight, CalendarCheck, Sparkles } from 'lucide-react';
 import type { TodayStepId } from '@/shared/today';
 import { getToday } from '@/client/lib/api';
 import { nextStepLink, type TodayLink } from '@/client/lib/today-flow';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
+
+/** "Next: Problem 2" → "Problem 2". */
+function stepLabel(link: TodayLink): string {
+  return link.label.replace(/^(Next|Continue): /, '');
+}
 
 export function TodayNextBar({
   here,
@@ -36,17 +41,25 @@ export function TodayNextBar({
 
   useEffect(() => {
     let live = true;
-    getToday()
-      .then((s) => {
-        if (!live) return;
-        setLink(nextStepLink(s, here, screenPath));
-        setProgress(`${s.completed}/${s.total}`);
-      })
-      .catch(() => {
-        /* the bar is a convenience; the Today tab still works */
-      });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let polls = 0;
+    const load = () =>
+      getToday()
+        .then((s) => {
+          if (!live) return;
+          setLink(nextStepLink(s, here, screenPath));
+          setProgress(`${s.completed}/${s.total}`);
+          // A step review is being written (server-side, once): re-read a few
+          // times so its "carry" shows up. Bounded — never a loop.
+          if (s.aiPending.length && polls++ < 8) timer = setTimeout(load, 4000);
+        })
+        .catch(() => {
+          /* the bar is a convenience; the Today tab still works */
+        });
+    void load();
     return () => {
       live = false;
+      if (timer) clearTimeout(timer);
     };
   }, [here, screenPath, refreshKey]);
 
@@ -62,6 +75,12 @@ export function TodayNextBar({
       <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
         <CalendarCheck className="h-4 w-4 text-primary" /> Today {progress}
       </span>
+      {link.carry && link.step && (
+        <span className="order-last basis-full text-sm sm:order-none sm:basis-auto sm:flex-1" title={`From the ${link.carry.from} review`}>
+          <Sparkles className="mr-1 inline h-3.5 w-3.5 text-primary" />
+          <span className="font-medium">Carry into {stepLabel(link)}:</span> {link.carry.text}
+        </span>
+      )}
       {onLocal && link.step !== null ? (
         <Button
           className="ml-auto gap-1.5"

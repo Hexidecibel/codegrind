@@ -5,7 +5,9 @@
 //   GET  /api/mock/prompts?kind=    the prompt bank free (kind absent = system design)
 //   GET  /api/mock/plan?kind=       a planned kind's preview   free (behavioral reads the story bank; no model)
 //   GET  /api/mock/cards            due drill cards free
-//   POST /api/mock/cards/:id/grade  {grade: got|shaky|missed}      free (self-graded, no model)
+//   POST /api/mock/cards/:id/grade  {grade: got|shaky|missed}      free (the user's grade, no model)
+//   POST /api/mock/cards/:id/check  {answer}                       ONE small call (AI grade, moves nothing;
+//                                                                  "I don't know" = missed, free)
 //   GET  /api/mock/:id              one mock        free
 //   POST /api/mock/start            {kind?, level?, promptId?}     ONE model call
 //   POST /api/mock/:id/turn         {expectedSeq, content, action?} ONE model call
@@ -27,6 +29,7 @@ import {
   gapCards,
   getMockView,
   gradeGapCard,
+  checkGapCard,
   parseEnd,
   parseKind,
   prepareEnd,
@@ -81,6 +84,17 @@ mockRoutes.post('/mock/cards/:id/grade', async (c) => {
     return c.json(gradeGapCard(id, body));
   } catch (err) {
     return fail(c, 'mock-card', err);
+  }
+});
+
+mockRoutes.post('/mock/cards/:id/check', async (c) => {
+  try {
+    const id = Number(c.req.param('id'));
+    if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'No such card.' }, 404);
+    const body = await c.req.json().catch(() => null);
+    return c.json(await checkGapCard(id, body));
+  } catch (err) {
+    return fail(c, 'mock-card-check', err);
   }
 });
 
