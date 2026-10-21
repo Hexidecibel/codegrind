@@ -30,11 +30,12 @@
 //     solution and do not touch the ledger — only the reference code does.
 // `used` is deliberately left alone: the bank's stocking is Grind's business.
 
-import { TOPICS, type ProblemRecord, type Topic } from '../../shared/types.js';
+import { TOPICS, type Primer, type ProblemRecord, type Topic } from '../../shared/types.js';
 import { createHash } from 'node:crypto';
 import { costOf } from '../../shared/mock.js';
-import { aiReviewsEnabled } from './ai-usage.service.js';
-import { isGapCardGrade } from '../../shared/gap-cards.js';
+import { SMALL_CALL_SHAPES, aiReviewsEnabled, smallCallEstimateUsd } from './ai-usage.service.js';
+import { isDoubleGrade, isGapCardGrade } from '../../shared/gap-cards.js';
+import { dayStartMs, localDay, todayTz } from './today.compute.js';
 import {
   DEFAULT_RECOGNIZE_SIZE,
   RECOGNIZE_SIZES,
@@ -98,8 +99,8 @@ function sizeOf(n: unknown): number {
   return (RECOGNIZE_SIZES as readonly number[]).includes(k as number) ? (k as number) : DEFAULT_RECOGNIZE_SIZE;
 }
 
-/** The day used to seed the choice shuffle, so a reload shows the same four. */
-const seedDay = (now: Date) => now.toISOString().slice(0, 10);
+/** The LOCAL day used to seed the choice shuffle, so a reload shows the same four. */
+const seedDay = (now: Date) => localDay(now.getTime(), todayTz());
 
 export function startSession(n: unknown, now = new Date()): RecognizeSession {
   const size = sizeOf(n);
@@ -127,6 +128,7 @@ export function startSession(n: unknown, now = new Date()): RecognizeSession {
     weakness,
     now: now.getTime(),
     rng: mulberry32(hashString(`${seedDay(now)}:${size}:${rows.length}`)),
+    todayStartMs: dayStartMs(seedDay(now), todayTz()),
   });
 
   const byId = new Map(rows.map((r) => [r.problemId, r]));
@@ -149,20 +151,46 @@ export function startSession(n: unknown, now = new Date()): RecognizeSession {
   return { cards, dueLeft: sel.dueLeft };
 }
 
-/** The topic's primer: cached, or generated once and cached (as GET /api/primer does). */
-async function primerFor(topic: Topic) {
+/** Primer generations in flight, per topic: concurrent reveals share one call. */
+const primerInFlight = new Map<string, Promise<Primer | null>>();
+/** Failed generations per topic: no retry inside PRIMER_FAILURE_COOLDOWN_MS. */
+const primerFailedAt = new Map<string, number>();
+export const PRIMER_FAILURE_COOLDOWN_MS = 30 * 60 * 1000;
+
+/**
+ * The topic's primer: cached, or generated once and cached (as GET /api/primer
+ * does). The generation is AUTOMATIC here (every reveal asks), so it obeys the
+ * same rules as Phase F's automatic calls (Phase H): gated by the "AI reviews"
+ * toggle, deduped while in flight, and a failure is not retried for
+ * PRIMER_FAILURE_COOLDOWN_MS — a dead model costs one call per topic per half
+ * hour, never one per reveal.
+ */
+async function primerFor(topic: Topic, now = Date.now()): Promise<Primer | null> {
   const language = getActiveLanguage();
   const cached = getPrimer(language, topic);
   if (cached) return cached;
-  try {
-    const fresh = await generatePrimer(topic);
-    insertPrimer(fresh);
-    return getPrimer(language, topic) ?? fresh;
-  } catch (err) {
-    // The reveal still works without it — the code and the topic are the answer.
-    console.error('[recognize] primer generation failed:', err instanceof Error ? err.message : err);
-    return null;
-  }
+  if (!aiReviewsEnabled()) return null;
+  const failed = primerFailedAt.get(topic);
+  if (failed !== undefined && now - failed < PRIMER_FAILURE_COOLDOWN_MS) return null;
+  const running = primerInFlight.get(topic);
+  if (running) return running;
+  const job = (async () => {
+    try {
+      const fresh = await generatePrimer(topic);
+      insertPrimer(fresh);
+      primerFailedAt.delete(topic);
+      return getPrimer(language, topic) ?? fresh;
+    } catch (err) {
+      // The reveal still works without it — the code and the topic are the answer.
+      primerFailedAt.set(topic, Date.now());
+      console.error('[recognize] primer generation failed:', err instanceof Error ? err.message : err);
+      return null;
+    } finally {
+      primerInFlight.delete(topic);
+    }
+  })();
+  primerInFlight.set(topic, job);
+  return job;
 }
 
 export async function reveal(problemId: unknown, picked: unknown): Promise<RecognizeReveal> {
@@ -181,6 +209,7 @@ export async function reveal(problemId: unknown, picked: unknown): Promise<Recog
     note: store.getNote(p.id),
     language: p.language,
     autoCheck: aiReviewsEnabled(),
+    checkEstimateUsd: smallCallEstimateUsd(SMALL_CALL_SHAPES.recognizeCheck),
   };
 }
 
@@ -243,8 +272,18 @@ export async function check(body: { problemId?: unknown; picked?: unknown; appro
 export function grade(body: Partial<RecognizeGradeRequest>, now = new Date()): RecognizeGradeResponse {
   const p = requireProblem(body.problemId);
   if (!isGapCardGrade(body.selfGrade)) throw new RecognizeError('selfGrade must be got, shaky or missed', 400);
+  // The double-grade guard: a second POST for the same card inside a few
+  // seconds is a double tap, not a second answer (shared/gap-cards).
+  if (isDoubleGrade(store.lastAttemptAt(p.id), now)) {
+    throw new RecognizeError('That card was just graded.', 409);
+  }
   const patternCorrect = isPatternCorrect(body.picked, p.topic, p.pattern);
-  const g = effectiveGrade(patternCorrect, body.selfGrade);
+  // The AI check's verdict, read from the server's own cache (never trusted
+  // from the request body) for exactly this pick and approach.
+  const approachText = typeof body.approach === 'string' ? body.approach.slice(0, 1200) : '';
+  const picked = isTopic(body.picked) ? body.picked : null;
+  const checked = approachText.trim() ? store.getCheck<RecognizeCheck>(checkKey(p.id, picked, approachText)) : null;
+  const g = effectiveGrade(patternCorrect, body.selfGrade, checked?.verdict === 'correct');
   const card = store.getCard(p.id);
   const next = scheduleRecognizeCard(card, g, now);
   store.insertAttempt(

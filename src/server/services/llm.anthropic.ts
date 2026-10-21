@@ -287,9 +287,11 @@ export function createAnthropicClient(model: string, seam?: AnthropicSeam): LlmC
   }
 
   /** A safety decline is a successful 200, so it has to be checked before content. */
-  function assertNotRefused(res: Anthropic.Message): void {
+  function assertNotRefused(res: Anthropic.Message, meta: CallMeta): void {
     if (res.stop_reason === 'refusal') {
-      throw new Error(`${model} declined this request (stop_reason: refusal).`);
+      // `meta` rides along so llm.client can still put the billed tokens in the
+      // spend ledger (a refusal is a 200 and is paid for).
+      throw Object.assign(new Error(`${model} declined this request (stop_reason: refusal).`), { meta });
     }
   }
 
@@ -302,7 +304,7 @@ export function createAnthropicClient(model: string, seam?: AnthropicSeam): LlmC
       const startedAt = Date.now();
       const res = await send(req, buildBody(req));
       const meta = metaOf(res, model, startedAt);
-      assertNotRefused(res);
+      assertNotRefused(res, meta);
 
       const call = res.content?.find(
         (block): block is Anthropic.ToolUseBlock =>
@@ -325,7 +327,7 @@ export function createAnthropicClient(model: string, seam?: AnthropicSeam): LlmC
       const startedAt = Date.now();
       const res = await send(req, buildBody(req));
       const meta = metaOf(res, model, startedAt);
-      assertNotRefused(res);
+      assertNotRefused(res, meta);
 
       // Thinking blocks come back ahead of the answer and (displayed as
       // "omitted") carry no text, so content[0] is not necessarily the reply.

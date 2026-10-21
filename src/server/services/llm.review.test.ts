@@ -68,7 +68,11 @@ describe('rendered inputs', () => {
     });
     expect(text).toContain('Step just finished: Problem 2\nNext step: the mock interview');
     expect(text).toContain('- "Two Sum" passed');
-    expect(text).toContain('Earlier today:\n- Problem 1: Off by one. Carry: Trace the empty case.');
+    expect(text).toContain('Earlier today:\n- Problem 1: Off by one. Carry for this step: Trace the empty case.');
+    // A note whose carry was not written for this step renders without one.
+    expect(
+      renderStepReviewInput({ step: 'Problem 2', next: 'x', digest: [], earlier: [{ step: 'Warm-up', note: 'Cards 3/3.', carry: '' }] })
+    ).toContain('- Warm-up: Cards 3/3.');
     expect(coerceStepReview({ note: '  a\n b ', carry: 7 })).toEqual({ note: 'a b', carry: '' });
   });
 });

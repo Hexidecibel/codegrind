@@ -44,6 +44,7 @@ import type {
   MockState,
 } from '../../../shared/mock.js';
 import type { ToolSpec } from '../llm.types.js';
+import { clipAtBoundary } from '../../../shared/clip.js';
 import { CARD_FRONT_STYLE, coercers, gradeTool, interviewerTool } from './common.js';
 import type { MockKindSpec, MockPrep, MockPrepareArgs } from './types.js';
 
@@ -58,7 +59,7 @@ STAGES, in order: ${CODING_STAGES.join(' → ')}.
 - complexity: they state time and space for the approach they will code, and why. Push back once if it is wrong.
 - code: they write it. Stay mostly quiet; answer questions; ask about a choice only when it matters. Never write their code, never fix a bug for them.
 - test: ask them to trace their code on an example and an edge case before or after they Run. When a run fails, ask what they think is wrong before anything else.
-- follow-up: ONLY after a passing solution (a [run: submit …] line with every hidden test passing, or a clean sample run plus a correct trace if time is short). Ask exactly ONE Staff-style extension and discuss it — no need to code it fully: scale it (the input no longer fits in memory / is sharded), stream it (the data arrives one item at a time, answer as you go), or change a constraint (k queries instead of one, values can be negative, memory is O(1)). Pick the one that fits this problem best.
+- follow-up: ONLY after a passing solution (a [run: submit …] line with every hidden test passing, or a clean sample run plus a correct trace if time is short). Ask exactly ONE Staff-style extension and discuss it — no need to code it fully: scale it (the input no longer fits in memory / is sharded), stream it (the data arrives one item at a time, answer as you go), or change a constraint (k queries instead of one, values can be negative, memory is O(1)). Pick the one that fits this problem best, and make it NON-TRIVIAL: it must force a change to the algorithm or its data structures. An extension the current solution already answers unchanged (k queries against a closed-form answer, say) teaches nothing — choose another.
 Report the stage your reply belongs to, and every stage adequately covered so far. Moving on when the candidate does is fine; a stage they skipped is noticed by the app.
 
 THE REFERENCE SOLUTION in the setup message is for YOU only. NEVER show it, paste it, paraphrase it line by line, or describe its exact steps. Never name the algorithm or pattern before the candidate does, except in teach mode. You may use it to judge whether their approach and code are right and to aim your questions.
@@ -80,7 +81,7 @@ THINKING OUT LOUD is what is being practised. The candidate often dictates, so l
 
 ANSWER BEFORE YOU REDIRECT. When the candidate asks you something, your reply OPENS by answering it in one or two sentences (without leaking the solution), then continues. Never ignore an explicit question.
 
-GAPS: on every reply, list in gaps every fact or reasoning move YOU handed over that the candidate did not have — taught in teach mode, explained while answering, or given away in a nudge ("a hash map gives you O(1) lookups of what you've seen", "an empty input returns 0 here"). type fact for a language or library fact or a specific known result; type skill for a reasoning move (spotting the pattern, choosing the invariant, deriving complexity, tracing to find a bug). title: the drill-card front, a self-contained question that names this problem's shape ("If you need the pairs that sum to a target in one pass, what would you store as you go, and why does that make it O(n)?") — ${CARD_FRONT_STYLE}; answer: two to four sentences, the answer and why it matters. An empty list when you handed nothing over.
+GAPS: on every reply, list in gaps every fact or reasoning move YOU handed over that the candidate did not have — taught in teach mode, explained while answering, or given away in a nudge ("a hash map gives you O(1) lookups of what you've seen", "an empty input returns 0 here"). type fact for a language or library fact or a specific known result; type skill for a reasoning move (spotting the pattern, choosing the invariant, deriving complexity, tracing to find a bug). title: the drill-card front, a self-contained question that names this problem's shape ("If you need the pairs that sum to a target in one pass, what would you store as you go, and why does that make it O(n)?") — ${CARD_FRONT_STYLE}; answer: two to four sentences, the answer and why it matters. An empty list when you handed nothing over. A CLARIFYING QUESTION THE CANDIDATE ASKED is never a gap: answering it (inputs, sizes, edge cases, the return value, the requirements) hands over nothing the candidate lacked — asking it is the skill. Never list such an answer in gaps.
 
 OBSERVATIONS: on every reply, record what the candidate's LAST message (and editor) showed about concepts in the closed list — nailed (did it well, unprompted), weak (partly, or only when pushed), missing (should have, did not). Zero observations is fine.
 
@@ -94,14 +95,18 @@ You have the problem, the REFERENCE SOLUTION and the HIDDEN-TEST RESULT the serv
 
 Rules:
 - stages: score clarify, examples, approach, complexity, code, test and follow-up 1–4 against the rubric anchors; a stage never reached scores 0 with evidence "not reached". staffWouldAdd / principalWouldAdd: one concrete sentence or move the candidate could have made at that stage, not "more depth".
+- WHO SAID IT FIRST. Credit the candidate only for what THEY raised before the interviewer did. When an interviewer turn raised an edge case, the brute force, the pattern, the complexity, an overflow/precision concern or the follow-up idea first, the candidate repeating or agreeing with it is not their evidence — in evidence, cite the turn where it first appeared and who said it ("edge case raised by the interviewer in turn 4").
+- NO EVIDENCE, NO SCORE. A stage the interview never exercised scores 0 ("not reached"); a stage only touched in passing, or done only after a prompt, scores at most 2. "Not applicable" is never a 4 — a stage that did not happen cannot be excellent.
+- CALIBRATE ON DIFFICULTY. The problem's difficulty is in the setup. An easy problem solved cleanly is Senior-level coding evidence at most: at Staff, approach and code on an easy cap at 3 unless the candidate went clearly beyond it (a sharper bound, a trade-off nobody asked for). Fours on every stage of an easy problem is inflation, not a result.
+- THE FOLLOW-UP MUST BE NON-TRIVIAL. follow-up scores 3 or more only when the extension changed the algorithm or its constraints and the candidate adapted the solution; an extension answered by reusing the same computation (or one the interviewer then answered) scores at most 2.
 - TAUGHT MATERIAL IS NOT EVIDENCE. Turns marked [TAUGHT: …] are coaching; what the candidate does with it afterwards shows listening, not knowledge. Nudges count against "unprompted". List each taught concept in gapsTaught.
 - coding.patternMissed: true when the candidate did NOT reach the key pattern or idea of the reference approach on their own — it came from a nudge, a lesson, or never came. false when they found it themselves (even slowly, even if the code then had bugs). patternNote: one sentence naming the pattern and how it was (or was not) reached.
-- coding.complexityStated: what the candidate said their final complexity was (or "not stated"); complexityOptimal: the reference approach's time and space.
+- coding.complexityStated: what the candidate said their final complexity was (or "not stated"); complexityOptimal: the reference approach's time and space, in a short phrase ("O(n) time, O(1) space").
 - GAPS ARE NOT EQUAL. A fact gap (a library call, a language quirk) is a cheap fix and weighs little. A skill gap (no brute force, did not see the pattern, could not derive complexity, did not test, debugged by guessing) is what the level is judged on.
 - verdict: below / at / above the stated level overall. Failing hidden tests at the end is a heavy weight against "at"; a correct solution reached only with the pattern handed over is at best "below" at Staff.
 - conceptObservations: the concepts the transcript gives evidence on, each nailed / weak / missing.
 - drills: 3 to 6 short drills, most valuable first, each one concept — something they can do in a few minutes ("Say the brute force for this problem and its complexity in two sentences before touching the editor"), plus why.
-- gaps: every fact or reasoning move the INTERVIEWER handed over that is NOT already in RECORDED GAPS — including inside a nudge or an answer. Each with type, title (a self-contained drill-card question naming the problem's shape, worded as an interviewer would ask it — ${CARD_FRONT_STYLE}), answer (two to four sentences) and the interviewer turn.
+- gaps: every fact or reasoning move the INTERVIEWER handed over that is NOT already in RECORDED GAPS — including inside a nudge or an answer. Each with type, title (a self-contained drill-card question naming the problem's shape, worded as an interviewer would ask it — ${CARD_FRONT_STYLE}), answer (two to four sentences) and the interviewer turn. A CLARIFYING QUESTION THE CANDIDATE ASKED is never a gap: answering it (inputs, sizes, edge cases, the return value, the requirements) hands over nothing the candidate lacked — asking it is the skill. Never list such an answer in gaps.
 - summary: three or four sentences — correctness, the skill gaps as practice areas, the fact gaps as cheap fixes.
 
 Return the grade by calling emit_mock_grade exactly once.`;
@@ -207,7 +212,9 @@ export function codingTurnExtras(
   }
   if (input.lastRun) {
     const line = renderRunLine(input.lastRun);
-    const h = hashCode(line);
+    // Keyed on the line AND the code it ran against: the same "2/3 passed"
+    // after an edit is a new result and must reach the interviewer (Phase H).
+    const h = hashCode(`${line}|${patch.codeHash ?? coding.codeHash}`);
     if (h !== coding.runHash) {
       parts.push(line);
       patch.runHash = h;
@@ -430,7 +437,7 @@ export function codingGradeTool(lean: boolean): ToolSpec {
     if (k === 'stages') {
       properties.coding = {
         type: 'object',
-        ...(lean ? {} : { additionalProperties: false }),
+        additionalProperties: false,
         properties: {
           patternMissed: { type: 'boolean', description: 'True when the key pattern did not come from the candidate.' },
           patternNote: { type: 'string' },
@@ -455,9 +462,9 @@ export function coerceCodingGrade(raw: unknown): MockCodingGrade {
   const s = (x: unknown, n: number) => (typeof x === 'string' ? x.slice(0, n) : '');
   return {
     patternMissed: r.patternMissed === true,
-    patternNote: s(r.patternNote, 600),
-    complexityStated: s(r.complexityStated, 120) || 'not stated',
-    complexityOptimal: s(r.complexityOptimal, 120),
+    patternNote: clipAtBoundary(s(r.patternNote, 10_000), 900),
+    complexityStated: clipAtBoundary(s(r.complexityStated, 10_000), 300) || 'not stated',
+    complexityOptimal: clipAtBoundary(s(r.complexityOptimal, 10_000), 300),
     tests: null,
     reviewQueued: false,
   };

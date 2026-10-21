@@ -193,15 +193,19 @@ export function GapCards({ onGraded }: { onGraded?: () => void } = {}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    getGapCards()
-      .then((d) => {
-        setData(d);
-        setRevealed(false);
-      })
-      .catch((e: Error) => setError(e.message));
-  }, []);
-  useEffect(load, [load]);
+  const load = useCallback(
+    () =>
+      getGapCards()
+        .then((d) => {
+          setData(d);
+          setRevealed(false);
+        })
+        .catch((e: Error) => setError(e.message)),
+    []
+  );
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   if (!data) return null;
   const total = data.due.length + data.upcoming + data.retired;
@@ -213,7 +217,10 @@ export function GapCards({ onGraded }: { onGraded?: () => void } = {}) {
     setError(null);
     try {
       await gradeGapCard(card.id, g);
-      load();
+      // AWAITED: the buttons stay disabled until the NEXT card is on screen.
+      // Clearing `busy` first left the graded card tappable for a moment, and a
+      // second tap graded it again (the server now refuses that too).
+      await load();
       onGraded?.();
     } catch (e) {
       setError((e as Error).message);

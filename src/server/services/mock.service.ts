@@ -51,6 +51,7 @@ import { MOCK_MAX_CODE_CHARS } from '../../shared/coding-mock.js';
 import type { RunResult } from '../../shared/types.js';
 import {
   gapKey,
+  isDoubleGrade,
   isGapCardGrade,
   scheduleGapCard,
   type GapCard,
@@ -310,7 +311,9 @@ export async function startMock(body: {
   // Phase F carry-forward: today's step notes, FROZEN into the context at
   // start like everything else in it, so the per-mock cached prefix is stable.
   // No notes → '' → the context is byte-identical to before.
-  const context = spec.buildContext(prompt, level, prep) + renderCarryBlock(todayCarryNotes(now));
+  // Filtered for what applies to THIS kind (shared/today.applicableNotes).
+  const context =
+    spec.buildContext(prompt, level, prep) + renderCarryBlock(todayCarryNotes(now, kind === 'coding' ? 'algorithm' : 'mock'));
   const row: MockRow = {
     id,
     kind,
@@ -664,6 +667,9 @@ export function gradeGapCard(id: number, body: unknown, now = new Date()): GapCa
   const card = getCard(id);
   if (!card) throw new MockError('No such card.', 404);
   if (card.retiredAt) throw new MockError('That card is already retired.', 409);
+  // The double-grade guard: a second grade inside a few seconds is a double
+  // tap (the client used to re-enable the buttons before the next card loaded).
+  if (isDoubleGrade(card.lastReviewedAt, now)) throw new MockError('That card was just graded.', 409);
   updateCardSchedule(id, scheduleGapCard(card, grade, now));
   return getCard(id)!;
 }

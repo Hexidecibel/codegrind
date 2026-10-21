@@ -24,7 +24,10 @@ import {
   isReviewQueued,
   isSolutionRevealed,
   markSolutionRevealed,
+  countSubmitsSince,
 } from '../services/db.js';
+import { SUBMIT_SOFT_CAP } from '../services/review-ladder.js';
+import { dayStartMs, localDay, todayTz } from '../services/today.compute.js';
 import { runTests } from '../services/sandbox.service.js';
 import { coach, askFollowup } from '../services/llm.service.js';
 import { todayCarryNotes } from '../services/today.service.js';
@@ -215,10 +218,28 @@ submitRoutes.post('/submit', async (c) => {
       code?: string;
       hintsUsed?: number;
       prediction?: unknown;
+      override?: unknown;
     };
     const found = body.problemId ? getProblem(body.problemId) : null;
     if (!found) return c.json({ error: 'problem not found' }, 404);
     problem = found;
+
+    // The soft Submit cap: hammering Submit turns the hidden tests into the
+    // debugger (a real log: 12 submits of one problem in 18 minutes). After
+    // SUBMIT_SOFT_CAP today the client asks first and resends with `override`.
+    if (body.override !== true) {
+      const tz = todayTz();
+      const dayStart = new Date(dayStartMs(localDay(Date.now(), tz), tz)).toISOString();
+      if (countSubmitsSince(problem.id, dayStart) >= SUBMIT_SOFT_CAP) {
+        return c.json(
+          {
+            error: `You've submitted this problem ${SUBMIT_SOFT_CAP} times today. Use Run on the samples (and trace an edge case) before submitting again — or submit anyway.`,
+            code: 'submit-cap',
+          },
+          409
+        );
+      }
+    }
     code = typeof body.code === 'string' ? body.code : '';
     const clientHints = typeof body.hintsUsed === 'number' ? body.hintsUsed : 0;
     prediction = coercePrediction(body.prediction);
@@ -319,7 +340,8 @@ submitRoutes.post('/submit', async (c) => {
     // AFTER insertAttempt on purpose — the tier derivation counts this attempt.
     updateSkillOnAttempt(problem.language, problem.topic, solved, assistedHints);
 
-    // Retrieval loop: a clean unaided solve clears the review; a miss or an
+    // Retrieval loop (review-ladder.ts): a clean unaided solve climbs a queued
+    // review one rung — never on the same day as its miss; a miss or an
     // assisted solve (hint or revealed answer) (re-)queues it on the ladder.
     if (solved && assistedHints === 0) {
       clearReview(problem.id);

@@ -27,6 +27,7 @@
 //   |------------------------|--------------------------------------------------|-----------------|
 //   | workhorse provider     | CODEGRIND_PROVIDER                               | stored, else anthropic |
 //   | workhorse model        | ANTHROPIC_MODEL / CODEGRIND_MODEL                | stored, else provider default |
+//   | small model (Anthropic)| ANTHROPIC_SMALL_MODEL / CODEGRIND_SMALL_MODEL    | claude-haiku-5-5 (see below) |
 //   | tutor provider         | CODEGRIND_CHAT_PROVIDER                          | stored, else workhorse's |
 //   | tutor model            | ANTHROPIC_CHAT_MODEL / CODEGRIND_CHAT_MODEL      | stored, else workhorse's |
 //   | endpoint               | CODEGRIND_ENDPOINT, then QWEN_URL                | stored          |
@@ -84,6 +85,18 @@ export { NO_API_KEY_MESSAGE } from './llm.anthropic.js';
 /** The default model per provider, for the roles that have one. */
 const ANTHROPIC_WORKHORSE_DEFAULT = 'claude-sonnet-5';
 const ANTHROPIC_TUTOR_DEFAULT = 'claude-opus-5';
+/**
+ * The `small` role on Anthropic (Phase H, user-approved): the short forced-tool
+ * calls — card checks, step reviews, the debrief, the Recognize check, the
+ * Envelope note, hints, plans, primers, lessons. Verified LIVE before it became
+ * the default (2026-10-21): forced `tool_choice` + `strict: true` + thinking
+ * disabled all work on Haiku 5.5 (they 400 on Sonnet 5.5 / Opus 5.5), and five
+ * samples per review call site were compared against Sonnet 5's — see the
+ * commit. 20× cheaper per token, and the Recognize review that timed out at
+ * 60s on Sonnet answers in ~2s. Only the provider's own default: a deploy that
+ * routes the workhorse elsewhere routes `small` with it, as before.
+ */
+const ANTHROPIC_SMALL_DEFAULT = 'claude-haiku-5-5';
 
 /**
  * What a role falls back to when nothing is stored and nothing is pinned.
@@ -101,7 +114,7 @@ const ANTHROPIC_TUTOR_DEFAULT = 'claude-opus-5';
  */
 export function roleDefaultModel(role: CallRole, provider: ProviderId): string {
   if (provider !== 'anthropic') return '';
-  return role === 'tutor' ? ANTHROPIC_TUTOR_DEFAULT : ANTHROPIC_WORKHORSE_DEFAULT;
+  return role === 'tutor' ? ANTHROPIC_TUTOR_DEFAULT : role === 'small' ? ANTHROPIC_SMALL_DEFAULT : ANTHROPIC_WORKHORSE_DEFAULT;
 }
 
 function env(name: string): string {
@@ -247,6 +260,7 @@ export interface Routing {
 
 interface Resolved {
   workhorse: Routing;
+  small: Routing;
   tutor: Routing;
 }
 
@@ -361,7 +375,23 @@ function resolve(): Resolved {
     workhorse.provider,
     workhorse
   );
-  return { workhorse, tutor };
+  return { workhorse, small: resolveSmall(workhorse), tutor };
+}
+
+/**
+ * The `small` role: the workhorse's routing in every field but the MODEL, and
+ * that only on Anthropic, where it has its own default (ANTHROPIC_SMALL_DEFAULT)
+ * and its own pin. On any other provider it is the workhorse, exactly as it
+ * always was — there is no safe "smaller local model" to pick for somebody.
+ */
+function resolveSmall(workhorse: Routing): Routing {
+  if (workhorse.provider !== 'anthropic') return workhorse;
+  const pinned = env('ANTHROPIC_SMALL_MODEL') || env('CODEGRIND_SMALL_MODEL');
+  return {
+    ...workhorse,
+    model: pinned || ANTHROPIC_SMALL_DEFAULT,
+    source: { ...workhorse.source, model: pinned ? 'env' : 'default' },
+  };
 }
 
 let resolved: Resolved | null = null;
@@ -419,7 +449,7 @@ function build(routing: Routing, role: CallRole): LlmClient {
 
 /** How a role is routed, without building (or needing) a client. */
 export function routingFor(role: CallRole): Readonly<Routing> {
-  return role === 'tutor' ? config().tutor : config().workhorse;
+  return role === 'tutor' ? config().tutor : role === 'small' ? config().small : config().workhorse;
 }
 
 /**
@@ -436,26 +466,37 @@ export function needsAnthropicKey(): boolean {
 
 /** A one-line description of the routing, for logs. Never includes a credential. */
 export function describeRouting(): string {
-  const { workhorse: w, tutor: t } = config();
+  const { workhorse: w, small: sm, tutor: t } = config();
   const workhorse = `${w.provider}:${w.model}`;
+  const small = `${sm.provider}:${sm.model}`;
   const tutor = `${t.provider}:${t.model}`;
   const endpoint = w.provider !== 'anthropic' ? w.endpoint : t.endpoint;
   const where =
     w.provider === 'anthropic' && t.provider === 'anthropic'
       ? ''
       : ` via ${endpoint || '(no endpoint configured)'}`;
-  return workhorse === tutor ? `${workhorse}${where}` : `workhorse ${workhorse}, tutor ${tutor}${where}`;
+  const smallPart = small === workhorse ? '' : `, small ${small}`;
+  return workhorse === tutor && !smallPart
+    ? `${workhorse}${where}`
+    : `workhorse ${workhorse}${smallPart}, tutor ${tutor}${where}`;
 }
 
 /**
  * The client for a role.
  *
- * `workhorse` and `small` are the same client on purpose — they differ in their
- * token budget and their timeout, not in who answers. `tutor` is separate
- * because it is the one call that may be worth a different model.
+ * `small` shares the workhorse's client whenever it routes to the same model
+ * (every non-Anthropic install, or an Anthropic one that pins both alike) —
+ * they then differ in token budget and timeout, not in who answers. On the
+ * Anthropic default it is its own model (ANTHROPIC_SMALL_DEFAULT). `tutor` is
+ * separate because it is the one call that may be worth a different model.
  */
 export function clientFor(role: CallRole): LlmClient {
-  const key: CallRole = role === 'tutor' ? 'tutor' : 'workhorse';
+  let key: CallRole = role === 'tutor' ? 'tutor' : role;
+  if (key === 'small') {
+    const s = routingFor('small');
+    const w = routingFor('workhorse');
+    if (s.provider === w.provider && s.model === w.model && s.endpoint === w.endpoint) key = 'workhorse';
+  }
   let client = clients.get(key);
   if (!client) {
     client = build(routingFor(key), key);
@@ -479,11 +520,11 @@ export function clientFor(role: CallRole): LlmClient {
  * than a fix, and why it rejects instead of repairing.
  */
 export async function structured(req: StructuredRequest): Promise<StructuredResult> {
-  const result = await clientFor(req.role).structured(req);
+  const result = await recordingFailures(req.tool.name, req.role, () => clientFor(req.role).structured(req));
   // For the error's advice only: a hosted model needs no `--jinja`.
   const local = (): boolean => {
     try {
-      return routingFor(req.role === 'tutor' ? 'tutor' : 'workhorse').provider !== 'anthropic';
+      return routingFor(req.role).provider !== 'anthropic';
     } catch {
       return true;
     }
@@ -528,7 +569,7 @@ export async function structured(req: StructuredRequest): Promise<StructuredResu
 
 /** A prose call. Exactly one call site in the app uses it: the tutor chat. */
 export async function text(req: TextRequest): Promise<TextResult> {
-  const result = await clientFor(req.role).text(req);
+  const result = await recordingFailures('text', req.role, () => clientFor(req.role).text(req));
   recordUsage({ source: 'text', role: req.role, meta: result.meta });
   return result;
 }
@@ -550,6 +591,26 @@ export interface UsageEvent {
 }
 
 let usageRecorder: ((e: UsageEvent) => void) | null = null;
+
+/**
+ * Run an adapter call; when it FAILS after the model answered — no tool call, a
+ * refusal-shaped miss, anything thrown with the reply's `meta` on it — the
+ * tokens were still billed, so they go in the ledger before the error goes up
+ * (Phase H: a failed mock grade and its failed retry, $0.095, were missing from
+ * the spend meter). A failure with no meta (a timeout, a refused connection)
+ * produced no reply and costs nothing to record.
+ */
+async function recordingFailures<T>(source: string, role: CallRole, call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    const meta = (err as { meta?: unknown } | null)?.meta as UsageEvent['meta'] | undefined;
+    if (meta && typeof meta === 'object' && meta.usage && (meta.usage.inputTokens > 0 || meta.usage.outputTokens > 0)) {
+      recordUsage({ source, role, meta });
+    }
+    throw err;
+  }
+}
 
 export function useUsageRecorder(recorder: ((e: UsageEvent) => void) | null): void {
   usageRecorder = recorder;

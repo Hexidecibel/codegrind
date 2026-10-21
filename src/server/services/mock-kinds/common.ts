@@ -28,7 +28,7 @@ import type {
   MockStageGrade,
   MockVerdict,
 } from '../../../shared/mock.js';
-import { LlmToolCallError, looksLikeToolCallFraming, type ToolSpec } from '../llm.types.js';
+import { LlmToolCallError, cutToolCallFraming, looksLikeToolCallFraming, type ToolSpec } from '../llm.types.js';
 import type { InterviewerReply, SuppliedGap } from '../mock.state.js';
 
 /** A kind's closed vocabulary, as the schemas and coercers need it. */
@@ -164,14 +164,20 @@ export function gradeTool(v: Vocab, lean: boolean): ToolSpec {
     name: 'emit_mock_grade',
     description: 'The grade for this mock interview.',
     // The full schema is nested several levels deep — exactly the shape
-    // emit_coaching measured breaking without strict validation.
-    exactSchema: !lean,
+    // emit_coaching measured breaking without strict validation. The LEAN
+    // retry is strict too (Phase H): unstrict, it failed the same way the full
+    // call had, on the same field, and the retry was money for nothing.
+    exactSchema: true,
+    // `summary` is LAST: the free-text field where post-call markup lands
+    // (ToolSpec.leakSink). It used to be second, so a live grade with tool
+    // markup in it (2026-10-21) was rejected as "the rest of the fields were
+    // serialized into it" — twice — although strict mode had delivered them.
+    leakSink: 'summary',
     schema: {
       type: 'object',
-      ...(lean ? {} : { additionalProperties: false }),
+      additionalProperties: false,
       properties: {
         verdict: { type: 'string', enum: ['below', 'at', 'above'] },
-        summary: { type: 'string', description: 'Three or four sentences: the overall picture.' },
         stages: { type: 'array', items: stageGradeItem(v), description: 'One entry per stage, in order.' },
         skipped: { type: 'array', items: { type: 'string', enum: STAGE_ENUM } },
         gapsTaught: lean
@@ -197,7 +203,7 @@ export function gradeTool(v: Vocab, lean: boolean): ToolSpec {
           type: 'array',
           items: {
             type: 'object',
-            ...(lean ? {} : { additionalProperties: false }),
+            additionalProperties: false,
             properties: {
               concept: { type: 'string', enum: CONCEPT_ENUM },
               prompt: { type: 'string' },
@@ -211,7 +217,7 @@ export function gradeTool(v: Vocab, lean: boolean): ToolSpec {
           description: 'Gaps the interviewer handed over that RECORDED GAPS does not already list.',
           items: {
             type: 'object',
-            ...(lean ? {} : { additionalProperties: false }),
+            additionalProperties: false,
             properties: {
               concept: { type: 'string', enum: CONCEPT_ENUM },
               type: { type: 'string', enum: [...GAP_TYPES] },
@@ -223,10 +229,11 @@ export function gradeTool(v: Vocab, lean: boolean): ToolSpec {
             required: ['concept', 'type', 'title', 'answer', 'turn'],
           },
         },
+        summary: { type: 'string', description: 'Three or four sentences: the overall picture, written as a finished interview.' },
       },
       required: lean
-        ? ['verdict', 'summary', 'stages', 'skipped', 'gapsTaught', 'drills', 'gaps']
-        : ['verdict', 'summary', 'stages', 'skipped', 'gapsTaught', 'conceptObservations', 'drills', 'gaps'],
+        ? ['verdict', 'stages', 'skipped', 'gapsTaught', 'drills', 'gaps', 'summary']
+        : ['verdict', 'stages', 'skipped', 'gapsTaught', 'conceptObservations', 'drills', 'gaps', 'summary'],
     },
   };
 }
@@ -381,7 +388,8 @@ export function coercers(info: Pick<MockKindInfo, 'stages' | 'concepts'>): Coerc
     return {
       level,
       verdict,
-      summary: typeof input.summary === 'string' ? input.summary : '',
+      // The leak sink: whatever tool markup trails the real summary is cut off.
+      summary: typeof input.summary === 'string' ? cutToolCallFraming(input.summary).trim() : '',
       stages: coerceStages(input.stages),
       skipped: Array.isArray(input.skipped) ? input.skipped.filter(isStage) : [],
       gapsTaught: gaps

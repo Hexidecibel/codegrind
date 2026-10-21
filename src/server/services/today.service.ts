@@ -14,11 +14,12 @@ import {
   SKIPPABLE_STEPS,
   STEP_NOTE_LABEL,
   TODAY_STEPS,
-  carryNotesOf,
+  applicableNotes,
   isTodayStep,
   type AiReviewTarget,
   type CarryNote,
   type DebriefUsage,
+  type StepNote,
   type StepNoteId,
   type TodayState,
   type TodayStepId,
@@ -33,6 +34,8 @@ import {
 import { tierProgress } from './curriculum.js';
 import { computeTrend, splitMistakes } from './reflect.compute.js';
 import {
+  MAX_DEBRIEF_REGENS,
+  MAX_NOTE_REFRESHES,
   bumpFailure,
   computeReadiness,
   dayStartMs,
@@ -46,7 +49,7 @@ import {
   previousDay,
   todayTz,
 } from './today.compute.js';
-import { aiReviewsEnabled, aiSpend, costOfMeta } from './ai-usage.service.js';
+import { SMALL_CALL_SHAPES, aiReviewsEnabled, aiSpend, costOfMeta, smallCallEstimateUsd } from './ai-usage.service.js';
 import { runStepReview, type StepReviewInput } from './llm.review.js';
 import { todayRecognize } from './recognize.service.js';
 import { envelopeDigest, todayEnvelope } from './envelope.service.js';
@@ -62,9 +65,10 @@ export class TodayError extends Error {
   }
 }
 
-/** A typical debrief: ~1.8k tokens in, ~600 out, on the default model. */
-export const DEBRIEF_ESTIMATE_USD =
-  costOf('claude-sonnet-5', { inputTokens: 1800, outputTokens: 600, cacheReadTokens: 0, cacheWriteTokens: 0 }) ?? 0.01;
+/** A typical debrief (~1.8k tokens in, ~600 out), priced on the model `small` routes to; 0 when local. */
+export function debriefEstimateUsd(): number {
+  return smallCallEstimateUsd(SMALL_CALL_SHAPES.debrief) ?? 0;
+}
 
 interface DayContext {
   date: string;
@@ -140,7 +144,6 @@ export function getToday(now = new Date()): TodayState {
     grades: store.gradeHistory(),
   });
 
-  const since = new Date(now.getTime() - 130 * 86_400_000).toISOString();
   const monthStart = new Date(dayStartMs(`${date.slice(0, 7)}-01`, todayTz())).toISOString();
   return {
     date,
@@ -149,14 +152,14 @@ export function getToday(now = new Date()): TodayState {
     completed: derived.completed,
     total: TODAY_STEPS.length,
     endedEarly: !!row.endedEarlyAt,
-    streak: localDayStreak(store.activitySince(since), now.getTime(), todayTz()),
+    streak: practiceStreak(now),
     mockKind,
     readiness,
     attemptedProblemIds: [...new Set(attempts.map((a) => a.problemId))],
     debrief: row.debrief,
     debriefUsage: row.debriefUsage,
     focus: dailyFocus(now),
-    debriefEstimateUsd: DEBRIEF_ESTIMATE_USD,
+    debriefEstimateUsd: debriefEstimateUsd(),
     recognize: todayRecognize(
       dayStart,
       // "the last 3 local days" = from local midnight two days ago
@@ -169,6 +172,20 @@ export function getToday(now = new Date()): TodayState {
     aiReviews: aiReviewsEnabled(),
     spend: aiSpend(dayStart, monthStart),
   };
+}
+
+/**
+ * Consecutive LOCAL days with any practice (grind, mock, card, Recognize,
+ * Envelope). The one streak: Today and Reflect both show this number, so the
+ * two can no longer disagree across a UTC midnight. Never throws.
+ */
+export function practiceStreak(now = new Date()): number {
+  try {
+    const since = new Date(now.getTime() - 130 * 86_400_000).toISOString();
+    return localDayStreak(store.activitySince(since), now.getTime(), todayTz());
+  } catch {
+    return 0;
+  }
 }
 
 /** Skip (or un-skip) one step. */
@@ -265,18 +282,23 @@ export function buildDebriefInput(now = new Date()): DebriefInput {
         : null,
       topMistakes: mistakes.slice(0, 3).map((m) => m.tag),
     },
-    stepNotes: carryNotesOf(row.stepNotes),
+    // Notes only, never carries: a carry is an instruction, not evidence.
+    stepNotes: applicableNotes(row.stepNotes, 'debrief'),
   };
 }
 
 let debriefInFlight = false;
 
-/** The one debrief call + store, shared by the button and the auto debrief. */
-async function writeDebrief(date: string, now: Date): Promise<void> {
+/**
+ * The one debrief call + store, shared by the button and the auto debrief.
+ * `day` is any instant inside the day being debriefed (a job that runs past
+ * midnight must still read ITS day); `stamp` is the real time of the write.
+ */
+async function writeDebrief(date: string, day: Date, stamp: Date = day, auto: 'first' | 'regen' | null = null): Promise<void> {
   if (debriefInFlight) throw new TodayError('A debrief is already being written.', 429);
   debriefInFlight = true;
   try {
-    const { debrief: d, meta } = await runDebrief(buildDebriefInput(now));
+    const { debrief: d, meta } = await runDebrief(buildDebriefInput(day));
     const usage: DebriefUsage = {
       model: meta.servedModel,
       inputTokens: meta.usage.inputTokens,
@@ -288,7 +310,8 @@ async function writeDebrief(date: string, now: Date): Promise<void> {
         cacheWriteTokens: meta.usage.cacheWriteInputTokens ?? 0,
       }),
     };
-    store.putDebrief(date, d, usage, now);
+    store.putDebrief(date, d, usage, stamp);
+    if (auto === 'regen') store.bumpDebriefRegens(date, stamp);
   } finally {
     debriefInFlight = false;
   }
@@ -386,30 +409,54 @@ export function stepDigest(id: StepNoteId, now = new Date()): string[] {
   if (!graded) return [];
   return [
     `${graded.kind} mock: ${graded.verdict ?? 'graded'} level`,
-    ...(graded.grade?.summary ? [`Grader summary: ${graded.grade.summary.slice(0, 500)}`] : []),
+    // A behavioral summary retells the candidate's STORIES; those facts must
+    // not travel into the note, and from there into later prompts.
+    ...(graded.grade?.summary && graded.kind !== 'behavioral' ? [`Grader summary: ${graded.grade.summary.slice(0, 500)}`] : []),
     ...((graded.grade?.gaps ?? []).length ? [`Gaps: ${(graded.grade?.gaps ?? []).map((g) => g.title).filter(Boolean).slice(0, 6).join('; ')}`] : []),
   ];
 }
 
-async function reviewStep(id: StepNoteId, now: Date): Promise<void> {
-  const { date, row } = dayContext(now);
+/**
+ * One step review. `day` is an instant inside the day being reviewed — the
+ * job's own start, so a job still running after midnight writes to ITS day,
+ * not tomorrow's (Phase H) — and `stamp` is the real time of the write.
+ */
+async function reviewStep(id: StepNoteId, day: Date, stamp: Date = day): Promise<void> {
+  const { date, row } = dayContext(day);
   const input: StepReviewInput = {
     step: STEP_NOTE_LABEL[id],
     next: NEXT_OF[id],
-    digest: stepDigest(id, now),
-    earlier: carryNotesOf(row.stepNotes),
+    digest: stepDigest(id, day),
+    earlier: applicableNotes(row.stepNotes, id),
   };
   const { result, meta } = await runStepReview(input);
   if (!result.note) throw new Error('empty step review');
   const fresh = store.getDay(date)!;
+  const prev = fresh.stepNotes[id];
+  const extra: Partial<StepNote> = {};
+  if (id === 'mock') {
+    const graded = [...store.mocksSince(dayContext(day).dayStart)].reverse().find((m) => m.status === 'graded');
+    if (graded) extra.kind = graded.kind;
+  }
+  if (id === 'warmup') {
+    extra.evidence = warmupEvidence(day);
+    if (prev) extra.refreshes = (prev.refreshes ?? 0) + 1;
+  }
   store.setStepNotes(
     date,
     {
       ...fresh.stepNotes,
-      [id]: { note: result.note, carry: result.carry, at: now.toISOString(), model: meta.servedModel, costUsd: costOfMeta(meta) },
+      [id]: { note: result.note, carry: result.carry, at: stamp.toISOString(), model: meta.servedModel, costUsd: costOfMeta(meta), ...extra },
     },
-    now
+    stamp
   );
+}
+
+/** Warm-up items cleared so far today: cards graded + review re-solves + envelope reps. */
+function warmupEvidence(day: Date): number {
+  const { dayStart } = dayContext(day);
+  const reviewedProblems = new Set(store.attemptsSince(dayStart).filter((a) => a.firstAt < dayStart).map((a) => a.problemId)).size;
+  return store.cardsReviewedSince(dayStart).length + reviewedProblems + todayEnvelope(dayStart, day).doneToday;
 }
 
 /** What pendingReviews says to run right now. */
@@ -417,17 +464,44 @@ function pendingFor(state: TodayState, now: Date): AiReviewTarget[] {
   const row = store.getDay(state.date);
   if (!row) return [];
   const { dayStart } = dayContext(now);
-  const reviewedProblems = new Set(store.attemptsSince(dayStart).filter((a) => a.firstAt < dayStart).map((a) => a.problemId)).size;
+  const mocks = store.mocksSince(dayStart);
+  const warmupActivity = warmupEvidence(now);
+  const warm = row.stepNotes.warmup;
+  // The warm-up note goes stale when warm-up evidence grew after it was
+  // written (envelope reps done later, a card graded later) — rewritten at most
+  // MAX_NOTE_REFRESHES times a day.
+  const staleNotes: AiReviewTarget[] =
+    warm && typeof warm.evidence === 'number' && warmupActivity > warm.evidence && (warm.refreshes ?? 0) < MAX_NOTE_REFRESHES
+      ? ['warmup']
+      : [];
   return pendingReviews({
     steps: state.steps,
-    warmupActivity: store.cardsReviewedSince(dayStart).length + reviewedProblems + state.envelope.doneToday,
+    warmupActivity,
     recognizeDone: state.recognize.done,
     noted: Object.keys(row.stepNotes),
+    staleNotes,
     hasDebrief: !!row.debrief,
+    mockOpen: mocks.some((m) => OPEN_MOCK.has(m.status)),
+    debriefStale: debriefIsStale(row, mocks),
     failures: row.aiFailures,
     enabled: state.aiReviews,
     now: now.getTime(),
   });
+}
+
+// Running or grading. A grade_failed mock is stuck, not running — it must not
+// hold the day open forever (its retry is on the mock page).
+const OPEN_MOCK = new Set(['active', 'grading']);
+
+/**
+ * The debrief was written before a mock grade that landed later the same day,
+ * and has not been auto-regenerated yet (MAX_DEBRIEF_REGENS). Then it is
+ * missing the day's biggest event and is rewritten once, automatically.
+ */
+function debriefIsStale(row: store.DailySessionRow, mocks: store.TodayMockFull[]): boolean {
+  if (!row.debrief || !row.debriefAt) return false;
+  if (row.debriefRegens >= MAX_DEBRIEF_REGENS) return false;
+  return mocks.some((m) => m.status === 'graded' && !!m.gradedAt && m.gradedAt > row.debriefAt!);
 }
 
 /**
@@ -451,9 +525,14 @@ export function kickAiReviews(state: TodayState, now = new Date()): Promise<void
         try {
           if (target === 'debrief') {
             // A click already writing it is not a failure; it just is not ours.
-            if (!store.getDay(date)?.debrief && !debriefInFlight) await writeDebrief(date, at);
+            const day = store.getDay(date);
+            const regen = !!day?.debrief;
+            if ((!regen || (day && debriefIsStale(day, store.mocksSince(dayContext(now).dayStart)))) && !debriefInFlight) {
+              await writeDebrief(date, now, at, regen ? 'regen' : 'first');
+            }
           } else {
-            await reviewStep(target, at);
+            // `now` fixes the DAY, `at` stamps the write (see reviewStep).
+            await reviewStep(target, now, at);
           }
         } catch (err) {
           const row = store.getDay(date);
@@ -482,12 +561,16 @@ export function getTodayAndKick(now = new Date()): TodayState {
   return state;
 }
 
-/** Today's notes as carry-forward context (coaching, mock start). Never throws. */
-export function todayCarryNotes(now = new Date()): CarryNote[] {
+/**
+ * Today's notes as carry-forward context, filtered for what applies there
+ * (shared/today.applicableNotes): 'algorithm' for coaching a grind submit and a
+ * coding mock's setup, 'mock' for any other mock's setup. Never throws.
+ */
+export function todayCarryNotes(now = new Date(), target: 'algorithm' | 'mock' = 'algorithm'): CarryNote[] {
   try {
     const date = localDay(now.getTime(), todayTz());
     const row = store.getDay(date);
-    return row ? carryNotesOf(row.stepNotes) : [];
+    return row ? applicableNotes(row.stepNotes, target) : [];
   } catch {
     return [];
   }

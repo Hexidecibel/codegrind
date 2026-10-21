@@ -166,6 +166,15 @@ export interface StepNote {
   at: string;
   model: string;
   costUsd: number | null;
+  /** The mock note only: which kind of mock it reviewed (carry applicability). */
+  kind?: string;
+  /**
+   * The warm-up note only: how many warm-up items were cleared when it was
+   * written. A later count means it is stale and is rewritten (bounded).
+   */
+  evidence?: number;
+  /** Times this note was rewritten because its evidence changed. */
+  refreshes?: number;
 }
 
 export type StepNotes = Partial<Record<StepNoteId, StepNote>>;
@@ -191,6 +200,60 @@ export function carryNotesOf(notes: StepNotes): CarryNote[] {
   return STEP_NOTE_IDS.flatMap((id) => {
     const n = notes[id];
     return n && (n.note || n.carry) ? [{ step: STEP_NOTE_LABEL[id], note: n.note, carry: n.carry }] : [];
+  });
+}
+
+/** The step each note's `carry` was written FOR (its NEXT step). */
+export const CARRY_TARGET: Readonly<Record<StepNoteId, StepNoteId | 'debrief'>> = {
+  warmup: 'problem1',
+  recognize: 'problem1',
+  problem1: 'problem2',
+  problem2: 'mock',
+  mock: 'debrief',
+};
+
+/** Mock kinds whose advice is not about writing algorithm code. */
+const NON_ALGO_KINDS = new Set(['system-design', 'behavioral']);
+
+/**
+ * The earlier notes a consumer may read, with each `carry` kept ONLY where it
+ * applies (Phase H: a warm-up "state the rps before coding" carry was judged
+ * against Problem 1, became "skipped 3 times", and then the debrief's top fix):
+ *
+ *   for: a StepNoteId   the step review of that step. Notes of steps BEFORE it;
+ *                       a carry only when it was written for this step.
+ *   for: 'algorithm'    an algorithm-problem context (coaching a grind submit,
+ *                       a coding mock's setup). Every note; a carry only when
+ *                       it targets an algorithm step; a system-design or
+ *                       behavioral mock contributes nothing — its advice is
+ *                       not about code, and a behavioral note can carry story
+ *                       facts that do not belong in a coding prompt.
+ *   for: 'mock'         a non-coding mock's setup: notes only, no carries.
+ *   for: 'debrief'      notes only. Carries are instructions, not facts — the
+ *                       debrief must not repeat one as if it were evidence.
+ */
+export function applicableNotes(
+  notes: StepNotes,
+  target: StepNoteId | 'algorithm' | 'mock' | 'debrief'
+): CarryNote[] {
+  const order = STEP_NOTE_IDS as readonly StepNoteId[];
+  const algoSteps = new Set<string>(['problem1', 'problem2']);
+  return order.flatMap((id) => {
+    const n = notes[id];
+    if (!n || !(n.note || n.carry)) return [];
+    let carry = '';
+    if (target === 'debrief' || target === 'mock') {
+      carry = '';
+    } else if (target === 'algorithm') {
+      if (id === 'mock' && n.kind && NON_ALGO_KINDS.has(n.kind)) return [];
+      carry = algoSteps.has(CARRY_TARGET[id]) ? n.carry : '';
+    } else {
+      // A step review: only what came before this step in the day.
+      if (order.indexOf(id) >= order.indexOf(target)) return [];
+      carry = CARRY_TARGET[id] === target ? n.carry : '';
+    }
+    if (!n.note && !carry) return [];
+    return [{ step: STEP_NOTE_LABEL[id], note: n.note, carry }];
   });
 }
 

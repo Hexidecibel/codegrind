@@ -144,3 +144,18 @@ export function describeOutcome(card: GapCardSchedule, grade: GapCardGrade): str
 export function gapKey(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
+
+/** Two grades of one card closer together than this are one double tap. */
+export const DOUBLE_GRADE_MS = 5_000;
+
+/**
+ * The server-side double-grade guard (Phase H): the client cleared its busy
+ * flag before the next card loaded, so a fast second tap graded the SAME card
+ * twice and moved it two rungs. True when the card was graded within
+ * DOUBLE_GRADE_MS of `now`. Pure.
+ */
+export function isDoubleGrade(lastGradedAt: string | null | undefined, now: Date, windowMs = DOUBLE_GRADE_MS): boolean {
+  if (!lastGradedAt) return false;
+  const t = Date.parse(lastGradedAt);
+  return Number.isFinite(t) && now.getTime() - t >= 0 && now.getTime() - t < windowMs;
+}

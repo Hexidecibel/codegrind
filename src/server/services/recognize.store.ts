@@ -49,6 +49,7 @@ function prepare() {
       SELECT topic, patternCorrect, grade, createdAt FROM recognize_attempts ORDER BY createdAt DESC
     `),
     countSince: db.prepare(`SELECT COUNT(*) AS n FROM recognize_attempts WHERE createdAt >= ?`),
+    lastAttemptAt: db.prepare(`SELECT MAX(createdAt) AS at FROM recognize_attempts WHERE problemId = ?`),
     grindSince: db.prepare(`SELECT COUNT(*) AS n FROM attempts WHERE createdAt >= ?`),
     getNote: db.prepare(`SELECT keyInsight, time, space FROM recognize_notes WHERE problemId = ?`),
     putNote: db.prepare(`
@@ -169,4 +170,9 @@ export function getCheck<T>(key: string): T | null {
 
 export function putCheck(key: string, problemId: string, result: unknown, now: Date): void {
   S().putCheck.run({ key, problemId, result: JSON.stringify(result), now: now.toISOString() });
+}
+
+/** When this problem was last graded in Recognize, or null. */
+export function lastAttemptAt(problemId: string): string | null {
+  return (S().lastAttemptAt.get(problemId) as { at: string | null } | undefined)?.at ?? null;
 }

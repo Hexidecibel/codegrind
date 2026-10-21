@@ -22,6 +22,7 @@ import { hydrate as hydrateApiKey } from './services/apikey.service.js';
 import { hydrateProviderConfig } from './services/provider.service.js';
 import { describeRouting, needsAnthropicKey } from './services/llm.client.js';
 import { crossOriginPolicy, readAllowedOrigins, CORS_ORIGINS_ENV } from './cors.js';
+import { reapOrphanedGrading } from './services/mock.store.js';
 
 // Let the wizard-written `llm.workhorse` / `llm.tutor` rows count towards
 // routing. Must precede the first routing question below. The ENVIRONMENT still
@@ -96,4 +97,8 @@ console.log(
       ? `  Anthropic API key: configured (from ${bootKey.source})`
       : '  Anthropic API key: NOT configured — the setup screen will ask for one'
 );
+// Before the first request: no grade can be running in a process that has not
+// served one yet, so every `grading` mock is an orphan of the last process.
+const reaped = reapOrphanedGrading();
+if (reaped) console.log(`  reaped ${reaped} mock(s) stuck in grading -> grade_failed (re-grade from the mock page)`);
 serve({ fetch: app.fetch, port, hostname: host });

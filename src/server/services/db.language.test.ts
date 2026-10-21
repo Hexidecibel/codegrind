@@ -298,8 +298,10 @@ describe('the review queue serves within one language', () => {
   it('never surfaces another language`s due item', () => {
     db.insertProblem(problem({ id: 'js-1', language: 'javascript' }));
     db.insertProblem(problem({ id: 'py-1', language: 'python' }));
-    db.enqueueReview('js-1', 'failed');
-    db.enqueueReview('py-1', 'hinted');
+    // Missed two days ago, so both are due now (a miss is due the next day).
+    const twoDaysAgo = Date.now() - 2 * 86_400_000;
+    db.enqueueReview('js-1', 'failed', twoDaysAgo);
+    db.enqueueReview('py-1', 'hinted', twoDaysAgo);
 
     expect(db.getDueReview('javascript')?.problemId).toBe('js-1');
     expect(db.getDueReview('python')?.problemId).toBe('py-1');
@@ -308,7 +310,7 @@ describe('the review queue serves within one language', () => {
     expect(db.getReviewDueCount('javascript')).toBe(1);
     expect(db.getReviewDueCount('java')).toBe(0);
 
-    // Clearing is keyed on problemId alone and stays that way.
+    // A clean solve (climbing the ladder) is keyed on problemId alone.
     db.clearReview('js-1');
     expect(db.getDueReview('javascript')).toBeNull();
     expect(db.getDueReview('python')?.problemId).toBe('py-1');

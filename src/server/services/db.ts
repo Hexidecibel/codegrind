@@ -19,6 +19,8 @@ import { DEFAULT_LANGUAGE, isLanguage, type Language } from '../../shared/langua
 // original"; llm.language.ts is a leaf of pure constants, so this pulls in no
 // SDK and no API key.
 import { CORPUS_LANGUAGE } from './llm.language.js';
+import { ladderOnCleanSolve, ladderOnMiss, ladderSnoozeDue, type LadderRow } from './review-ladder.js';
+import { todayTz } from './today.compute.js';
 import type {
   ProblemRecord,
   Problem,
@@ -114,8 +116,10 @@ db.exec(`
     reason     TEXT NOT NULL,          -- 'failed' | 'hinted'
     dueAt      TEXT NOT NULL,          -- ISO; earliest due<=now, cleared IS NULL = serve
     attempts   INTEGER NOT NULL DEFAULT 0,
-    clearedAt  TEXT,                   -- set on a clean unaided solve
-    createdAt  TEXT NOT NULL
+    clearedAt  TEXT,                   -- set by a clean solve at the top rung
+    createdAt  TEXT NOT NULL,
+    rung       INTEGER NOT NULL DEFAULT 0, -- review-ladder.ts RUNG_DAYS index
+    lastMissAt TEXT                    -- the last miss; a same-day solve does not climb
   );
 
   CREATE INDEX IF NOT EXISTS idx_review_due ON review_queue(clearedAt, dueAt);
@@ -1005,18 +1009,13 @@ export function bumpSession(id: string, lastTopic: Topic): void {
 
 // -----------------------------------------------------------------------------
 // Review queue — spaced re-solve of failed / hint-assisted problems (retrieval
-// loop). An item is "due" when clearedAt IS NULL and dueAt <= now. A clean,
-// unaided solve clears it; another miss pushes dueAt out on a spaced ladder; a
-// skip pushes dueAt out too but does not count as a miss.
+// loop). An item is "due" when clearedAt IS NULL and dueAt <= now. The spacing
+// rule itself is pure and lives in review-ladder.ts: a miss puts the item on
+// rung 0, a clean solve on a LATER day climbs a rung (1 → 3 → 7 → 14 days) and
+// clears it only at the top, a lapse drops one rung, a same-day solve changes
+// nothing, and a skip pushes dueAt out without counting as a miss.
 // -----------------------------------------------------------------------------
 export type ReviewReason = 'failed' | 'hinted';
-
-// attempts 0 → due now; 1 → +2d; 2 → +5d; 3+ → +10d.
-const REVIEW_LADDER_DAYS = [0, 2, 5, 10];
-function reviewDueMsFor(attempts: number, nowMs: number): number {
-  const idx = Math.min(attempts, REVIEW_LADDER_DAYS.length - 1);
-  return nowMs + REVIEW_LADDER_DAYS[idx] * DAY;
-}
 
 const getReviewStmt = db.prepare(`SELECT * FROM review_queue WHERE problemId = ?`);
 interface ReviewDbRow {
@@ -1026,51 +1025,45 @@ interface ReviewDbRow {
   attempts: number;
   clearedAt: string | null;
   createdAt: string;
+  rung: number | null;
+  lastMissAt: string | null;
+}
+
+function ladderRow(r: ReviewDbRow): LadderRow {
+  // Rows from before the ladder carry no lastMissAt: their miss was on an
+  // earlier day by construction, which is what null means to the ladder.
+  return { rung: r.rung ?? 0, lastMissAt: r.lastMissAt, clearedAt: r.clearedAt, dueAt: r.dueAt };
 }
 
 const insertReviewStmt = db.prepare(`
-  INSERT INTO review_queue (problemId, reason, dueAt, attempts, clearedAt, createdAt)
-  VALUES (@problemId, @reason, @dueAt, 0, NULL, @createdAt)
+  INSERT INTO review_queue (problemId, reason, dueAt, attempts, clearedAt, createdAt, rung, lastMissAt)
+  VALUES (@problemId, @reason, @dueAt, 0, NULL, @createdAt, @rung, @lastMissAt)
 `);
-const reopenReviewStmt = db.prepare(`
-  UPDATE review_queue SET reason = @reason, clearedAt = NULL, dueAt = @dueAt WHERE problemId = @problemId
+const moveReviewStmt = db.prepare(`
+  UPDATE review_queue
+  SET reason = COALESCE(@reason, reason), attempts = attempts + @missed, dueAt = @dueAt,
+      clearedAt = @clearedAt, rung = @rung, lastMissAt = @lastMissAt
+  WHERE problemId = @problemId
 `);
 
 /**
- * Queue a problem for spaced review after a miss/hint. If a live (un-cleared)
- * row already exists we keep it (earliest due wins — don't push it out here;
- * that's bumpReviewOnFail's job). If it was previously cleared, reopen it due now.
+ * A miss or an assisted solve: queue the problem, or (already queued) record
+ * the lapse on the ladder. A cleared row re-enters at the bottom rung.
  */
-export function enqueueReview(problemId: string, reason: ReviewReason): void {
-  const nowMs = Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+export function enqueueReview(problemId: string, reason: ReviewReason, nowMs = Date.now()): void {
   const existing = getReviewStmt.get(problemId) as ReviewDbRow | undefined;
+  const move = ladderOnMiss(existing ? ladderRow(existing) : null, nowMs, todayTz());
   if (!existing) {
-    insertReviewStmt.run({ problemId, reason, dueAt: nowIso, createdAt: nowIso });
+    insertReviewStmt.run({ problemId, reason, dueAt: move.dueAt, createdAt: new Date(nowMs).toISOString(), rung: move.rung, lastMissAt: move.lastMissAt });
     return;
   }
-  if (existing.clearedAt !== null) {
-    // Previously cleared then regressed — reopen, due now, attempts preserved.
-    reopenReviewStmt.run({ problemId, reason, dueAt: nowIso });
-  }
-  // else: already live & queued — keep the earliest dueAt (no-op).
+  moveReviewStmt.run({ problemId, reason, missed: 1, ...move });
 }
 
-const bumpReviewStmt = db.prepare(`
-  UPDATE review_queue SET attempts = @attempts, dueAt = @dueAt, clearedAt = NULL WHERE problemId = @problemId
-`);
-
-/** A missed review re-attempt: increment attempts and push dueAt out on the ladder. */
-export function bumpReviewOnFail(problemId: string): void {
+/** A missed review re-attempt. Same rule as enqueueReview; kept for its callers. */
+export function bumpReviewOnFail(problemId: string, nowMs = Date.now()): void {
   const existing = getReviewStmt.get(problemId) as ReviewDbRow | undefined;
-  if (!existing) {
-    enqueueReview(problemId, 'failed');
-    return;
-  }
-  const nowMs = Date.now();
-  const attempts = existing.attempts + 1;
-  const dueAt = new Date(reviewDueMsFor(attempts, nowMs)).toISOString();
-  bumpReviewStmt.run({ problemId, attempts, dueAt });
+  enqueueReview(problemId, existing?.reason === 'hinted' ? 'hinted' : 'failed', nowMs);
 }
 
 const snoozeReviewStmt = db.prepare(`
@@ -1080,36 +1073,49 @@ const snoozeReviewStmt = db.prepare(`
 
 /**
  * A due review the player skipped ("Next" without submitting): push dueAt out
- * so the queue can move on. Without this a skip changed nothing, getDueReview
- * kept returning the same earliest row, and one unwanted problem blocked every
- * other review and all normal scheduling behind it.
+ * by its rung so the queue can move on. Without this a skip changed nothing,
+ * getDueReview kept returning the same earliest row, and one unwanted problem
+ * blocked every other review and all normal scheduling behind it.
  *
- * attempts is NOT incremented — a skip is not a miss, and the ladder rung is
- * the record of misses. The rung is read at max(attempts, 1) because rung 0 is
- * "due now", which would snooze nothing.
- *
- * Only a live row that is due right now is touched; a cleared row, or one a
- * failed submit already pushed out, is left alone, so a skip can never stack on
- * top of a verdict. Returns whether a row was snoozed.
+ * Not a miss — the rung does not move. Only a live row that is due right now is
+ * touched; a cleared row, or one a failed submit already pushed out, is left
+ * alone, so a skip can never stack on top of a verdict. Returns whether a row
+ * was snoozed.
  */
 export function snoozeReview(problemId: string): boolean {
   const existing = getReviewStmt.get(problemId) as ReviewDbRow | undefined;
   if (!existing || existing.clearedAt !== null) return false;
   const nowMs = Date.now();
-  const dueAt = new Date(reviewDueMsFor(Math.max(existing.attempts, 1), nowMs)).toISOString();
+  const dueAt = ladderSnoozeDue(ladderRow(existing), nowMs);
   // The due check lives in the WHERE so it is made against the row as it is at
   // write time, not as it was when read above.
   const res = snoozeReviewStmt.run({ problemId, dueAt, now: new Date(nowMs).toISOString() });
   return res.changes > 0;
 }
 
-const clearReviewStmt = db.prepare(`
-  UPDATE review_queue SET clearedAt = @clearedAt WHERE problemId = @problemId AND clearedAt IS NULL
-`);
+/**
+ * A clean unaided solve of a queued problem: climb one rung (or clear at the
+ * top). A solve on the same local day as the miss, or before the item was due,
+ * changes nothing — see review-ladder.ts. No-op if not queued.
+ */
+export function clearReview(problemId: string, nowMs = Date.now()): void {
+  const existing = getReviewStmt.get(problemId) as ReviewDbRow | undefined;
+  if (!existing) return;
+  const move = ladderOnCleanSolve(ladderRow(existing), nowMs, todayTz());
+  if (move) moveReviewStmt.run({ problemId, reason: null, missed: 0, ...move });
+}
 
-/** Clear a review item (called on a clean unaided solve). No-op if not queued. */
-export function clearReview(problemId: string): void {
-  clearReviewStmt.run({ problemId, clearedAt: new Date().toISOString() });
+/** The review row's ladder state, for tests and the UI. */
+export function getReviewRow(problemId: string): (LadderRow & { attempts: number }) | null {
+  const r = getReviewStmt.get(problemId) as ReviewDbRow | undefined;
+  return r ? { ...ladderRow(r), attempts: r.attempts } : null;
+}
+
+const submitsSinceStmt = db.prepare(`SELECT COUNT(*) AS n FROM attempts WHERE problemId = ? AND createdAt >= ?`);
+
+/** Grind submits of one problem since an instant (the soft Submit cap counts today's). */
+export function countSubmitsSince(problemId: string, sinceIso: string): number {
+  return (submitsSinceStmt.get(problemId, sinceIso) as { n: number }).n;
 }
 
 // The two review READS join `problems` — the queue itself is keyed on problemId

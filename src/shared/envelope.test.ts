@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ENVELOPE_KINDS,
   checkAnswer,
+  restatesQuestion,
   classifyMiss,
   dayToSec,
   envelopeFromGapText,
@@ -126,10 +127,10 @@ describe('checkAnswer on the seeded cards (the 2026-10-21 diagnostic)', () => {
   it('accepts every spelling the spec lists, within ±30%', () => {
     for (const a of ['500', '500/s', '~500', '5e2', '578']) expect(checkAnswer(PER_DAY, a)?.ok, a).toBe(true);
     for (const a of ['800', '~800', '800/s', '770']) expect(checkAnswer(PER_MONTH, a)?.ok, a).toBe(true);
-    for (const a of ['30M', '30 million', '3e7', '26 million a day', '300/s']) {
-      // "300/s" restates the input in the question's own period: it IS 26 million a day.
-      expect(checkAnswer(PER_SEC, a)?.ok, a).toBe(true);
-    }
+    for (const a of ['30M', '30 million', '3e7', '26 million a day']) expect(checkAnswer(PER_SEC, a)?.ok, a).toBe(true);
+    // "300/s" restates the input in the question's own period (Phase H): it is
+    // the question, not the answer, so it is rejected however exact it is.
+    expect(checkAnswer(PER_SEC, '300/s')?.ok).toBe(false);
     for (const a of ['8000', '8TB', '8000 GB', '8 terabytes', '7.3 TB']) expect(checkAnswer(GB_DAY, a)?.ok, a).toBe(true);
     for (const a of ['200 TB', '200', '2e14', '0.2 PB']) expect(checkAnswer(PHOTOS, a)?.ok, a).toBe(true);
     expect(checkAnswer(PER_DAY, '1000')?.ok).toBe(false); // +73%
@@ -157,9 +158,22 @@ describe('checkAnswer on the seeded cards (the 2026-10-21 diagnostic)', () => {
     expect(checkAnswer(GB_DAY, '8000 TB')).toMatchObject({ ok: false, cause: 'unit-ladder', verdict: 'Off by 10³, too high.' });
   });
 
-  it('a period stated in the answer is converted (30M a day for a per-second question is wrong by the day)', () => {
-    expect(checkAnswer(PER_DAY, '50 million a day')?.ok).toBe(true);
+  it('restating the question is rejected: "50 million a day" for a per-second question (Phase H)', () => {
+    const r = checkAnswer(PER_DAY, '50 million a day')!;
+    expect(r.ok).toBe(false);
+    expect(r.verdict).toMatch(/per day — the question asks per second/);
     expect(checkAnswer(PER_DAY, '50 million/s')?.ok).toBe(false);
+    // The asked-for period, stated, is fine.
+    expect(checkAnswer(PER_DAY, '579 per second')?.ok).toBe(true);
+  });
+
+  it('restatesQuestion: conversion items only; a year total may say "a year"', () => {
+    expect(restatesQuestion({ per: 'day', dim: null }, PER_DAY)).toMatch(/per day/);
+    expect(restatesQuestion({ per: 's', dim: null }, PER_DAY)).toBeNull();
+    expect(restatesQuestion({ per: null, dim: null }, PER_DAY)).toBeNull();
+    expect(restatesQuestion({ per: 'year', dim: 'bytes' }, GB_DAY)).toBeNull();
+    expect(restatesQuestion({ per: 'day', dim: 'bytes' }, GB_DAY)).toMatch(/per day/);
+    expect(restatesQuestion({ per: 'day', dim: null }, { ...PER_DAY, family: 'estimate' })).toBeNull();
   });
 
   it('an unreadable answer is null, not a miss', () => {
@@ -171,7 +185,9 @@ describe('the miss classifier', () => {
   const g = gbpsToMBs('t', { gbps: 1 });
   it('bits vs bytes: 1 Gbps answered as 1000 MB/s is the 8× slip', () => {
     expect(checkAnswer(g, '125MB/s')?.ok).toBe(true);
-    expect(checkAnswer(g, '1 Gbps')?.ok).toBe(true); // the same quantity, in the other unit
+    // The same quantity in the question's own unit restates it (Phase H).
+    expect(checkAnswer(g, '1 Gbps')?.ok).toBe(false);
+    expect(checkAnswer(g, '1 Gbps')?.verdict).toMatch(/in bits — the question asks for bytes/);
     expect(checkAnswer(g, '1000 MB/s')?.cause).toBe('bits-bytes');
     expect(checkAnswer(g, '15 MB/s')?.cause).toBe('bits-bytes');
   });

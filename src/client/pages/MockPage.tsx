@@ -520,11 +520,24 @@ function useMinutes(startedAt: string): number {
   return Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 60_000));
 }
 
+/**
+ * The turn number the grader cites ("turn 4", "#4"): the grade report's
+ * references have to point at something visible, so every bubble shows it.
+ */
+function TurnNo({ seq }: { seq: number }) {
+  return (
+    <span className="select-none font-mono text-[10px] text-muted-foreground/70" title={`Turn ${seq} — the number the grade report cites`}>
+      #{seq}
+    </span>
+  );
+}
+
 function Bubble({ turn, kind, children }: { turn: MockTurn; kind: MockKind; children?: ReactNode }) {
   const { conceptLabel } = mockKindInfo(kind);
   if (turn.role === 'candidate') {
     return (
-      <div className="flex justify-end">
+      <div className="flex items-end justify-end gap-1.5">
+        <TurnNo seq={turn.seq} />
         <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-primary/15 px-3.5 py-2 text-sm">
           {turn.content || (
             <span className="italic text-muted-foreground">
@@ -546,16 +559,22 @@ function Bubble({ turn, kind, children }: { turn: MockTurn; kind: MockKind; chil
       <div className="rounded-lg border border-sky-500/40 bg-sky-500/5 p-3.5">
         <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-sky-300">
           <GraduationCap className="h-3.5 w-3.5" /> Lesson{turn.teach ? `: ${conceptLabel(turn.teach.concept)}` : ''}
+          <span className="ml-auto normal-case">
+            <TurnNo seq={turn.seq} />
+          </span>
         </div>
         <Markdown>{turn.content}</Markdown>
       </div>
     );
   }
   return (
-    <div className="max-w-[90%] rounded-2xl rounded-bl-sm border border-border bg-card px-3.5 py-2">
-      {turn.kind === 'nudge' && <div className="mb-0.5 text-xs text-muted-foreground">nudge</div>}
-      <Markdown>{turn.content}</Markdown>
-      {children}
+    <div className="flex items-end gap-1.5">
+      <div className="max-w-[90%] rounded-2xl rounded-bl-sm border border-border bg-card px-3.5 py-2">
+        {turn.kind === 'nudge' && <div className="mb-0.5 text-xs text-muted-foreground">nudge</div>}
+        <Markdown>{turn.content}</Markdown>
+        {children}
+      </div>
+      <TurnNo seq={turn.seq} />
     </div>
   );
 }

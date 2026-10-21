@@ -8,7 +8,6 @@ import {
   getReviewDueCount,
   getAttemptsByProblem,
   getDailyActivity,
-  getGlobalDailyActivity,
   getTaggedAttempts,
   getSolvedProblemCount,
   getHintFreeRate,
@@ -22,10 +21,10 @@ import {
   tierLabel,
 } from '../services/curriculum.js';
 import { trackSlotCount } from '../services/study.order.js';
+import { practiceStreak } from '../services/today.service.js';
 import {
   ACTIVITY_DAYS,
   buildActivity,
-  computeDayStreak,
   computeNextUnlock,
   computeTrend,
   curriculumOrder,
@@ -120,7 +119,6 @@ reflectRoutes.get('/reflect', (c) => {
     // also why computeDayStreak keeps taking an activity array and needs no
     // change at all.
     const activity = buildActivity(getDailyActivity(language, ACTIVITY_DAYS), ACTIVITY_DAYS, now);
-    const habit = buildActivity(getGlobalDailyActivity(ACTIVITY_DAYS), ACTIVITY_DAYS, now);
     let lessonsRead = 0;
     for (const n of reads.values()) lessonsRead += n;
 
@@ -130,7 +128,9 @@ reflectRoutes.get('/reflect', (c) => {
       tiles: {
         solved: getSolvedProblemCount(language),
         topicsReached: tree.filter((n) => n.state !== 'locked').length,
-        streak: computeDayStreak(habit),
+        // The LOCAL-day streak over every kind of practice, shared with Today
+        // (it was a UTC-day count of grind attempts only).
+        streak: practiceStreak(new Date(now)),
         hintFreeRate: getHintFreeRate(language),
         tiersCleared,
         lessonsRead,

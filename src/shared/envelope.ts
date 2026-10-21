@@ -844,6 +844,27 @@ export function classifyMiss(ratio: number, item: Pick<EnvelopeItem, 'traps'>, p
   return 'arithmetic';
 }
 
+const PER_WORD: Readonly<Record<Per, string>> = { s: 'per second', day: 'per day', month: 'per month', year: 'per year' };
+
+/**
+ * Why a conversion answer only restates the question (null when it does not):
+ * its period, or its data unit (bits vs bytes), differs from the one asked for.
+ * A total over a year (day-to-year) may say "a year"; nothing else may name
+ * another period. Estimate items are left alone — there a stated unit is
+ * converted, as before. Pure.
+ */
+export function restatesQuestion(p: Pick<ParsedAnswer, 'per' | 'dim'>, item: Pick<EnvelopeItem, 'family' | 'expected'>): string | null {
+  if (item.family !== 'conversion') return null;
+  const want = item.expected;
+  if (p.per && p.per !== want.per && !(want.per === null && p.per === 'year')) {
+    return `That is ${PER_WORD[p.per]} — the question asks ${want.per ? PER_WORD[want.per] : 'for the total'}. Do the conversion and answer in that.`;
+  }
+  if (p.dim && want.dim !== 'count' && p.dim !== want.dim) {
+    return `That is in ${p.dim} — the question asks for ${want.dim}. Convert it (1 byte = 8 bits) and answer in ${want.dim}.`;
+  }
+  return null;
+}
+
 export function checkAnswer(item: EnvelopeItem, text: string): EnvelopeVerdict | null {
   const p = parseAnswer(text);
   if (!p) return null;
@@ -861,6 +882,15 @@ export function checkAnswer(item: EnvelopeItem, text: string): EnvelopeVerdict |
   }
   const ratio = given / exact;
   const orders = Math.round(Math.log10(ratio) * 100) / 100;
+  // RESTATING THE QUESTION IS NOT AN ANSWER (Phase H). On a conversion item the
+  // whole task is the change of unit or period, and toItemValue converts any
+  // stated unit — so "50M a day" for a per-second question, or "1 Gbps" for a
+  // megabytes-per-second one, read back as exactly right. An answer whose
+  // period or data unit differs from the one asked for is rejected here.
+  const restated = restatesQuestion(p, item);
+  if (restated) {
+    return { ok: false, read, given, orders, verdict: restated, cause: null, causeText: null };
+  }
   const ok = item.exactInt
     ? given === exact || given === exact + 1
     : Math.abs(ratio - 1) <= ENVELOPE_TOLERANCE || Math.abs(given / item.approx - 1) <= ENVELOPE_TOLERANCE;

@@ -16,6 +16,9 @@ import {
   MISS_FOCUS_BIAS,
   MAX_AI_ATTEMPTS,
   FAILURE_COOLDOWN_MS,
+  MAX_DEBRIEF_REGENS,
+  MAX_NOTE_REFRESHES,
+  READINESS_MIN_MOCKS,
   type PendingReviewsInput,
   type DeriveInput,
   type TodayAttemptRow,
@@ -162,7 +165,24 @@ describe('deriveSteps', () => {
     const d = deriveSteps(input({ endedEarly: true, hasDebrief: true, debriefVerdict: 'Solid.' }));
     expect(d.current).toBeNull();
     expect(d.completed).toBe(5);
-    expect(d.steps[4].result).toBe('Solid.');
+    // The verdict is the first line of the panel below; the row only points at it.
+    expect(d.steps[4].result).toBe('Written — read it below');
+  });
+
+  it('Skip wins over an open mock (Phase H: Skip did nothing while one was active)', () => {
+    const d = deriveSteps(
+      input({ skips: ['mock'], mocks: [{ id: 'm1', kind: 'system-design', status: 'grade_failed', verdict: null, createdAt: DAY_START }] })
+    );
+    expect(d.steps.find((s) => s.id === 'mock')!.status).toBe('skipped');
+  });
+
+  it("a graded mock of another kind than the day's pick says so", () => {
+    const d = deriveSteps(
+      input({ mocks: [{ id: 'm1', kind: 'coding', status: 'graded', verdict: 'at', createdAt: DAY_START }] })
+    );
+    const mock = d.steps.find((s) => s.id === 'mock')!;
+    expect(mock.status).toBe('done');
+    expect(mock.result).toBe("at level · Coding (today's pick was System design)");
   });
 });
 
@@ -221,7 +241,14 @@ describe('computeReadiness', () => {
       ],
     });
     expect(r[0]).toMatchObject({ pct: 25, note: '1/2 topics tiered' });
-    expect(r[1]).toMatchObject({ pct: 50, note: 'last: at level' });
+    expect(r[1]).toMatchObject({ pct: 50, note: '4 mocks · last: at level' });
+  });
+
+  it('shows an evidence count, not a percentage, until there are READINESS_MIN_MOCKS grades (Phase H)', () => {
+    const r = computeReadiness({ topics: [], grades: [{ kind: 'behavioral', verdict: 'above' }] });
+    const b = r.find((a) => a.id === 'behavioral')!;
+    expect(b.pct).toBeNull();
+    expect(b.note).toBe(`1 of ${READINESS_MIN_MOCKS} mocks · last: above level`);
   });
 });
 
@@ -307,6 +334,44 @@ describe('pendingReviews (Phase F)', () => {
     for (let i = 1; i < MAX_AI_ATTEMPTS; i++) failures = bumpFailure(failures, 'problem1', at);
     expect(failures.problem1?.n).toBe(MAX_AI_ATTEMPTS);
     expect(pendingReviews(base({ failures, now: NOW + 86_400_000 }))).toEqual(['warmup']);
+  });
+});
+
+describe('debrief timing and stale notes (Phase H)', () => {
+  const NOW = Date.parse('2026-10-21T20:00:00.000Z');
+  const settled = (['warmup', 'problem1', 'problem2', 'mock', 'debrief'] as const).map((id) => ({
+    id,
+    status: (id === 'debrief' ? 'todo' : id === 'mock' ? 'done' : 'done') as PendingReviewsInput['steps'][number]['status'],
+  }));
+  const base = (over: Partial<PendingReviewsInput> = {}): PendingReviewsInput => ({
+    steps: settled,
+    warmupActivity: 2,
+    recognizeDone: false,
+    noted: ['warmup', 'problem1', 'problem2', 'mock'],
+    hasDebrief: false,
+    failures: {},
+    enabled: true,
+    now: NOW,
+    ...over,
+  });
+
+  it('the auto debrief waits while a mock is still running or grading, though every step is done', () => {
+    expect(pendingReviews(base())).toEqual(['debrief']);
+    expect(pendingReviews(base({ mockOpen: true }))).toEqual([]);
+  });
+
+  it('a written debrief is regenerated only when a later mock grade made it stale', () => {
+    expect(pendingReviews(base({ hasDebrief: true }))).toEqual([]);
+    expect(pendingReviews(base({ hasDebrief: true, debriefStale: true }))).toEqual(['debrief']);
+    // ...and not while that new mock's day is still open.
+    expect(pendingReviews(base({ hasDebrief: true, debriefStale: true, mockOpen: true }))).toEqual([]);
+    expect(MAX_DEBRIEF_REGENS).toBe(1);
+  });
+
+  it('a stale warm-up note is rewritten; a fresh one is not', () => {
+    expect(pendingReviews(base({ hasDebrief: true }))).toEqual([]);
+    expect(pendingReviews(base({ hasDebrief: true, staleNotes: ['warmup'] }))).toEqual(['warmup']);
+    expect(MAX_NOTE_REFRESHES).toBe(1);
   });
 });
 

@@ -15,7 +15,7 @@
 import { costOf } from '../../shared/mock.js';
 import type { AiSpend } from '../../shared/today.js';
 import { db, getSetting, setSetting } from './db.js';
-import { useUsageRecorder, type UsageEvent } from './llm.client.js';
+import { routingFor, useUsageRecorder, type UsageEvent } from './llm.client.js';
 
 export const AI_REVIEWS_KEY = 'ai.reviews';
 
@@ -66,6 +66,26 @@ export function recordAiUsage(e: UsageEvent, now = new Date()): void {
     costUsd: costOfMeta(e.meta),
   });
 }
+
+/**
+ * A pre-flight estimate for one `small` call of a typical shape, priced on the
+ * model that role is ROUTED to right now (Haiku 5.5 by default since Phase H) —
+ * so the "~$" on a button follows the routing instead of a hard-coded model.
+ * Null when that model has no known price (a local endpoint: free). Never throws.
+ */
+export function smallCallEstimateUsd(shape: { inputTokens: number; outputTokens: number }): number | null {
+  try {
+    return costOf(routingFor('small').model, { ...shape, cacheReadTokens: 0, cacheWriteTokens: 0 });
+  } catch {
+    return null;
+  }
+}
+
+/** Typical small-call shapes, measured on the 2026-10-21 live samples (rounded up). */
+export const SMALL_CALL_SHAPES = {
+  debrief: { inputTokens: 1800, outputTokens: 600 },
+  recognizeCheck: { inputTokens: 1600, outputTokens: 400 },
+} as const;
 
 /** Called once at server boot. */
 export function installUsageRecorder(): void {

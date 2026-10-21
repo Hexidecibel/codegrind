@@ -389,6 +389,9 @@ export const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
   'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.2, cacheWrite1h: 4 },
   'claude-opus-5': { input: 5, output: 25, cacheRead: 0.5, cacheWrite1h: 10 },
   'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2, cacheWrite1h: 8 },
+  // The `small` role's default (Phase H). Prompts up to 100K tokens, which
+  // every small call is by two orders of magnitude.
+  'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite1h: 0.2 },
 };
 
 export function priceFor(model: string): ModelPrice | null {

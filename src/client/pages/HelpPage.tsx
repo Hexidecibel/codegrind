@@ -288,7 +288,7 @@ export function HelpPage() {
             reasons is even scored, the scheduler checks the review queue — if
             something is waiting there, that is what you get. The one way past
             it without solving it is <strong>Skip for now</strong>: that sets the
-            review aside for at least {REVIEW_SKIP_MIN_DAYS} days, and whatever is
+            review aside for at least {REVIEW_SKIP_MIN_DAYS} day{REVIEW_SKIP_MIN_DAYS === 1 ? '' : 's'}, and whatever is
             next in line is served instead.
           </KeyIdea>
           <p>
@@ -470,11 +470,14 @@ export function HelpPage() {
             <strong>cold review</strong>, and in that mode the Hint button is
             gone. That is the point of the exercise: the question being asked is
             whether you can now do it unaided, and a hint would answer a
-            different question. Solve it clean and it leaves the queue for good.
-            Miss it again and it is pushed further out — {reviewLadderPhrase()}{' '}
-            between attempts. Skip it without submitting and it also steps aside,
-            for at least {REVIEW_SKIP_MIN_DAYS} days, but a skip is not a miss: it
-            does not move the problem up the ladder.
+            different question. It comes back on a spaced ladder —{' '}
+            {reviewLadderPhrase()} — climbing one rung each time you solve it
+            clean on a later day, and leaving the queue only after a clean solve
+            at the top. A solve the same day you missed it does not count:
+            that is the last ten minutes talking, not recall. Miss it again and
+            it drops one rung. Skip it without submitting and it steps aside,
+            for at least {REVIEW_SKIP_MIN_DAYS} day{REVIEW_SKIP_MIN_DAYS === 1 ? '' : 's'}, but a skip is not a miss: it
+            does not move the problem on the ladder.
           </p>
         </HelpBlock>
 
@@ -528,11 +531,12 @@ export function HelpPage() {
           <Terms>
             <Term label="Review queue">
               Per <strong>problem</strong>. A missed or hinted problem is queued
-              due immediately; each further miss pushes it out on a{' '}
-              {REVIEW_LADDER_DAYS.map((d) => `${d}d`).join(' → ')} ladder. A clean
-              unaided solve clears it. Skipping a due one postpones it by its
-              current step (at least {REVIEW_SKIP_MIN_DAYS}d) without counting as
-              a miss.
+              for tomorrow and climbs a{' '}
+              {REVIEW_LADDER_DAYS.map((d) => `${d}d`).join(' → ')} ladder, one rung
+              per clean unaided solve on a later day; a clean solve at the top
+              clears it, a miss drops one rung. Skipping a due one postpones it by
+              its current step (at least {REVIEW_SKIP_MIN_DAYS}d) without counting
+              as a miss.
             </Term>
             <Term label="Repetition boxes">
               Per <strong>topic</strong>. Clean solves move a topic up through

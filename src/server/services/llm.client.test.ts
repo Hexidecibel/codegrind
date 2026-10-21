@@ -32,6 +32,8 @@ const VARS = [
   'QWEN_URL',
   'ANTHROPIC_MODEL',
   'ANTHROPIC_CHAT_MODEL',
+  'ANTHROPIC_SMALL_MODEL',
+  'CODEGRIND_SMALL_MODEL',
 ];
 
 const SAVED = Object.fromEntries(VARS.map((v) => [v, process.env[v]]));
@@ -72,10 +74,19 @@ describe('the default: nothing configured', () => {
     expect(r.tutor).toBe('anthropic:claude-opus-5');
   });
 
-  it('gives workhorse and small the same client — they differ in budget, not in who answers', async () => {
+  it('routes `small` to Haiku 5.5 by default on Anthropic (Phase H), its own client', async () => {
     const r = await routeUnder({});
-    expect(r.small).toBe(r.workhorse);
-    expect(r.clientFor('small')).toBe(r.clientFor('workhorse'));
+    expect(r.small).toBe('anthropic:claude-haiku-5-5');
+    expect(r.clientFor('small')).not.toBe(r.clientFor('workhorse'));
+    expect(r.describe).toBe('workhorse anthropic:claude-sonnet-5, small anthropic:claude-haiku-5-5, tutor anthropic:claude-opus-5');
+  });
+
+  it('lets a deploy pin the small model, and ANTHROPIC_MODEL alone does not move it', async () => {
+    expect((await routeUnder({ ANTHROPIC_SMALL_MODEL: 'claude-sonnet-5' })).small).toBe('anthropic:claude-sonnet-5');
+    expect((await routeUnder({ ANTHROPIC_MODEL: 'claude-sonnet-5-5' })).small).toBe('anthropic:claude-haiku-5-5');
+    // Pinned to the workhorse's model, the two share one client again.
+    const same = await routeUnder({ ANTHROPIC_SMALL_MODEL: 'claude-sonnet-5' });
+    expect(same.clientFor('small')).toBe(same.clientFor('workhorse'));
   });
 });
 
@@ -123,6 +134,8 @@ describe('a local-only install', () => {
     const r = await routeUnder(LOCAL);
     expect(r.workhorse).toBe('openai-compatible:Qwen3-local-q8');
     expect(r.small).toBe('openai-compatible:Qwen3-local-q8');
+    // `small` shares the workhorse's client off Anthropic: no "smaller model" is guessed.
+    expect(r.clientFor('small')).toBe(r.clientFor('workhorse'));
     // THE POINT OF THE WHOLE STAGE. A tutor that stayed on Claude here is a
     // signup and a bill for someone who asked for neither.
     expect(r.tutor).toBe('openai-compatible:Qwen3-local-q8');

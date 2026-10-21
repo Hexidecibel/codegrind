@@ -90,13 +90,13 @@ function row(id: string): Row {
 }
 
 /** Put a review row in an exact state — the ladder is under test, so no helpers. */
-function setReview(id: string, dueAt: string, attempts: number, clearedAt: string | null = null): void {
+function setReview(id: string, dueAt: string, attempts: number, clearedAt: string | null = null, rung = 0): void {
   db.db
     .prepare(
-      `INSERT OR REPLACE INTO review_queue (problemId, reason, dueAt, attempts, clearedAt, createdAt)
-       VALUES (?, 'failed', ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO review_queue (problemId, reason, dueAt, attempts, clearedAt, createdAt, rung)
+       VALUES (?, 'failed', ?, ?, ?, ?, ?)`,
     )
-    .run(id, dueAt, attempts, clearedAt, new Date().toISOString());
+    .run(id, dueAt, attempts, clearedAt, new Date().toISOString(), rung);
 }
 
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
@@ -131,25 +131,24 @@ afterAll(() => {
 
 suite('snoozeReview', () => {
   it('pushes a due review out and does not count it as a miss', () => {
-    setReview(A, ago(26 * DAY), 2);
+    setReview(A, ago(26 * DAY), 2, null, 2);
     expect(db.snoozeReview(A)).toBe(true);
     const r = row(A);
     expect(r.attempts).toBe(2);
     expect(r.clearedAt).toBeNull();
-    // attempts 2 is the +5d rung.
-    expect(daysFromNow(r.dueAt)).toBeGreaterThan(4.99);
-    expect(daysFromNow(r.dueAt)).toBeLessThan(5.01);
+    // rung 2 is the +7d rung (review-ladder RUNG_DAYS).
+    expect(daysFromNow(r.dueAt)).toBeGreaterThan(6.99);
+    expect(daysFromNow(r.dueAt)).toBeLessThan(7.01);
   });
 
-  it('snoozes a never-missed review by the first real rung, not by zero', () => {
-    // attempts 0 reads rung 0 = "due now", which would snooze nothing and
-    // re-serve the same problem — the original bug by another road.
+  it('snoozes a bottom-rung review by a whole day, never by zero', () => {
+    // Rung 0 is +1 day: a snooze can never re-serve the same problem at once.
     setReview(A, ago(1000), 0);
     expect(db.snoozeReview(A)).toBe(true);
     const r = row(A);
     expect(r.attempts).toBe(0);
-    expect(daysFromNow(r.dueAt)).toBeGreaterThan(1.99);
-    expect(daysFromNow(r.dueAt)).toBeLessThan(2.01);
+    expect(daysFromNow(r.dueAt)).toBeGreaterThan(0.99);
+    expect(daysFromNow(r.dueAt)).toBeLessThan(1.01);
     expect(db.getDueReview('javascript')).toBeNull();
   });
 
@@ -187,7 +186,7 @@ suite('POST /api/session/:id/next — skipping a due review', () => {
     expect(json.problem.id).toBe(B);
 
     expect(row(A).attempts).toBe(1);
-    expect(daysFromNow(row(A).dueAt)).toBeGreaterThan(1.99);
+    expect(daysFromNow(row(A).dueAt)).toBeGreaterThan(0.99);
     // B was served, not skipped — still due until it is submitted.
     expect(daysFromNow(row(B).dueAt)).toBeLessThan(0);
   });

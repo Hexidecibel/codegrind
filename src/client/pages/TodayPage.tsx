@@ -341,7 +341,7 @@ function DebriefPanel({
           ) : (
             <Button size="lg" onClick={() => onRun(false)} disabled={busy} className="gap-2">
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {busy ? 'Reading your day…' : `Debrief me now (~$${state.debriefEstimateUsd.toFixed(2)})`}
+              {busy ? 'Reading your day…' : `Debrief me now (~$${state.debriefEstimateUsd.toFixed(state.debriefEstimateUsd < 0.01 ? 4 : 2)})`}
             </Button>
           )}
         </div>
@@ -413,7 +413,7 @@ function DebriefPanel({
               disabled={busy}
               className="ml-auto gap-1.5"
               onClick={() => {
-                if (window.confirm(`Regenerate the debrief? One more model call (~$${state.debriefEstimateUsd.toFixed(2)}).`)) {
+                if (window.confirm(`Regenerate the debrief? One more model call (~$${state.debriefEstimateUsd.toFixed(state.debriefEstimateUsd < 0.01 ? 4 : 2)}).`)) {
                   onRun(true);
                 }
               }}

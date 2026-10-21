@@ -56,7 +56,7 @@ You get a compact digest of the day and the last seven days. Write a short debri
 - tomorrowFocus.patterns: 0-3 topic ids, EXACTLY from this list: ${TOPICS.join(', ')}.
 - tomorrowFocus.mockKind: one of ${MOCK_KINDS.join(', ')}, or null to keep the normal rotation.
 
-Ground everything in the digest. If the day was thin (steps skipped, nothing attempted), say so plainly and keep it short. Call emit_debrief exactly once.`;
+Ground everything in the digest's FACTS (results, counts, tests, hints, the mock grade). The "earlier today" step notes are AI-written summaries: use them for context only, and never repeat a claim from them that those facts do not show — in particular never turn "a habit was skipped" into a fix unless the digest itself records it. If the day was thin (steps skipped, nothing attempted), say so plainly and keep it short. Call emit_debrief exactly once.`;
 
 // Strict (exactSchema): every property required at every level, no extras —
 // the endpoint guarantees the types. `mockKind` stays optional in effect by

@@ -29,6 +29,8 @@ export interface DailySessionRow {
   debrief: Debrief | null;
   debriefUsage: DebriefUsage | null;
   debriefAt: string | null;
+  /** Automatic regenerations of the debrief today (today.compute.MAX_DEBRIEF_REGENS). */
+  debriefRegens: number;
   stepNotes: StepNotes;
   /** Failed automatic attempts per target: the retry budget (today.compute.pendingReviews). */
   aiFailures: AiFailures;
@@ -56,6 +58,9 @@ function prepare() {
       UPDATE daily_sessions SET debrief = @debrief, debriefUsage = @usage, debriefAt = @now, updatedAt = @now
       WHERE date = @date
     `),
+    bumpDebriefRegens: db.prepare(
+      `UPDATE daily_sessions SET debriefRegens = COALESCE(debriefRegens, 0) + 1, updatedAt = @now WHERE date = @date`
+    ),
     setStepNotes: db.prepare(`UPDATE daily_sessions SET stepNotes = @notes, updatedAt = @now WHERE date = @date`),
     setAiFailures: db.prepare(`UPDATE daily_sessions SET aiFailures = @failures, updatedAt = @now WHERE date = @date`),
     recognizeSince: db.prepare(`
@@ -71,13 +76,16 @@ function prepare() {
     attemptsSince: db.prepare(`
       SELECT a.problemId, COALESCE(p.title, '(deleted problem)') AS title, a.pattern, a.difficulty,
              a.solved, a.hintsUsed, a.testsPassed, a.testsTotal, a.prediction, a.mistakeTags, a.createdAt,
-             (SELECT MIN(b.createdAt) FROM attempts b WHERE b.problemId = a.problemId) AS firstAt
+             (SELECT MIN(b.createdAt) FROM attempts b WHERE b.problemId = a.problemId) AS firstAt,
+             (SELECT MIN(m.createdAt) FROM mocks m
+               WHERE m.kind = 'coding' AND json_valid(m.state)
+                 AND json_extract(m.state, '$.coding.problemId') = a.problemId) AS mockAt
       FROM attempts a LEFT JOIN problems p ON p.id = a.problemId
       WHERE a.createdAt >= ?
       ORDER BY a.createdAt ASC
     `),
     mocksSince: db.prepare(`
-      SELECT m.id, m.kind, m.status, m.createdAt, m.prompt, g.verdict AS verdict, g.grade AS grade
+      SELECT m.id, m.kind, m.status, m.createdAt, m.prompt, g.verdict AS verdict, g.grade AS grade, g.createdAt AS gradedAt
       FROM mocks m LEFT JOIN mock_grades g ON g.mockId = m.id
       WHERE m.createdAt >= ?
       ORDER BY m.createdAt ASC
@@ -103,6 +111,7 @@ function prepare() {
       UNION ALL SELECT createdAt FROM mocks WHERE createdAt >= @since
       UNION ALL SELECT lastReviewedAt FROM mock_gaps WHERE lastReviewedAt >= @since
       UNION ALL SELECT createdAt FROM recognize_attempts WHERE createdAt >= @since
+      UNION ALL SELECT createdAt FROM envelope_attempts WHERE createdAt >= @since
     `),
   };
 }
@@ -116,6 +125,7 @@ interface RawDay {
   debrief: string | null;
   debriefUsage: string | null;
   debriefAt: string | null;
+  debriefRegens?: number | null;
   stepNotes?: string | null;
   aiFailures?: string | null;
 }
@@ -140,6 +150,7 @@ function parseDay(r: RawDay | undefined): DailySessionRow | null {
     debrief: safeJson<Debrief>(r.debrief),
     debriefUsage: safeJson<DebriefUsage>(r.debriefUsage),
     debriefAt: r.debriefAt,
+    debriefRegens: r.debriefRegens ?? 0,
     stepNotes: parseNotes(safeJson<Record<string, unknown>>(r.stepNotes ?? null)),
     aiFailures: safeJson<AiFailures>(r.aiFailures ?? null) ?? {},
   };
@@ -157,6 +168,10 @@ function parseNotes(raw: Record<string, unknown> | null): StepNotes {
 
 export function setStepNotes(date: string, notes: StepNotes, now: Date): void {
   S().setStepNotes.run({ date, notes: JSON.stringify(notes), now: now.toISOString() });
+}
+
+export function bumpDebriefRegens(date: string, now: Date): void {
+  S().bumpDebriefRegens.run({ date, now: now.toISOString() });
 }
 
 export function setAiFailures(date: string, failures: AiFailures, now: Date): void {
@@ -232,6 +247,9 @@ export interface TodayAttemptFull extends TodayAttemptRow {
   mistakeTags: string[];
 }
 
+/** The `firstAt` of a problem first met in a coding mock: earlier than every day. */
+export const MOCK_FIRST_MET = '1970-01-01T00:00:00.000Z';
+
 export function attemptsSince(iso: string): TodayAttemptFull[] {
   const rows = S().attemptsSince.all(iso) as Array<{
     problemId: string;
@@ -246,6 +264,7 @@ export function attemptsSince(iso: string): TodayAttemptFull[] {
     mistakeTags: string | null;
     createdAt: string;
     firstAt: string;
+    mockAt: string | null;
   }>;
   return rows.map((r) => {
     const tags = safeJson<unknown[]>(r.mistakeTags);
@@ -261,13 +280,19 @@ export function attemptsSince(iso: string): TodayAttemptFull[] {
       prediction: safeJson(r.prediction),
       mistakeTags: Array.isArray(tags) ? tags.filter((t): t is string => typeof t === 'string') : [],
       createdAt: r.createdAt,
-      firstAt: r.firstAt,
+      // A problem first met in a CODING MOCK is a review when it is re-solved
+      // in the grind, even the same day (Phase H: the re-solve was counted as
+      // Problem 1). Its "first attempt" is pinned before any day so every
+      // `firstAt < dayStart` review test downstream sees it as one.
+      firstAt: r.mockAt && r.mockAt < r.firstAt ? MOCK_FIRST_MET : r.firstAt,
     };
   });
 }
 
 export interface TodayMockFull extends TodayMockRow {
   prompt: string;
+  /** When the grade row was written; null until graded. */
+  gradedAt: string | null;
   grade: { summary?: string; drills?: { concept: string; prompt: string }[]; gaps?: { concept: string; title: string }[] } | null;
 }
 
@@ -280,6 +305,7 @@ export function mocksSince(iso: string): TodayMockFull[] {
     prompt: string;
     verdict: MockVerdict | null;
     grade: string | null;
+    gradedAt: string | null;
   }>;
   return rows.map((r) => ({ ...r, grade: safeJson(r.grade) }));
 }

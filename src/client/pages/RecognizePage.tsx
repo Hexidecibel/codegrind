@@ -623,7 +623,8 @@ export function RecognizePage() {
                         title={approach.trim() ? 'One small model call' : 'Write an approach first'}
                       >
                         {checkBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                        AI check my approach (~$0.0035)
+                        AI check my approach
+                        {reveal.checkEstimateUsd != null ? ` (~$${reveal.checkEstimateUsd.toFixed(4)})` : ' (local model)'}
                       </Button>
                     )}
                   </div>

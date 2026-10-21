@@ -605,7 +605,7 @@ export function SolveSurface({
    * written server-side after coaching, so a second submit fired in the gap
    * would record two attempts for one solve.
    */
-  const submit = useCallback(async () => {
+  const submit = useCallback(async (override = false) => {
     if (submitting) return;
     if (!isDesktop) (document.activeElement as HTMLElement | null)?.blur();
     setError(null);
@@ -654,8 +654,18 @@ export function SolveSurface({
             setCoachPhase('done');
           }
         },
+        override,
       );
     } catch (err) {
+      // The soft Submit cap (server: review-ladder SUBMIT_SOFT_CAP). Ask, and
+      // resend with the override when the candidate really means it.
+      if (err instanceof ApiError && err.code === 'submit-cap' && !override) {
+        setCoachPhase('idle');
+        // After `finally` has cleared `submitting`, through the ref: this
+        // closure's `submitting` is still true and would refuse the resend.
+        if (window.confirm(`${err.message}\n\nSubmit anyway?`)) setTimeout(() => void handlers.current.submit(true), 0);
+        return;
+      }
       showError(err, 'Submit failed');
       setCoachPhase('idle');
     } finally {
@@ -888,7 +898,7 @@ export function SolveSurface({
       </Button>
       <Button
         size={controlSize}
-        onClick={submit}
+        onClick={() => submit()}
         disabled={submitting}
         className={cn('min-w-0 gap-1.5 px-2 lg:px-3', grow && 'flex-1')}
         title="Submit against hidden tests (⌘/Ctrl+Shift+Enter)"

@@ -74,17 +74,18 @@ export const UNLOCK_TIER: Difficulty = 'easy';
 // -----------------------------------------------------------------------------
 
 /**
- * The per-PROBLEM review ladder: attempts 0 → due now, 1 → +2d, 2 → +5d, 3+ →
- * +10d. `db.REVIEW_LADDER_DAYS`.
+ * The per-PROBLEM review ladder, in days until due: a miss puts the problem on
+ * the first rung, each clean solve on a LATER day climbs one, a clean solve on
+ * the top rung clears it, a lapse drops one rung. `review-ladder.RUNG_DAYS`.
  */
-export const REVIEW_LADDER_DAYS: readonly number[] = [0, 2, 5, 10];
+export const REVIEW_LADDER_DAYS: readonly number[] = [1, 3, 7, 14];
 
 /**
- * The lowest ladder rung a SKIPPED review is snoozed on. A skip reads the rung
- * at max(attempts, this) and does not add an attempt; rung 0 is "due now", so
- * anything lower would snooze nothing. `db.snoozeReview`.
+ * The lowest ladder rung a SKIPPED review is snoozed on: a skip pushes the
+ * problem out by its current rung and does not count as a miss.
+ * `review-ladder.ladderSnoozeDue`.
  */
-export const REVIEW_SKIP_MIN_RUNG = 1;
+export const REVIEW_SKIP_MIN_RUNG = 0;
 
 /** How long a skipped review stays away at minimum, in days. */
 export const REVIEW_SKIP_MIN_DAYS = REVIEW_LADDER_DAYS[REVIEW_SKIP_MIN_RUNG];
@@ -176,7 +177,7 @@ export function boxIntervalLabel(hours: number): string {
   return `${days} day${days === 1 ? '' : 's'}`;
 }
 
-/** `"0, 2, 5 then 10 days"` — the review ladder as one readable phrase. */
+/** `"1, 3, 7 then 14 days"` — the review ladder as one readable phrase. */
 export function reviewLadderPhrase(): string {
   const days = [...REVIEW_LADDER_DAYS];
   const last = days.pop();

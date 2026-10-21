@@ -70,6 +70,8 @@ export interface RecognizeReveal {
   language: string;
   /** "AI reviews" is on: the page runs the check automatically after reveal. */
   autoCheck: boolean;
+  /** Typical cost of one AI check on the model it would run on; null = local/unpriced. */
+  checkEstimateUsd: number | null;
 }
 
 export interface RecognizeNote {
