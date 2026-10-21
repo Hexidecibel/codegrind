@@ -24,9 +24,16 @@ import {
   conceptLabel as sdConceptLabel,
 } from './sd.js';
 import { SD_PROMPTS, pickPrompt as pickSdPrompt, sdPrompt } from './sd-prompts.js';
+import {
+  BQ_COMPETENCIES,
+  BQ_PROMPTS,
+  BQ_STAGES,
+  BQ_STAGE_META,
+  competencyLabel,
+} from './behavioral-questions.js';
 
 /** The kinds a mock can be started as. */
-export const MOCK_KINDS = ['system-design'] as const;
+export const MOCK_KINDS = ['system-design', 'behavioral'] as const;
 export type MockKind = (typeof MOCK_KINDS)[number];
 export const DEFAULT_MOCK_KIND: MockKind = 'system-design';
 
@@ -36,7 +43,6 @@ export function isMockKind(x: unknown): x is MockKind {
 
 /** Kinds the start card shows, disabled, until they ship. */
 export const UPCOMING_MOCK_KINDS: readonly { id: string; label: string }[] = [
-  { id: 'behavioral', label: 'Behavioral' },
   { id: 'coding', label: 'Coding' },
 ];
 
@@ -75,6 +81,21 @@ export interface MockKindInfo {
   turnCap: number;
   /** Turns in a typical mock, for the start card's estimate. */
   typicalTurns: number;
+  /**
+   * The shape behind estimateMockCost (tokens): the frozen prefix, what each
+   * exchange adds to the history, an interviewer reply's output, the grader's
+   * fixed input (system + tool + rubric + anything the kind appends) and its
+   * output including thinking.
+   */
+  cost: { prefix: number; perExchange: number; replyOut: number; gradeFixed: number; gradeOut: number };
+  /**
+   * The start card asks GET /api/mock/plan before starting (behavioral: the
+   * planned competencies and whether the story bank loaded) and sends the plan
+   * back with the start request.
+   */
+  planned?: boolean;
+  /** The grader's transcript shows each candidate turn's word count (behavioral: answer length). */
+  wordCounts?: boolean;
   /** Start-card copy. */
   start: {
     blurb: string;
@@ -100,6 +121,7 @@ const SYSTEM_DESIGN: MockKindInfo = {
   minutes: 45,
   turnCap: 40,
   typicalTurns: 25,
+  cost: { prefix: 4000, perExchange: 320, replyOut: 400, gradeFixed: 3000, gradeOut: 8000 },
   start: {
     blurb:
       'A system-design interview over chat. The interviewer asks, pushes and moves you through the stages; ask it to explain anything and it will break off to teach, then pick up where you were. At the end it grades every stage at the level you choose and gives you drills.',
@@ -109,8 +131,39 @@ const SYSTEM_DESIGN: MockKindInfo = {
   },
 };
 
+const BEHAVIORAL_PROMPT = BQ_PROMPTS[0];
+
+const BEHAVIORAL: MockKindInfo = {
+  kind: 'behavioral',
+  label: 'Behavioral',
+  stages: BQ_STAGES,
+  stageMeta: BQ_STAGE_META,
+  concepts: BQ_COMPETENCIES,
+  conceptLabel: competencyLabel,
+  prompts: BQ_PROMPTS,
+  promptById: (id) => BQ_PROMPTS.find((p) => p.id === id) ?? null,
+  pickPrompt: () => BEHAVIORAL_PROMPT,
+  minutes: 35,
+  turnCap: 30,
+  // intro (2) + four questions × (answer + ~3 probes) + wrap (1).
+  typicalTurns: 19,
+  // Answers are long (~250–350 words; probe answers shorter) so an exchange adds
+  // more than a system-design one; the grader also reads the frozen story bank
+  // (~7k tokens for the live 8-story bank). Measured prefix: ~2.7k.
+  cost: { prefix: 3000, perExchange: 450, replyOut: 350, gradeFixed: 11500, gradeOut: 9000 },
+  planned: true,
+  wordCounts: true,
+  start: {
+    blurb:
+      'A Staff behavioral interview over chat: tell me about yourself, four questions probed two to four levels deep, then your questions. The interviewer has not seen your stories; the grader has — it checks story choice, STAR, scope, "I" vs "we", numbers and length against your story bank, and turns each miss into a drill card.',
+    pickHint: 'Competencies are weighted toward your open story-bank gaps, weak past grades, and influence without authority.',
+    familiarTag: '',
+  },
+};
+
 export const MOCK_KIND_INFO: Readonly<Record<MockKind, MockKindInfo>> = {
   'system-design': SYSTEM_DESIGN,
+  behavioral: BEHAVIORAL,
 };
 
 /** The registry entry for a kind. An unknown kind (an old or hand-edited row) reads as system design. */

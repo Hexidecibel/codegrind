@@ -3,6 +3,7 @@
 // =============================================================================
 //   GET  /api/mocks                 list            free
 //   GET  /api/mock/prompts?kind=    the prompt bank free (kind absent = system design)
+//   GET  /api/mock/plan?kind=       a planned kind's preview   free (behavioral reads the story bank; no model)
 //   GET  /api/mock/cards            due drill cards free
 //   POST /api/mock/cards/:id/grade  {grade: got|shaky|missed}      free (self-graded, no model)
 //   GET  /api/mock/:id              one mock        free
@@ -26,6 +27,7 @@ import {
   gradeGapCard,
   parseKind,
   prepareEnd,
+  previewPlan,
   runEnd,
   startMock,
   takeTurn,
@@ -53,6 +55,15 @@ mockRoutes.get('/mock/prompts', (c) => {
     return c.json({ prompts: prompts.map(({ id, title, brief, familiar }) => ({ id, title, brief, familiar })) });
   } catch (err) {
     return fail(c, 'mock-prompts', err);
+  }
+});
+
+// Registered BEFORE /mock/:id, which would otherwise read "plan" as a mock id.
+mockRoutes.get('/mock/plan', async (c) => {
+  try {
+    return c.json(await previewPlan(c.req.query('kind'), c.req.query('level')));
+  } catch (err) {
+    return fail(c, 'mock-plan', err);
   }
 });
 

@@ -704,5 +704,734 @@
         "content": "Level: Staff\nPrompt: A ticketing system for events — Design a ticketing system.\nStages the server recorded as skipped: capacity\nConcepts the interviewer taught: idempotency\n\nRECORDED GAPS (already drill cards — do not repeat these in gaps):\n- #19 [skill] Rank the failures for a ticketing system.\n\nRUBRIC — graded at Staff level.\n\n## requirements (Requirements) — Who uses it and how, what it does, and which failure is worst — ranked, not listed.\n1: Starts designing with no questions, or answers its own questions.\n2: Asks some of the seven questions (who, what, how much, how fresh, how correct, who is allowed, what exists) but skips freshness or correctness; lists failures without ranking them.\n3: Covers most of the seven questions in the one-breath shape (\"[question]? I would assume X.\"), names the central record, and ranks the failures with the ranking sentence.\n4: All of 3, plus finds the second user / the other side, resolves a conflict between two failures out loud (\"if X and Y conflict, X wins, because…\"), and never gives up something the interviewer gave a number for.\nAt Staff: Score 3, and the ranking is used to make a later decision. Conflicts between failures are resolved, not avoided.\n\n## capacity (Capacity) — How much: users, requests per second, data volume, growth — rough numbers that drive choices.\n1: No numbers, or numbers that drive nothing.\n2: Rough numbers stated but not used to make a decision.\n3: Back-of-envelope reads/writes per second and storage, and at least one design choice that follows from them.\n4: Numbers drive several choices, peaks are distinguished from averages, and growth changes the plan explicitly.\nAt Staff: Score 3. At least one choice visibly follows from a number.\n\n## api (API) — The three or four main operations as calls, with the awkward parameters named.\n1: No interface, or a list of nouns.\n2: Main operations named but parameters and failure behaviour vague.\n3: The three or four main calls with their awkward parameters (pagination, idempotency keys, filters) and what they return on failure.\n4: All of 3, plus versioning or evolution, and which call is the expensive one and why.\nAt Staff: Score 3, with idempotency or ordering handled where the domain needs it.\n\n## data-model (Data model) — The central record, its keys and access patterns, and where it lives.\n1: Tables with no keys or access patterns.\n2: Entities named; keys or the read path left implicit.\n3: The central record, its keys, the main access patterns, and a storage choice justified by them.\n4: All of 3, plus partitioning / tenancy, the hot key, and how the model survives the next requirement.\nAt Staff: Score 3, with tenancy or partitioning addressed when scale demands it.\n\n## high-level (High-level design) — Boxes and arrows that serve the requirements, said out loud in one pass.\n1: Components with no flow, or a flow that does not serve the requirements.\n2: A plausible diagram, but the ranked failure is not visibly designed for.\n3: One clear pass through read and write paths, designed for the worst failure named earlier.\n4: All of 3, plus the abnormal flow walked through, not just the happy path.\nAt Staff: Score 3, and the abnormal flow is at least named.\n\n## deep-dive (Deep dive) — Two or three parts taken all the way down, including how they fail.\n1: Stays at box level when pushed.\n2: Goes one level down on one part; failure modes hand-waved.\n3: Two parts taken down to mechanism, each with how it fails and how we would know.\n4: All of 3, driven by the candidate rather than the interviewer, with their own experience brought in at the right moment.\nAt Staff: Score 3. The candidate chooses which parts deserve depth and says why.\n\n## tradeoffs (Trade-offs) — What was chosen over what and why, what was deliberately not built, how it is operated.\n1: No trade-offs named.\n2: Trade-offs named but not decided.\n3: \"The trade-off is X against Y, and I would choose X because…\" on the main decisions; cost and operability mentioned.\n4: All of 3, plus what was deliberately not built yet, how it would be migrated to incrementally, and \"this fails when…, and we would know because…\".\nAt Staff: Score 3. Decisions are made, not listed.\n\nTRANSCRIPT\n#1 INTERVIEWER: Go.\n#2 CANDIDATE: Who buys?"
       }
     ]
+  },
+  "behavioralInterviewerTurn": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 3000,
+    "thinking": {
+      "type": "disabled"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You are a senior engineering leader running a live behavioral interview over chat for a Staff-level role. You are realistic: warm but probing. You ask one question at a time, listen, and dig. You have NOT seen the candidate's résumé stories — everything you know about their work comes from what they tell you here. Keep each message short — usually one to three sentences, ending with one question.\n\nSTAGES, in order: intro → q1 → q2 → q3 → q4 → wrap.\n- intro: open with \"tell me about yourself\" (in your own words). At most one follow-up, then move to q1.\n- q1..q4: the MOCK SETUP message gives one competency and one question per stage. Ask that question (you may rephrase it to sound natural; keep its competency). After the candidate's story, PROBE two to four levels deep before moving on. Good probes, pick what the answer is missing:\n  - \"What did YOU specifically do?\" — when they say \"we\" and their own part is unclear.\n  - \"How did you get buy-in?\" / \"Who disagreed, and how did you bring them along?\" — for anything that needed other people.\n  - \"What was the measurable result?\" — when there is no number or no outcome.\n  - \"What would you do differently?\" / \"What did you learn?\" — once the story is told.\n  - \"Why was that the right call at the time — what did you trade away?\" — for decisions.\n  - \"How big was this — how many teams, people, users, dollars?\" — when scope is unclear.\n  Move to the next stage after two to four probes, or sooner if the answer is complete and time is short.\n- wrap: ask whether they have questions for you; answer one briefly and honestly as an interviewer would, then close.\nReport the stage your reply belongs to, and every stage adequately covered so far. A question stage is covered once its story was told and probed.\n\nMODES (pick one per reply):\n- interview: the normal case — ask, probe, move on.\n- nudge: they are stuck finding a story, or rambling without one. Point the way with a question (\"think of a time a decision of yours was challenged by someone senior — anything come to mind?\"). Never supply a story.\n- offer_teach: they keep missing the same thing (no result, all \"we\", no structure). Say briefly what you noticed and OFFER a short tip; the app shows \"Teach me\" and \"Keep going\". Fill teach.concept with the competency of the current question.\n- teach: break out of interviewer character and coach. Use this when the candidate asks (\"how should I structure this?\", \"what are you looking for?\") or a [control: TEACH ME] line arrives. Short markdown: what a Staff answer to THIS question does (lead with the result in one sentence, then situation and task in two, most of the time on what YOU did and how you brought people along, close with the number and what you would change), at most ~200 words. Then \"Back to the interview:\" and the question that resumes. Fill teach.concept, teach.gapSummary and resumePoint. Never invent a story for them.\n- wrap_up: only after a [control: END] line, or when every stage is covered. One or two sentences closing the interview. No new question.\n\nLINES THE APP ADDS TO THE CANDIDATE'S MESSAGES — they come from the app, not the candidate; never quote them back:\n- [server: …] facts: the clock, the turn count, the current stage, stages the server noticed were skipped, a time warning.\n- [control: …] a button the candidate pressed (TEACH ME, I'M STUCK, MOVE ON, KEEP GOING) or END. Obey it. MOVE ON means go to the next question stage.\n\nANSWER BEFORE YOU REDIRECT. When the candidate asks you something (\"do you want the technical detail or the people side?\", \"is it OK if this was at a smaller company?\"), your reply OPENS by answering it in one sentence, then continues. Never ignore an explicit question.\n\nGAPS: list in gaps every piece of coaching YOU handed over in this reply (teach mode, or a tip inside a nudge): type skill for a delivery move (\"lead with the result\", \"say I, not we\", \"close with the number\"); type fact only for a concrete fact about how interviews work that they did not know. title: the drill-card front — the interview question it applies to; answer: two to four sentences of the coaching. An empty list when you handed nothing over — probing is not handing over.\n\nOBSERVATIONS: on every reply, record what the candidate's LAST message showed about the competencies in the closed list — nailed (clear, owned, quantified, at Staff scope), weak (partly, vague, or only when probed), missing (the question called for it and it was not there). Usually the current question's competency; another only when the answer clearly showed it. Zero observations is fine.\n\nSTYLE: plain language, no headings or bullets in interview mode. Do not praise every answer and do not summarise their story back to them. Do not accept a hypothetical (\"I would…\") as a story — ask for a real time. Do not lead them toward an answer.\n\nReturn every reply by calling the interviewer_turn tool exactly once. The candidate sees only \"say\".",
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "interviewer_turn",
+        "description": "Your next message in the interview, plus what the candidate’s last message showed.",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "observations": {
+              "type": "array",
+              "description": "What the candidate’s LAST message showed. Empty when it showed nothing.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "ownership",
+                      "influence-without-authority",
+                      "conflict",
+                      "failure-learning",
+                      "ambiguity",
+                      "growing-others",
+                      "technical-strategy",
+                      "prioritization",
+                      "cross-team",
+                      "exec-communication",
+                      "delivery-under-pressure",
+                      "customer-impact"
+                    ]
+                  },
+                  "signal": {
+                    "type": "string",
+                    "enum": [
+                      "nailed",
+                      "weak",
+                      "missing"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "description": "One short clause of evidence."
+                  }
+                },
+                "required": [
+                  "concept",
+                  "signal",
+                  "note"
+                ]
+              }
+            },
+            "stage": {
+              "type": "string",
+              "enum": [
+                "intro",
+                "q1",
+                "q2",
+                "q3",
+                "q4",
+                "wrap"
+              ],
+              "description": "The stage this reply belongs to."
+            },
+            "stagesCovered": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "intro",
+                  "q1",
+                  "q2",
+                  "q3",
+                  "q4",
+                  "wrap"
+                ]
+              },
+              "description": "Every stage the candidate has adequately covered so far, including earlier ones."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "interview",
+                "nudge",
+                "offer_teach",
+                "teach",
+                "wrap_up"
+              ]
+            },
+            "teach": {
+              "description": "For teach and offer_teach only; null otherwise.",
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "concept": {
+                      "type": "string",
+                      "enum": [
+                        "ownership",
+                        "influence-without-authority",
+                        "conflict",
+                        "failure-learning",
+                        "ambiguity",
+                        "growing-others",
+                        "technical-strategy",
+                        "prioritization",
+                        "cross-team",
+                        "exec-communication",
+                        "delivery-under-pressure",
+                        "customer-impact"
+                      ]
+                    },
+                    "gapSummary": {
+                      "type": "string",
+                      "description": "One sentence: what they did not know."
+                    }
+                  },
+                  "required": [
+                    "concept",
+                    "gapSummary"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "resumePoint": {
+              "type": "string",
+              "description": "teach mode: the question you resume with. Empty string otherwise."
+            },
+            "gaps": {
+              "type": "array",
+              "description": "Every fact or reasoning move you handed over in THIS reply. Empty when none.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "ownership",
+                      "influence-without-authority",
+                      "conflict",
+                      "failure-learning",
+                      "ambiguity",
+                      "growing-others",
+                      "technical-strategy",
+                      "prioritization",
+                      "cross-team",
+                      "exec-communication",
+                      "delivery-under-pressure",
+                      "customer-impact"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "fact",
+                      "skill"
+                    ]
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "Drill-card front: a self-contained question."
+                  },
+                  "answer": {
+                    "type": "string",
+                    "description": "Drill-card back: 2–4 sentences, including why it matters."
+                  }
+                },
+                "required": [
+                  "concept",
+                  "type",
+                  "title",
+                  "answer"
+                ]
+              }
+            },
+            "say": {
+              "type": "string",
+              "description": "What the candidate sees. Markdown allowed in teach mode."
+            }
+          },
+          "required": [
+            "observations",
+            "stage",
+            "stagesCovered",
+            "mode",
+            "teach",
+            "resumePoint",
+            "gaps",
+            "say"
+          ]
+        },
+        "strict": true
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "interviewer_turn"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "MOCK SETUP\nInterview: behavioral\nLevel the candidate is interviewing for: Staff\nTime budget: 35 minutes, at most 30 candidate turns. Roughly: intro 4 minutes, each question 7 minutes, wrap 3.\nPlan:\n- intro: \"Tell me about yourself.\"\n- q1: competency conflict (Conflict & disagreement). Ask: \"Tell me about a time you strongly disagreed with a peer on a technical decision. How was it resolved?\"\n- q2: competency influence-without-authority (Influence without authority). Ask: \"Describe a technical direction you championed that other teams adopted. How did you get buy-in?\"\n- q3: competency failure-learning (Failure & learning). Ask: \"Describe a project where you badly underestimated something. What did you change afterwards?\"\n- q4: competency exec-communication (Communicating with executives). Ask: \"Describe a time you had to tell leadership something they did not want to hear.\"\n- wrap: their questions for you, then close.\n\nBegin: give your opening (mode interview, stage intro)."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Tell me about yourself."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "I lead backend architecture.\n\n[server: 1 of 35 min]"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Thanks. Tell me about a time you strongly disagreed with a peer."
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "We disagreed about tenancy.\n\n[server: 4 of 35 min]",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "behavioralGradeMock": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 16000,
+    "thinking": {
+      "type": "adaptive"
+    },
+    "system": [
+      {
+        "type": "text",
+        "text": "You grade a completed behavioral mock interview at a stated level. You are the hiring-committee reviewer, not the interviewer: be specific, cite what the candidate said (by turn number), and be honest about the level.\n\nYou also have the candidate's STORY BANK (after the rubric) — the stories they have prepared, with confirmed facts, numbers, caveats and open questions. The interviewer never saw it. Use it to judge story choice and fidelity, never to credit something the candidate did not say.\n\nRules:\n- stages: score intro, q1..q4 and wrap 1–4 against the rubric anchors; a stage never reached scores 0 with evidence \"not reached\". A question stage's score covers the first answer AND the probes. staffWouldAdd / principalWouldAdd: one concrete sentence the candidate could have said at that stage, not \"more depth\".\n- questions: one entry per question stage the interview reached (q1..q4), in order:\n  - question: as the interviewer asked it; concept: its competency.\n  - storyId: the bank story the answer told, or null (a story not in the bank, no story, or the bank was unavailable). storyFit: how well that story fits the competency — strong / ok / weak / none. If a better-fitting bank story existed, say which in fix.\n  - star: whether the answer (before probing) gave a situation, the task, the candidate's own actions, and a result.\n  - scope: 1–4, the scope and impact of the story against the level's bar (Staff: beyond one team, a lasting change, a decision with consequences).\n  - ownership: \"i\" when the candidate's own actions are clear, \"we\" when they hid behind the team, \"mixed\".\n  - quantified: whether the result had a number (time, money, people, users, incidents, percent).\n  - words: the word count of the candidate's FIRST answer to the question, from the (N words) marks in the transcript. length: short under ~180 words, ok ~180–400, long over ~400 (aim: about two minutes spoken, 250–350 words).\n  - fidelity: against the bank — numbers the bank has that the answer left out, claims past a caveat (overclaiming), answers to an OPEN QUESTION stated as fact. Empty string when clean or when there is no bank story.\n  - fix: the single change that would most improve this answer, as a sentence they could say (\"Open with: 'We cut hosting cost about 90%, and here is how I got there.'\").\n- TAUGHT MATERIAL IS NOT EVIDENCE. Turns marked [TAUGHT: …] are coaching; an answer improved right after it shows listening, not skill. List each taught competency in gapsTaught.\n- I-vs-WE matters at Staff. A story where the candidate's own decisions and influence are invisible is below level however big the project was.\n- GAPS ARE NOT EQUAL. A fact gap (a number from the bank left out) is a cheap fix and weighs little. A skill gap (no result, no ownership, no buy-in story, rambling) is what the level is judged on.\n- verdict: below / at / above the stated level overall.\n- conceptObservations: the competencies the transcript gives evidence on, each nailed / weak / missing.\n- drills: 3 to 6 short drills, most valuable first, each one competency — a prompt they can rehearse in a few minutes (\"Tell the saas-rebuild story in 90 seconds, leading with the cost number\"), plus why.\n- gaps: AT MOST ONE per question stage (the drill card for that question), and only when the answer fell short. type: skill or fact, whichever was the bigger miss. title: the question exactly as asked (the card front). answer: \"Best story: <story id> (<title>).\" then three beats — \"1) … 2) … 3) …\" — the result-first outline of how to tell it, using ONLY confirmed bank material (never an open question), then one line naming the fix. With no fitting bank story, write \"Best story: none in the bank yet\" and three beats of what such a story needs. turn: the interviewer turn that asked it. Do not repeat anything in RECORDED GAPS.\n- storyGaps: competencies the interview asked about (or the bank's coverage shows) where the candidate has NO good story — the bank has none that fits, or the one they told fits weakly. One short note each saying what kind of story to capture. Empty when the bank was unavailable.\n- summary: three or four sentences — the overall picture, the skill gaps as practice areas, the fact gaps as cheap fixes.\n\nReturn the grade by calling emit_mock_grade exactly once.",
+        "cache_control": {
+          "type": "ephemeral"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "emit_mock_grade",
+        "description": "The grade for this mock interview.",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "below",
+                "at",
+                "above"
+              ]
+            },
+            "summary": {
+              "type": "string",
+              "description": "Three or four sentences: the overall picture."
+            },
+            "stages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "stage": {
+                    "type": "string",
+                    "enum": [
+                      "intro",
+                      "q1",
+                      "q2",
+                      "q3",
+                      "q4",
+                      "wrap"
+                    ]
+                  },
+                  "score": {
+                    "type": "integer",
+                    "description": "0 (not reached) to 4."
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "description": "What they said, with turn numbers."
+                  },
+                  "atLevel": {
+                    "type": "boolean"
+                  },
+                  "staffWouldAdd": {
+                    "type": "string"
+                  },
+                  "principalWouldAdd": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "stage",
+                  "score",
+                  "evidence",
+                  "atLevel",
+                  "staffWouldAdd",
+                  "principalWouldAdd"
+                ]
+              },
+              "description": "One entry per stage, in order."
+            },
+            "questions": {
+              "type": "array",
+              "description": "One entry per question stage reached, in order.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "stage": {
+                    "type": "string",
+                    "enum": [
+                      "q1",
+                      "q2",
+                      "q3",
+                      "q4"
+                    ]
+                  },
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "ownership",
+                      "influence-without-authority",
+                      "conflict",
+                      "failure-learning",
+                      "ambiguity",
+                      "growing-others",
+                      "technical-strategy",
+                      "prioritization",
+                      "cross-team",
+                      "exec-communication",
+                      "delivery-under-pressure",
+                      "customer-impact"
+                    ]
+                  },
+                  "question": {
+                    "type": "string"
+                  },
+                  "storyId": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "storyFit": {
+                    "type": "string",
+                    "enum": [
+                      "strong",
+                      "ok",
+                      "weak",
+                      "none"
+                    ]
+                  },
+                  "star": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "situation": {
+                        "type": "boolean"
+                      },
+                      "task": {
+                        "type": "boolean"
+                      },
+                      "action": {
+                        "type": "boolean"
+                      },
+                      "result": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "situation",
+                      "task",
+                      "action",
+                      "result"
+                    ]
+                  },
+                  "scope": {
+                    "type": "integer",
+                    "description": "1 to 4 against the level bar."
+                  },
+                  "ownership": {
+                    "type": "string",
+                    "enum": [
+                      "i",
+                      "we",
+                      "mixed"
+                    ]
+                  },
+                  "quantified": {
+                    "type": "boolean"
+                  },
+                  "words": {
+                    "type": "integer",
+                    "description": "Word count of the first answer, from the transcript marks."
+                  },
+                  "length": {
+                    "type": "string",
+                    "enum": [
+                      "short",
+                      "ok",
+                      "long"
+                    ]
+                  },
+                  "fidelity": {
+                    "type": "string",
+                    "description": "Against the bank; empty when clean."
+                  },
+                  "fix": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "stage",
+                  "concept",
+                  "question",
+                  "storyId",
+                  "storyFit",
+                  "star",
+                  "scope",
+                  "ownership",
+                  "quantified",
+                  "words",
+                  "length",
+                  "fidelity",
+                  "fix"
+                ]
+              }
+            },
+            "storyGaps": {
+              "type": "array",
+              "description": "Competencies with no good story in the bank. Empty when the bank was unavailable.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "ownership",
+                      "influence-without-authority",
+                      "conflict",
+                      "failure-learning",
+                      "ambiguity",
+                      "growing-others",
+                      "technical-strategy",
+                      "prioritization",
+                      "cross-team",
+                      "exec-communication",
+                      "delivery-under-pressure",
+                      "customer-impact"
+                    ]
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "concept",
+                  "note"
+                ]
+              }
+            },
+            "skipped": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "intro",
+                  "q1",
+                  "q2",
+                  "q3",
+                  "q4",
+                  "wrap"
+                ]
+              }
+            },
+            "gapsTaught": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "ownership",
+                      "influence-without-authority",
+                      "conflict",
+                      "failure-learning",
+                      "ambiguity",
+                      "growing-others",
+                      "technical-strategy",
+                      "prioritization",
+                      "cross-team",
+                      "exec-communication",
+                      "delivery-under-pressure",
+                      "customer-impact"
+                    ]
+                  },
+                  "summary": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "concept",
+                  "summary"
+                ]
+              }
+            },
+            "conceptObservations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "ownership",
+                      "influence-without-authority",
+                      "conflict",
+                      "failure-learning",
+                      "ambiguity",
+                      "growing-others",
+                      "technical-strategy",
+                      "prioritization",
+                      "cross-team",
+                      "exec-communication",
+                      "delivery-under-pressure",
+                      "customer-impact"
+                    ]
+                  },
+                  "signal": {
+                    "type": "string",
+                    "enum": [
+                      "nailed",
+                      "weak",
+                      "missing"
+                    ]
+                  },
+                  "note": {
+                    "type": "string",
+                    "description": "One short clause of evidence."
+                  }
+                },
+                "required": [
+                  "concept",
+                  "signal",
+                  "note"
+                ]
+              }
+            },
+            "drills": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "ownership",
+                      "influence-without-authority",
+                      "conflict",
+                      "failure-learning",
+                      "ambiguity",
+                      "growing-others",
+                      "technical-strategy",
+                      "prioritization",
+                      "cross-team",
+                      "exec-communication",
+                      "delivery-under-pressure",
+                      "customer-impact"
+                    ]
+                  },
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "why": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "concept",
+                  "prompt",
+                  "why"
+                ]
+              }
+            },
+            "gaps": {
+              "type": "array",
+              "description": "Gaps the interviewer handed over that RECORDED GAPS does not already list.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "concept": {
+                    "type": "string",
+                    "enum": [
+                      "ownership",
+                      "influence-without-authority",
+                      "conflict",
+                      "failure-learning",
+                      "ambiguity",
+                      "growing-others",
+                      "technical-strategy",
+                      "prioritization",
+                      "cross-team",
+                      "exec-communication",
+                      "delivery-under-pressure",
+                      "customer-impact"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "fact",
+                      "skill"
+                    ]
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "answer": {
+                    "type": "string"
+                  },
+                  "turn": {
+                    "anyOf": [
+                      {
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "concept",
+                  "type",
+                  "title",
+                  "answer",
+                  "turn"
+                ]
+              }
+            }
+          },
+          "required": [
+            "verdict",
+            "summary",
+            "stages",
+            "questions",
+            "storyGaps",
+            "skipped",
+            "gapsTaught",
+            "conceptObservations",
+            "drills",
+            "gaps"
+          ]
+        },
+        "strict": true
+      }
+    ],
+    "tool_choice": {
+      "type": "tool",
+      "name": "emit_mock_grade"
+    },
+    "messages": [
+      {
+        "role": "user",
+        "content": "Level: Staff\nPrompt: Staff behavioral loop — Tell me about yourself, then four questions.\nStages the server recorded as skipped: none\nConcepts the interviewer taught: none\n\nRECORDED GAPS (already drill cards — do not repeat these in gaps):\n- none\n\nRUBRIC — behavioral, graded at Staff.\nThe bar for a question stage at this level: a story whose scope crosses teams or lasts years: the candidate set direction or changed how others worked without relying on authority, made a decision with real trade-offs, and can name the measurable result and what they would change.\nAnchors for a question stage (q1..q4):\n  1  no real story (hypothetical, generic, or not about the competency), or no result.\n  2  a real story, but the candidate's own role or the result stayed vague even after probing; scope below the bar.\n  3  a clear STAR story at the bar: own actions explicit, result stated (ideally with a number), probes answered concretely.\n  4  as 3, told result-first in about two minutes, with the trade-off and the lesson volunteered before being probed.\nintro: 1 a career recital; 2 chronological but long; 3 present → past → why this role in about two minutes; 4 as 3, with one memorable proof point and a clear \"what I want next\".\nwrap: 1 no questions; 2 generic questions; 3 questions that show they thought about the role; 4 as 3, tied to something said in the interview.\n\nSTORY BANK (from resume-builder, frozen when this mock started — 1 stories, 1 confirmed).\nFor judging story choice and fidelity ONLY. The interviewer never saw it. Rules:\n- Material under CONFIRMED is what the candidate has said is true. A number there that the answer left out is a fact gap.\n- OPEN QUESTIONS are not facts. If the candidate stated an answer to one, say so in fidelity (\"stated X, which the bank lists as unconfirmed — confirm it\") without calling it false. Never use one in a card back.\n- Caveats say how a story must be told. Telling it past a caveat (claiming you initiated what was assigned, a firmer number than the bank allows) is overclaiming — name it in fidelity.\n- A story told that is not in the bank is fine; storyId null, judge it on the transcript.\n\n<story id=\"story-saas-rebuild\">\ntitle: Rebuilding as multi-tenant SaaS\nCONFIRMED (the only material you may treat as fact):\nsituation: Each customer had its own environment.\ntask: Assigned the replacement.\naction: Led the architecture.\nresult: 50+ tenants.\nnumbers:\n  - ~$3,000 -> ~$300/month per environment\nhow it must be told (caveats — telling it past these is overclaiming):\n  - Approximate; say roughly.\nfits questions about:\n  - long-horizon architecture\ncompetencies (keyword map): technical-strategy\nOPEN QUESTIONS (NOT facts. Never state, assume or estimate an answer to these, and never put one in a drill card):\n  - Customers per environment\n</story>\n\nSTORY-BANK GAPS the candidate already knows about:\n- disagreement or conflict [open]\n\nCOVERAGE (keyword map from fits[], a hint not a judgement):\n- ownership: NO STORY\n- influence-without-authority: NO STORY\n- conflict: NO STORY\n- failure-learning: NO STORY\n- ambiguity: NO STORY\n- growing-others: NO STORY\n- technical-strategy: story-saas-rebuild\n- prioritization: NO STORY\n- cross-team: NO STORY\n- exec-communication: NO STORY\n- delivery-under-pressure: NO STORY\n- customer-impact: NO STORY\n\nTRANSCRIPT\n--- stage: q1 (Q1) ---\n#3 INTERVIEWER: Tell me about a time you disagreed.\n#4 CANDIDATE (5 words): We disagreed about tenancy."
+      }
+    ]
   }
 }

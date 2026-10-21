@@ -138,6 +138,11 @@ function prepare() {
       VALUES (?, ?, ?, ?, ?, ?)
     `),
     getGrade: db.prepare(`SELECT grade FROM mock_grades WHERE mockId = ?`),
+    recentGradesOfKind: db.prepare(`
+      SELECT g.grade AS grade FROM mock_grades g JOIN mocks m ON m.id = g.mockId
+      WHERE m.kind = ? ORDER BY g.createdAt DESC LIMIT ?
+    `),
+    recentStatesOfKind: db.prepare(`SELECT state FROM mocks WHERE kind = ? ORDER BY createdAt DESC LIMIT ?`),
   };
 }
 const S = () => (stmts ??= prepare());
@@ -357,4 +362,31 @@ export function putGrade(mockId: string, grade: MockGrade, usage: MockUsage): vo
 export function getGrade(mockId: string): MockGrade | null {
   const r = S().getGrade.get(mockId) as { grade: string } | undefined;
   return r ? (JSON.parse(r.grade) as MockGrade) : null;
+}
+
+/** Concept observations from a kind's most recent grades, newest first (the planner's history). */
+export function recentConceptSignals(
+  kind: MockKind,
+  limit = 5
+): { concept: string; signal: 'nailed' | 'weak' | 'missing' }[] {
+  const rows = S().recentGradesOfKind.all(kind, limit) as { grade: string }[];
+  return rows.flatMap((r) => {
+    try {
+      return (JSON.parse(r.grade) as MockGrade).conceptObservations ?? [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** Question ids a kind's recent mocks planned (state.plan), newest first. */
+export function recentPlannedQuestionIds(kind: MockKind, limit = 5): string[] {
+  const rows = S().recentStatesOfKind.all(kind, limit) as { state: string }[];
+  return rows.flatMap((r) => {
+    try {
+      return ((JSON.parse(r.state) as MockState).plan?.items ?? []).map((i) => i.questionId);
+    } catch {
+      return [];
+    }
+  });
 }

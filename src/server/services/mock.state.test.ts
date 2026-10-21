@@ -242,3 +242,48 @@ describe('the transcript the grader reads', () => {
     expect(text).toContain('--- stage: api (API) ---');
   });
 });
+
+describe('behavioral', () => {
+  const PLAN_CONTEXT = [
+    'MOCK SETUP',
+    'Interview: behavioral',
+    '- q1: competency conflict (Conflict & disagreement). Ask: "Tell me about a time you disagreed."',
+  ].join('\n');
+  const breply = (over: Partial<InterviewerReply> = {}): InterviewerReply => reply({ stage: 'intro', ...over });
+
+  it('produces a byte-stable prefix from one turn to the next, across stage moves', () => {
+    const stored: StoredTurn[] = [{ seq: 1, role: 'interviewer', rendered: 'Tell me about yourself.' }];
+    let state = applyReply(initialState(T0, 'behavioral'), breply(), false, false, 'behavioral');
+    expect(state.stage).toBe('intro');
+    let previous = JSON.stringify(buildMessages(PLAN_CONTEXT, stored));
+    const stages = ['q1', 'q1', 'q1', 'q2', 'q2', 'q3'];
+    for (let i = 1; i <= stages.length; i++) {
+      const { rendered } = renderCandidateMessage(
+        { content: `story part ${i} `.repeat(40), action: 'answer' },
+        state,
+        at(i * 5),
+        'behavioral'
+      );
+      expect(rendered).toMatch(/of 35 min · candidate turn \d+ of 30/);
+      const request = buildMessages(PLAN_CONTEXT, stored, rendered);
+      const serialized = JSON.stringify(request);
+      expect(serialized.startsWith(previous.slice(0, -1))).toBe(true);
+      const seq = stored.length;
+      stored.push({ seq: seq + 1, role: 'candidate', rendered });
+      stored.push({ seq: seq + 2, role: 'interviewer', rendered: `probe ${i}` });
+      state = applyReply(state, breply({ stage: stages[i - 1], say: `probe ${i}` }), true, false, 'behavioral');
+      previous = JSON.stringify(buildMessages(PLAN_CONTEXT, stored));
+      expect(previous.startsWith(serialized.slice(0, -1))).toBe(true);
+    }
+  });
+
+  it('shows the grader each answer’s word count; system design’s transcript is unchanged', () => {
+    const turns: MockTurn[] = [
+      { seq: 1, role: 'interviewer', kind: 'question', content: 'Tell me about yourself.', stage: 'intro', createdAt: '' },
+      { seq: 2, role: 'candidate', kind: 'answer', content: 'I build  backend\nsystems.', stage: 'intro', createdAt: '' },
+    ];
+    expect(renderTranscript(turns, 'behavioral')).toContain('#2 CANDIDATE (4 words): I build');
+    expect(renderTranscript(turns, 'behavioral')).toContain('--- stage: intro (Intro) ---');
+    expect(renderTranscript(turns)).toContain('#2 CANDIDATE: I build');
+  });
+});
