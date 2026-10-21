@@ -21,6 +21,7 @@ const loop = (id: string, date: string, rounds: InterviewLoop['rounds'] = ['codi
   rounds,
   postingId: null,
   postingTitle: null,
+  aiFocus: false,
   createdAt: '2026-10-01T00:00:00.000Z',
 });
 
@@ -84,7 +85,7 @@ describe('parseLoopBody', () => {
   it('validates and normalises', () => {
     expect(parseLoopBody({ company: ' Acme ', date: '2026-11-02', rounds: ['behavioral', 'coding', 'bogus', 'coding'] })).toEqual({
       ok: true,
-      value: { company: 'Acme', date: '2026-11-02', rounds: ['coding', 'behavioral'], postingId: null, postingTitle: null },
+      value: { company: 'Acme', date: '2026-11-02', rounds: ['coding', 'behavioral'], postingId: null, postingTitle: null, aiFocus: false },
     });
     expect(parseLoopBody({ company: '', date: '2026-11-02', rounds: ['coding'] }).ok).toBe(false);
     expect(parseLoopBody({ company: 'A', date: '11/02', rounds: ['coding'] }).ok).toBe(false);

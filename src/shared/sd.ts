@@ -63,7 +63,7 @@ export function isSdStage(x: unknown): x is SdStage {
 }
 
 /**
- * The concepts a mock can observe. ~30, closed, and named as the thing a
+ * The concepts a mock can observe. ~40, closed, and named as the thing a
  * candidate either does or does not bring up — so an observation reads as
  * "nailed idempotency", "missing failure-ranking".
  */
@@ -100,7 +100,36 @@ export const SD_CONCEPTS = [
   'deploy-rollback',
   'migration-strategy',
   'cost',
+  // Phase H3: AI / LLM systems. Named, like the rest, as the move a candidate
+  // makes or does not make in an AI system-design round.
+  'eval-design',
+  'cost-per-request',
+  'latency-budget',
+  'retrieval-quality',
+  'prompt-injection',
+  'model-routing',
+  'inference-serving',
+  'embeddings-search',
+  'agent-tool-use',
 ] as const;
+
+/** The AI / LLM concepts (Phase H3) — the "AI systems" track and its gate. */
+export const AI_SD_CONCEPTS = [
+  'retrieval-quality',
+  'eval-design',
+  'cost-per-request',
+  'latency-budget',
+  'model-routing',
+  'prompt-injection',
+  'embeddings-search',
+  'inference-serving',
+  'agent-tool-use',
+] as const satisfies readonly SdConcept[];
+export type AiSdConcept = (typeof AI_SD_CONCEPTS)[number];
+
+export function isAiSdConcept(x: unknown): x is AiSdConcept {
+  return typeof x === 'string' && (AI_SD_CONCEPTS as readonly string[]).includes(x);
+}
 export type SdConcept = (typeof SD_CONCEPTS)[number];
 
 export function isSdConcept(x: unknown): x is SdConcept {
@@ -121,6 +150,15 @@ const CONCEPT_LABELS: Partial<Record<SdConcept, string>> = {
   'queues-events': 'queues and events',
   'deploy-rollback': 'deploy and rollback',
   'api-design': 'API design',
+  'eval-design': 'eval design',
+  'cost-per-request': 'cost per request',
+  'latency-budget': 'latency budget',
+  'retrieval-quality': 'retrieval quality (RAG)',
+  'prompt-injection': 'prompt injection / guardrails',
+  'model-routing': 'model routing / gateways',
+  'inference-serving': 'inference serving (batching, KV cache)',
+  'embeddings-search': 'embeddings / semantic search',
+  'agent-tool-use': 'agents and tool use',
 };
 
 /**

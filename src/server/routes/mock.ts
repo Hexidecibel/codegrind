@@ -19,6 +19,7 @@
 // Every model call is a POST the candidate clicked; every GET is a database read.
 // 409 = the mock moved on (or is not active), 429 = a call for it is in flight.
 
+import { mockPickOptions } from '../services/concept.service.js';
 import { Hono, type Context } from 'hono';
 import { stream } from 'hono/streaming';
 import { mockKindInfo } from '../../shared/mock-kinds.js';
@@ -57,8 +58,15 @@ mockRoutes.get('/mocks', (c) => {
 
 mockRoutes.get('/mock/prompts', (c) => {
   try {
-    const { prompts } = mockKindInfo(parseKind(c.req.query('kind')));
-    return c.json({ prompts: prompts.map(({ id, title, brief, familiar }) => ({ id, title, brief, familiar })) });
+    const kind = parseKind(c.req.query('kind'));
+    const { prompts } = mockKindInfo(kind);
+    // Phase H3: AI prompts carry `ai`; `aiUnlocked` says whether they are in the
+    // random pick yet (the start card labels them practice until then).
+    const aiUnlocked = kind === 'system-design' ? mockPickOptions().aiUnlocked === true : false;
+    return c.json({
+      prompts: prompts.map(({ id, title, brief, familiar, ai }) => ({ id, title, brief, familiar, ...(ai ? { ai: true } : {}) })),
+      aiUnlocked,
+    });
   } catch (err) {
     return fail(c, 'mock-prompts', err);
   }

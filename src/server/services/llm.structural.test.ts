@@ -32,6 +32,8 @@ const RECOGNIZE_SOURCE = readFileSync(fileURLToPath(new URL('./llm.recognize.ts'
 const REVIEW_SOURCE = readFileSync(fileURLToPath(new URL('./llm.review.ts', import.meta.url)), 'utf8');
 // Phase G's Envelope miss note.
 const ENVELOPE_SOURCE = readFileSync(fileURLToPath(new URL('./llm.envelope.ts', import.meta.url)), 'utf8');
+// Phase H3's concept-rep grade and AI-systems lessons.
+const CONCEPT_SOURCE = readFileSync(fileURLToPath(new URL('./llm.concept.ts', import.meta.url)), 'utf8');
 // The per-kind specs (mock-kinds/) hold the mock prompts and schemas — the same
 // "what to ask" half — so they are held to the same rules, every file of them.
 const KIND_DIR = fileURLToPath(new URL('./mock-kinds/', import.meta.url));
@@ -187,6 +189,28 @@ describe('llm.envelope.ts stays vendor-free too', () => {
   });
 });
 
+describe('llm.concept.ts stays vendor-free too', () => {
+  const h = (p: RegExp) => hits(p, CONCEPT_SOURCE);
+
+  it('has no "provider", no SDK, no wire format and no model name', () => {
+    expect(h(/provider/i)).toEqual([]);
+    expect(h(/@anthropic-ai\/sdk|openai|from '\.\/llm\.anthropic/)).toEqual([]);
+    expect(h(/messages\.create|input_schema|cache_control|type: 'ephemeral'/)).toEqual([]);
+    expect(h(/claude-|ANTHROPIC_MODEL|ANTHROPIC_API_KEY/)).toEqual([]);
+  });
+
+  it('makes exactly two calls, workhorse role, explicit thinking and budget (the grade thinks, the lesson does not)', () => {
+    const calls = CONCEPT_SOURCE.match(/await structured\(\{[\s\S]*?\n\s*\}\);/g) ?? [];
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call).toMatch(/role: 'workhorse'/);
+      expect(call).toMatch(/maxTokens: \d+/);
+    }
+    expect(calls[0]).toMatch(/thinking: 'adaptive'/);
+    expect(calls[1]).toMatch(/thinking: 'off'/);
+  });
+});
+
 describe('the small Phase D-G tools are strict, with a free-text leak sink last', () => {
   it('every one sets exactSchema, closes the object, requires every property, and ends on its leakSink', async () => {
     const tools = [
@@ -195,6 +219,8 @@ describe('the small Phase D-G tools are strict, with a free-text leak sink last'
       (await import('./llm.debrief.js')).EMIT_DEBRIEF_TOOL,
       (await import('./llm.recognize.js')).EMIT_RECOGNIZE_CHECK_TOOL,
       (await import('./llm.envelope.js')).EMIT_ENVELOPE_NOTE_TOOL,
+      (await import('./llm.concept.js')).EMIT_CONCEPT_GRADE_TOOL,
+      (await import('./llm.concept.js')).EMIT_CONCEPT_LESSON_TOOL,
     ];
     for (const t of tools) {
       const schema = t.schema as { properties: Record<string, { type: unknown }>; required: string[]; additionalProperties?: boolean };

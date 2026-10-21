@@ -103,6 +103,29 @@ export const LEVEL_BARS: Readonly<Record<SdStage, Readonly<Record<MockLevel, str
   },
 };
 
+/**
+ * Phase H3: what the anchors above MEAN when the system is an AI/LLM one (RAG,
+ * an agent, a gateway, inference serving, evals, guardrails). Level-free like
+ * SCORE_ANCHORS; rendered after each stage's anchors as one extra line so the
+ * grader holds an AI prompt to the AI-company bar (quality you cannot unit-test,
+ * cost per request, a latency budget, untrusted text reaching the model) without
+ * a second rubric. Stages without an AI-specific reading have no line.
+ */
+export const AI_ANCHORS: Readonly<Partial<Record<SdStage, string>>> = {
+  requirements:
+    'The quality bar is a requirement: what a wrong answer costs, who is harmed, and how "good" will be measured (eval-design). Names untrusted input reaching the model (prompt-injection) when there is any.',
+  capacity:
+    'Numbers in tokens, not just requests: tokens in/out per request, GPU or vendor throughput, cost-per-request at peak, and a latency budget split into retrieval, time to first token and generation.',
+  'data-model':
+    'Chunks, embeddings and their versions, document permissions carried into the index, and the eval set as a first-class dataset.',
+  'high-level':
+    'Model routing and fallback are on the diagram (which model for which request, what happens on a 429 or an outage), and the eval loop is part of the system, not an afterthought.',
+  'deep-dive':
+    'A 3 takes one AI mechanism to the bottom: retrieval-quality (recall@k, hybrid search, re-ranking), inference-serving (continuous batching, KV-cache memory), agent-tool-use (step limits, idempotent tools) or guardrails — each with how it fails and how we would know.',
+  tradeoffs:
+    'Quality against cost against latency, decided with numbers ("a small model for 80% of traffic at a tenth of the cost, the large one on low confidence"), plus build-vs-buy on the model and how a model or prompt change is rolled out behind evals.',
+};
+
 function renderRubric(level: MockLevel): string {
   const lines: string[] = [`RUBRIC — graded at ${MOCK_LEVEL_LABEL[level]} level.`, ''];
   for (const stage of SD_STAGES) {
@@ -113,6 +136,7 @@ function renderRubric(level: MockLevel): string {
       `2: ${a2}`,
       `3: ${a3}`,
       `4: ${a4}`,
+      ...(AI_ANCHORS[stage] ? [`For an AI/LLM system: ${AI_ANCHORS[stage]}`] : []),
       `At ${MOCK_LEVEL_LABEL[level]}: ${LEVEL_BARS[stage][level]}`,
       ''
     );

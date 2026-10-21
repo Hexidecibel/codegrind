@@ -17,6 +17,7 @@
 //     the mock) gets a 409 and re-reads, rather than answering a question it
 //     never saw.
 
+import { mockPickOptions } from './concept.service.js';
 import { nanoid } from 'nanoid';
 import { DEFAULT_MOCK_LEVEL, isMockLevel, type MockLevel } from '../../shared/sd.js';
 import { renderCarryBlock } from '../../shared/today.js';
@@ -295,7 +296,8 @@ export async function startMock(body: {
     prompt = typeof body.promptId === 'string' ? spec.info.promptById(body.promptId) : null;
     if (!prompt) throw new MockError('Unknown prompt.', 400);
   } else {
-    prompt = spec.info.pickPrompt(recentPromptIds(kind));
+    // Phase H3: system design reads the AI-prompt gate and the loop's AI focus.
+    prompt = spec.info.pickPrompt(recentPromptIds(kind), undefined, kind === 'system-design' ? mockPickOptions() : undefined);
   }
 
   // Planned kinds read what they need (behavioral: the story bank) BEFORE the

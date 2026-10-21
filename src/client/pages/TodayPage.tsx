@@ -551,7 +551,7 @@ export function TodayPage() {
           <div className="min-w-0 flex-1">
             <div className="font-medium">30-min day {state.quick && <span className="text-xs text-emerald-400">on</span>}</div>
             <div className="text-xs text-muted-foreground">
-              Warm-up cards + Envelope ×3, one problem, the debrief. Streak and spacing are kept; review problems stay due.
+              Warm-up cards + Envelope ×3, one problem, the debrief (no concept rep, Problem 2 or mock). Streak and spacing are kept; review problems stay due.
             </div>
           </div>
           <Button size="sm" variant={state.quick ? 'outline' : 'secondary'} disabled={busy} onClick={() => act(() => setTodayQuick(!state.quick))}>

@@ -333,6 +333,14 @@ export function StudyPage() {
             )}
           </div>
 
+          {/* Phase H3: the AI-systems track (one lesson per AI concept). */}
+          <Link
+            to="/concepts"
+            title="AI-systems track"
+            className="inline-flex h-11 shrink-0 items-center rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            AI systems
+          </Link>
           <button
             type="button"
             onClick={() => setIndexOpen(true)}

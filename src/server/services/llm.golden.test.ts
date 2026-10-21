@@ -148,6 +148,22 @@ const TOOL_RESULTS: Record<string, Record<string, unknown>> = {
     slip: 'You divided 50 million by 2.5 million — the month constant — instead of 10^5 for a day.',
     fix: 'Write the anchor next to the period word before dividing: day = 10^5.',
   },
+  emit_concept_grade: {
+    grade: 'shaky',
+    hit: ['delete on write'],
+    missed: ['TTL as the safety net', 'stampede on a hot key'],
+    modelAnswer: 'I would use cache-aside: read Redis, on a miss read Postgres and set a 60-second TTL; on a write, commit then delete the key.',
+    followUp: 'What happens when a popular key expires under 50k reads a second?',
+    why: 'Named invalidation but not the TTL bound or the race.',
+  },
+  emit_concept_lesson: {
+    card: 'Eval design is how you know an LLM change is better.\n- A versioned set from real traffic',
+    inInterview: 'It comes up whenever a prompt or model changes.',
+    failureModes: ['A judge never checked against humans'],
+    workedExample: '300 examples, judge agrees with humans 90% on a 50-item audit.',
+    drawOn: ['You could draw on the per-call-site model comparison in your practice app.'],
+    staffAnswer: 'I would start from real traffic and the failures we already know about.',
+  },
   emit_translations: {
     translations: [
       { id: 'primer:arrays', code: 'i = 0' },
@@ -184,6 +200,13 @@ const recognizeLlm = await import('./llm.recognize.js');
 // Phase F's automatic reviews: card grading and step reviews; same seam.
 const reviewLlm = await import('./llm.review.js');
 const envelopeLlm = await import('./llm.envelope.js');
+// Phase H3's concept-rep grade and AI-systems lesson; same seam.
+const conceptLlm = await import('./llm.concept.js');
+const RUBRIC = {
+  keyPoints: ['Cache-aside with delete-on-write', 'TTL as the safety net', 'Stampede on a hot key'],
+  mistake: 'Updating the cache on write with no ordering.',
+  example: 'Price service, 50k reads/s, 60 s TTL, DEL on write.',
+};
 // Every call reaches the usage ledger through ONE hook in llm.client.
 const usageEvents: { source: string; role: string }[] = [];
 (await import('./llm.client.js')).useUsageRecorder((e) => usageEvents.push({ source: e.source, role: e.role }));
@@ -390,6 +413,22 @@ const CAPTURED: Record<string, unknown> = {
       working: '50M / 2.5M = 20',
     })
   ),
+  runConceptGrade: await capture(() =>
+    conceptLlm.runConceptGrade({
+      label: 'caching / invalidation',
+      question: 'Walk me through how you would keep a cache consistent with the database when writes are frequent.',
+      rubric: RUBRIC,
+      primed: false,
+      answer: 'so um basically you read from the cache and if it misses you go to the database and on writes you delete the key',
+    })
+  ),
+  generateConceptLesson: await capture(() =>
+    conceptLlm.generateConceptLesson({
+      label: 'eval design',
+      question: 'How would you know whether a prompt change made your LLM feature better or worse before you ship it?',
+      rubric: RUBRIC,
+    })
+  ),
 };
 
 if (UPDATE) {
@@ -409,7 +448,9 @@ describe('the request body of every LLM call site', () => {
     // grading and step review (llm.review.ts), the sixteenth Phase G's
     // Envelope miss note (llm.envelope.ts). A seventeenth site belongs here
     // before it ships.
-    expect(Object.keys(CAPTURED)).toHaveLength(19);
+    // Phase H3 adds the eighteenth and nineteenth: the concept-rep grade and
+    // the AI-systems lesson (llm.concept.ts).
+    expect(Object.keys(CAPTURED)).toHaveLength(21);
     expect(Object.keys(GOLDEN)).toEqual(Object.keys(CAPTURED));
   });
 
@@ -425,8 +466,9 @@ describe('the request body of every LLM call site', () => {
   });
 
   it('every call reached the usage recorder exactly once, named by its tool', () => {
-    // 19 captures + nothing else: the ledger sees each call once.
-    expect(usageEvents).toHaveLength(19);
+    // 21 captures + nothing else: the ledger sees each call once.
+    expect(usageEvents).toHaveLength(21);
+    expect(usageEvents.filter((e) => e.source === 'emit_concept_grade')).toEqual([{ source: 'emit_concept_grade', role: 'workhorse' }]);
     expect(usageEvents.filter((e) => e.source === 'emit_envelope_note')).toEqual([{ source: 'emit_envelope_note', role: 'small' }]);
     expect(usageEvents.filter((e) => e.source === 'emit_card_grade')).toEqual([{ source: 'emit_card_grade', role: 'small' }]);
     expect(usageEvents.filter((e) => e.source === 'emit_step_review')).toEqual([{ source: 'emit_step_review', role: 'small' }]);

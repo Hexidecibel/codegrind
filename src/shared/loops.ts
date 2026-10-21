@@ -42,6 +42,12 @@ export interface InterviewLoop {
   postingId: string | null;
   /** The posting's title, copied when linked (shown even when resume-builder is down). */
   postingTitle: string | null;
+  /**
+   * Phase H3: the company is AI-focused (hand-set; hard to detect). Its system
+   * design round is likely an AI/LLM system, so concept reps and the AI-systems
+   * track are prioritised, and AI mock prompts favoured once unlocked.
+   */
+  aiFocus: boolean;
   createdAt: string;
 }
 
@@ -184,7 +190,7 @@ export function countdownPhrase(daysLeft: number): string {
 /** Validate a loop body from the client. Returns an error string or the clean fields. */
 export function parseLoopBody(
   body: unknown
-): { ok: true; value: { company: string; date: string; rounds: RoundType[]; postingId: string | null; postingTitle: string | null } } | { ok: false; error: string } {
+): { ok: true; value: { company: string; date: string; rounds: RoundType[]; postingId: string | null; postingTitle: string | null; aiFocus: boolean } } | { ok: false; error: string } {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
   const company = typeof b.company === 'string' ? b.company.trim().slice(0, 80) : '';
   if (!company) return { ok: false, error: 'company is required' };
@@ -194,5 +200,13 @@ export function parseLoopBody(
   const postingId = typeof b.postingId === 'string' && b.postingId.trim() ? b.postingId.trim().slice(0, 80) : null;
   const postingTitle =
     postingId && typeof b.postingTitle === 'string' && b.postingTitle.trim() ? b.postingTitle.trim().slice(0, 160) : null;
-  return { ok: true, value: { company, date: b.date, rounds: ROUND_TYPES.filter((r) => rounds.includes(r)), postingId, postingTitle } };
+  return {
+    ok: true,
+    value: { company, date: b.date, rounds: ROUND_TYPES.filter((r) => rounds.includes(r)), postingId, postingTitle, aiFocus: b.aiFocus === true },
+  };
+}
+
+/** Any upcoming loop (today or later) is AI-focused. */
+export function anyAiFocusedLoop(loops: readonly Pick<InterviewLoop, 'date' | 'aiFocus'>[], today: string): boolean {
+  return loops.some((l) => l.date >= today && l.aiFocus);
 }

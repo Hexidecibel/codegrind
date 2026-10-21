@@ -64,7 +64,16 @@
                       "observability",
                       "deploy-rollback",
                       "migration-strategy",
-                      "cost"
+                      "cost",
+                      "eval-design",
+                      "cost-per-request",
+                      "latency-budget",
+                      "retrieval-quality",
+                      "prompt-injection",
+                      "model-routing",
+                      "inference-serving",
+                      "embeddings-search",
+                      "agent-tool-use"
                     ]
                   },
                   "signal": {
@@ -167,7 +176,16 @@
                         "observability",
                         "deploy-rollback",
                         "migration-strategy",
-                        "cost"
+                        "cost",
+                        "eval-design",
+                        "cost-per-request",
+                        "latency-budget",
+                        "retrieval-quality",
+                        "prompt-injection",
+                        "model-routing",
+                        "inference-serving",
+                        "embeddings-search",
+                        "agent-tool-use"
                       ]
                     },
                     "gapSummary": {
@@ -230,7 +248,16 @@
                       "observability",
                       "deploy-rollback",
                       "migration-strategy",
-                      "cost"
+                      "cost",
+                      "eval-design",
+                      "cost-per-request",
+                      "latency-budget",
+                      "retrieval-quality",
+                      "prompt-injection",
+                      "model-routing",
+                      "inference-serving",
+                      "embeddings-search",
+                      "agent-tool-use"
                     ]
                   },
                   "type": {
@@ -465,7 +492,16 @@
                       "observability",
                       "deploy-rollback",
                       "migration-strategy",
-                      "cost"
+                      "cost",
+                      "eval-design",
+                      "cost-per-request",
+                      "latency-budget",
+                      "retrieval-quality",
+                      "prompt-injection",
+                      "model-routing",
+                      "inference-serving",
+                      "embeddings-search",
+                      "agent-tool-use"
                     ]
                   },
                   "summary": {
@@ -518,7 +554,16 @@
                       "observability",
                       "deploy-rollback",
                       "migration-strategy",
-                      "cost"
+                      "cost",
+                      "eval-design",
+                      "cost-per-request",
+                      "latency-budget",
+                      "retrieval-quality",
+                      "prompt-injection",
+                      "model-routing",
+                      "inference-serving",
+                      "embeddings-search",
+                      "agent-tool-use"
                     ]
                   },
                   "signal": {
@@ -581,7 +626,16 @@
                       "observability",
                       "deploy-rollback",
                       "migration-strategy",
-                      "cost"
+                      "cost",
+                      "eval-design",
+                      "cost-per-request",
+                      "latency-budget",
+                      "retrieval-quality",
+                      "prompt-injection",
+                      "model-routing",
+                      "inference-serving",
+                      "embeddings-search",
+                      "agent-tool-use"
                     ]
                   },
                   "prompt": {
@@ -639,7 +693,16 @@
                       "observability",
                       "deploy-rollback",
                       "migration-strategy",
-                      "cost"
+                      "cost",
+                      "eval-design",
+                      "cost-per-request",
+                      "latency-budget",
+                      "retrieval-quality",
+                      "prompt-injection",
+                      "model-routing",
+                      "inference-serving",
+                      "embeddings-search",
+                      "agent-tool-use"
                     ]
                   },
                   "type": {
@@ -701,7 +764,7 @@
     "messages": [
       {
         "role": "user",
-        "content": "Level: Staff\nPrompt: A ticketing system for events — Design a ticketing system.\nStages the server recorded as skipped: capacity\nConcepts the interviewer taught: idempotency\n\nRECORDED GAPS (already drill cards — do not repeat these in gaps):\n- #19 [skill] Rank the failures for a ticketing system.\n\nRUBRIC — graded at Staff level.\n\n## requirements (Requirements) — Who uses it and how, what it does, and which failure is worst — ranked, not listed.\n1: Starts designing with no questions, or answers its own questions.\n2: Asks some of the seven questions (who, what, how much, how fresh, how correct, who is allowed, what exists) but skips freshness or correctness; lists failures without ranking them.\n3: Covers most of the seven questions in the one-breath shape (\"[question]? I would assume X.\"), names the central record, and ranks the failures with the ranking sentence.\n4: All of 3, plus finds the second user / the other side, resolves a conflict between two failures out loud (\"if X and Y conflict, X wins, because…\"), and never gives up something the interviewer gave a number for.\nAt Staff: Score 3, and the ranking is used to make a later decision. Conflicts between failures are resolved, not avoided.\n\n## capacity (Capacity) — How much: users, requests per second, data volume, growth — rough numbers that drive choices.\n1: No numbers, or numbers that drive nothing.\n2: Rough numbers stated but not used to make a decision.\n3: Back-of-envelope reads/writes per second and storage, and at least one design choice that follows from them.\n4: Numbers drive several choices, peaks are distinguished from averages, and growth changes the plan explicitly.\nAt Staff: Score 3. At least one choice visibly follows from a number.\n\n## api (API) — The three or four main operations as calls, with the awkward parameters named.\n1: No interface, or a list of nouns.\n2: Main operations named but parameters and failure behaviour vague.\n3: The three or four main calls with their awkward parameters (pagination, idempotency keys, filters) and what they return on failure.\n4: All of 3, plus versioning or evolution, and which call is the expensive one and why.\nAt Staff: Score 3, with idempotency or ordering handled where the domain needs it.\n\n## data-model (Data model) — The central record, its keys and access patterns, and where it lives.\n1: Tables with no keys or access patterns.\n2: Entities named; keys or the read path left implicit.\n3: The central record, its keys, the main access patterns, and a storage choice justified by them.\n4: All of 3, plus partitioning / tenancy, the hot key, and how the model survives the next requirement.\nAt Staff: Score 3, with tenancy or partitioning addressed when scale demands it.\n\n## high-level (High-level design) — Boxes and arrows that serve the requirements, said out loud in one pass.\n1: Components with no flow, or a flow that does not serve the requirements.\n2: A plausible diagram, but the ranked failure is not visibly designed for.\n3: One clear pass through read and write paths, designed for the worst failure named earlier.\n4: All of 3, plus the abnormal flow walked through, not just the happy path.\nAt Staff: Score 3, and the abnormal flow is at least named.\n\n## deep-dive (Deep dive) — Two or three parts taken all the way down, including how they fail.\n1: Stays at box level when pushed.\n2: Goes one level down on one part; failure modes hand-waved.\n3: Two parts taken down to mechanism, each with how it fails and how we would know.\n4: All of 3, driven by the candidate rather than the interviewer, with their own experience brought in at the right moment.\nAt Staff: Score 3. The candidate chooses which parts deserve depth and says why.\n\n## tradeoffs (Trade-offs) — What was chosen over what and why, what was deliberately not built, how it is operated.\n1: No trade-offs named.\n2: Trade-offs named but not decided.\n3: \"The trade-off is X against Y, and I would choose X because…\" on the main decisions; cost and operability mentioned.\n4: All of 3, plus what was deliberately not built yet, how it would be migrated to incrementally, and \"this fails when…, and we would know because…\".\nAt Staff: Score 3. Decisions are made, not listed.\n\nTRANSCRIPT\n#1 INTERVIEWER: Go.\n#2 CANDIDATE: Who buys?"
+        "content": "Level: Staff\nPrompt: A ticketing system for events — Design a ticketing system.\nStages the server recorded as skipped: capacity\nConcepts the interviewer taught: idempotency\n\nRECORDED GAPS (already drill cards — do not repeat these in gaps):\n- #19 [skill] Rank the failures for a ticketing system.\n\nRUBRIC — graded at Staff level.\n\n## requirements (Requirements) — Who uses it and how, what it does, and which failure is worst — ranked, not listed.\n1: Starts designing with no questions, or answers its own questions.\n2: Asks some of the seven questions (who, what, how much, how fresh, how correct, who is allowed, what exists) but skips freshness or correctness; lists failures without ranking them.\n3: Covers most of the seven questions in the one-breath shape (\"[question]? I would assume X.\"), names the central record, and ranks the failures with the ranking sentence.\n4: All of 3, plus finds the second user / the other side, resolves a conflict between two failures out loud (\"if X and Y conflict, X wins, because…\"), and never gives up something the interviewer gave a number for.\nFor an AI/LLM system: The quality bar is a requirement: what a wrong answer costs, who is harmed, and how \"good\" will be measured (eval-design). Names untrusted input reaching the model (prompt-injection) when there is any.\nAt Staff: Score 3, and the ranking is used to make a later decision. Conflicts between failures are resolved, not avoided.\n\n## capacity (Capacity) — How much: users, requests per second, data volume, growth — rough numbers that drive choices.\n1: No numbers, or numbers that drive nothing.\n2: Rough numbers stated but not used to make a decision.\n3: Back-of-envelope reads/writes per second and storage, and at least one design choice that follows from them.\n4: Numbers drive several choices, peaks are distinguished from averages, and growth changes the plan explicitly.\nFor an AI/LLM system: Numbers in tokens, not just requests: tokens in/out per request, GPU or vendor throughput, cost-per-request at peak, and a latency budget split into retrieval, time to first token and generation.\nAt Staff: Score 3. At least one choice visibly follows from a number.\n\n## api (API) — The three or four main operations as calls, with the awkward parameters named.\n1: No interface, or a list of nouns.\n2: Main operations named but parameters and failure behaviour vague.\n3: The three or four main calls with their awkward parameters (pagination, idempotency keys, filters) and what they return on failure.\n4: All of 3, plus versioning or evolution, and which call is the expensive one and why.\nAt Staff: Score 3, with idempotency or ordering handled where the domain needs it.\n\n## data-model (Data model) — The central record, its keys and access patterns, and where it lives.\n1: Tables with no keys or access patterns.\n2: Entities named; keys or the read path left implicit.\n3: The central record, its keys, the main access patterns, and a storage choice justified by them.\n4: All of 3, plus partitioning / tenancy, the hot key, and how the model survives the next requirement.\nFor an AI/LLM system: Chunks, embeddings and their versions, document permissions carried into the index, and the eval set as a first-class dataset.\nAt Staff: Score 3, with tenancy or partitioning addressed when scale demands it.\n\n## high-level (High-level design) — Boxes and arrows that serve the requirements, said out loud in one pass.\n1: Components with no flow, or a flow that does not serve the requirements.\n2: A plausible diagram, but the ranked failure is not visibly designed for.\n3: One clear pass through read and write paths, designed for the worst failure named earlier.\n4: All of 3, plus the abnormal flow walked through, not just the happy path.\nFor an AI/LLM system: Model routing and fallback are on the diagram (which model for which request, what happens on a 429 or an outage), and the eval loop is part of the system, not an afterthought.\nAt Staff: Score 3, and the abnormal flow is at least named.\n\n## deep-dive (Deep dive) — Two or three parts taken all the way down, including how they fail.\n1: Stays at box level when pushed.\n2: Goes one level down on one part; failure modes hand-waved.\n3: Two parts taken down to mechanism, each with how it fails and how we would know.\n4: All of 3, driven by the candidate rather than the interviewer, with their own experience brought in at the right moment.\nFor an AI/LLM system: A 3 takes one AI mechanism to the bottom: retrieval-quality (recall@k, hybrid search, re-ranking), inference-serving (continuous batching, KV-cache memory), agent-tool-use (step limits, idempotent tools) or guardrails — each with how it fails and how we would know.\nAt Staff: Score 3. The candidate chooses which parts deserve depth and says why.\n\n## tradeoffs (Trade-offs) — What was chosen over what and why, what was deliberately not built, how it is operated.\n1: No trade-offs named.\n2: Trade-offs named but not decided.\n3: \"The trade-off is X against Y, and I would choose X because…\" on the main decisions; cost and operability mentioned.\n4: All of 3, plus what was deliberately not built yet, how it would be migrated to incrementally, and \"this fails when…, and we would know because…\".\nFor an AI/LLM system: Quality against cost against latency, decided with numbers (\"a small model for 80% of traffic at a tenth of the cost, the large one on low confidence\"), plus build-vs-buy on the model and how a model or prompt change is rolled out behind evals.\nAt Staff: Score 3. Decisions are made, not listed.\n\nTRANSCRIPT\n#1 INTERVIEWER: Go.\n#2 CANDIDATE: Who buys?"
       }
     ]
   },

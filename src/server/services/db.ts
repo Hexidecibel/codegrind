@@ -1020,6 +1020,7 @@ interface LoopDbRow {
   rounds: string;
   postingId: string | null;
   postingTitle: string | null;
+  aiFocus?: number | null;
   createdAt: string;
 }
 
@@ -1031,7 +1032,7 @@ function toLoop(r: LoopDbRow): InterviewLoop {
   } catch {
     /* a corrupt row reads as no rounds */
   }
-  return { id: r.id, company: r.company, date: r.date, rounds, postingId: r.postingId, postingTitle: r.postingTitle, createdAt: r.createdAt };
+  return { id: r.id, company: r.company, date: r.date, rounds, postingId: r.postingId, postingTitle: r.postingTitle, aiFocus: r.aiFocus === 1, createdAt: r.createdAt };
 }
 
 let loopStmts: ReturnType<typeof prepareLoops> | null = null;
@@ -1040,12 +1041,12 @@ function prepareLoops() {
     list: db.prepare(`SELECT * FROM interview_loops ORDER BY date ASC, createdAt ASC`),
     get: db.prepare(`SELECT * FROM interview_loops WHERE id = ?`),
     insert: db.prepare(`
-      INSERT INTO interview_loops (id, company, date, rounds, postingId, postingTitle, createdAt, updatedAt)
-      VALUES (@id, @company, @date, @rounds, @postingId, @postingTitle, @now, @now)
+      INSERT INTO interview_loops (id, company, date, rounds, postingId, postingTitle, aiFocus, createdAt, updatedAt)
+      VALUES (@id, @company, @date, @rounds, @postingId, @postingTitle, @aiFocus, @now, @now)
     `),
     update: db.prepare(`
       UPDATE interview_loops SET company = @company, date = @date, rounds = @rounds,
-        postingId = @postingId, postingTitle = @postingTitle, updatedAt = @now
+        postingId = @postingId, postingTitle = @postingTitle, aiFocus = @aiFocus, updatedAt = @now
       WHERE id = @id
     `),
     remove: db.prepare(`DELETE FROM interview_loops WHERE id = ?`),
@@ -1068,15 +1069,16 @@ export interface LoopFields {
   rounds: RoundType[];
   postingId: string | null;
   postingTitle: string | null;
+  aiFocus?: boolean;
 }
 
 export function insertLoop(id: string, f: LoopFields, now = new Date()): InterviewLoop {
-  LS().insert.run({ id, ...f, rounds: JSON.stringify(f.rounds), now: now.toISOString() });
+  LS().insert.run({ id, ...f, rounds: JSON.stringify(f.rounds), aiFocus: f.aiFocus ? 1 : 0, now: now.toISOString() });
   return getLoop(id)!;
 }
 
 export function updateLoop(id: string, f: LoopFields, now = new Date()): InterviewLoop | null {
-  const res = LS().update.run({ id, ...f, rounds: JSON.stringify(f.rounds), now: now.toISOString() });
+  const res = LS().update.run({ id, ...f, rounds: JSON.stringify(f.rounds), aiFocus: f.aiFocus ? 1 : 0, now: now.toISOString() });
   return res.changes ? getLoop(id) : null;
 }
 

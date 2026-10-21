@@ -12,6 +12,7 @@ import { MockPage } from '@/client/pages/MockPage';
 import { TodayPage } from '@/client/pages/TodayPage';
 import { RecognizePage } from '@/client/pages/RecognizePage';
 import { EnvelopePage } from '@/client/pages/EnvelopePage';
+import { ConceptPage, ConceptTrackPage, ConceptLessonPage } from '@/client/pages/ConceptPage';
 import { SetupWizard } from '@/client/components/setup/SetupWizard';
 import { getSetupState } from '@/client/lib/api';
 import type { SetupState } from '@/shared/types';
@@ -81,6 +82,10 @@ function App() {
             <Route path="/grind" element={<GrindPage />} />
             <Route path="/recognize" element={<RecognizePage />} />
             <Route path="/envelope" element={<EnvelopePage />} />
+            {/* Phase H3: the daily concept rep, and the AI-systems track. */}
+            <Route path="/concept" element={<ConceptPage />} />
+            <Route path="/concepts" element={<ConceptTrackPage />} />
+            <Route path="/concepts/:concept" element={<ConceptLessonPage />} />
             <Route path="/manual" element={<WorkspacePage />} />
             <Route path="/progress" element={<ProgressPage />} />
             <Route path="/study" element={<StudyPage />} />

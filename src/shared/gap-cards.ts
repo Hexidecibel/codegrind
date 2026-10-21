@@ -33,7 +33,7 @@ export function isGapCardGrade(x: unknown): x is GapCardGrade {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Where a gap was recorded from. */
-export type GapSource = 'turn' | 'grade' | 'backfill';
+export type GapSource = 'turn' | 'grade' | 'backfill' | 'rep';
 
 /** One gap, as a mock's view and the drill list both show it. */
 export interface MockGap {
