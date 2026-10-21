@@ -20,6 +20,7 @@ import {
   Lock,
   RotateCcw,
   ScanSearch,
+  Calculator,
   SkipForward,
   Sparkles,
   Target,
@@ -268,6 +269,45 @@ function RecognizeRow({ r, note, pending }: { r: TodayState['recognize']; note?:
   );
 }
 
+/**
+ * "Envelope ×5": back-of-the-envelope math reps. Part of the warm-up (the
+ * warm-up is done only when `remaining` is 0); due envelope cards lead it.
+ */
+function EnvelopeRow({ e }: { e: TodayState['envelope'] }) {
+  if (!e || (e.daily === 0 && e.due === 0 && e.doneToday === 0)) return null;
+  return (
+    <div
+      className={cn(
+        'mt-3 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 pl-3 sm:ml-11',
+        !e.done ? 'border-primary/50 bg-primary/5' : 'border-border',
+      )}
+    >
+      <Calculator className={cn('h-4 w-4 shrink-0', !e.done ? 'text-primary' : 'text-muted-foreground')} />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-medium">
+          Envelope ×{e.daily}{' '}
+          {e.done ? (
+            <span className="text-xs text-emerald-400">
+              done · {e.correctToday}/{e.doneToday} right
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground">{e.remaining} to go</span>
+          )}
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Back-of-the-envelope math, interview style: small × 10ⁿ, add or subtract exponents, back up the ladder.
+          {e.due > 0 ? ` ${e.due} review card${e.due === 1 ? '' : 's'} due.` : ''}
+        </div>
+      </div>
+      <Button asChild size="sm" variant={!e.done ? 'default' : 'outline'} className="gap-1">
+        <Link to={e.done ? '/envelope' : e.href}>
+          {e.done ? 'More' : 'Start'} <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+      </Button>
+    </div>
+  );
+}
+
 function DebriefPanel({
   state,
   busy,
@@ -483,12 +523,17 @@ export function TodayPage() {
               note={s.id === 'debrief' ? undefined : state.stepNotes[s.id]}
               notePending={s.id !== 'debrief' && state.aiPending.includes(s.id)}
               extra={
-                s.id === 'warmup' && state.recognize ? (
-                  <RecognizeRow
-                    r={state.recognize}
-                    note={state.stepNotes.recognize}
-                    pending={state.aiPending.includes('recognize')}
-                  />
+                s.id === 'warmup' ? (
+                  <>
+                    <EnvelopeRow e={state.envelope} />
+                    {state.recognize && (
+                      <RecognizeRow
+                        r={state.recognize}
+                        note={state.stepNotes.recognize}
+                        pending={state.aiPending.includes('recognize')}
+                      />
+                    )}
+                  </>
                 ) : undefined
               }
             />

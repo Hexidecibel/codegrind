@@ -144,6 +144,10 @@ const TOOL_RESULTS: Record<string, Record<string, unknown>> = {
     note: 'Passed Pair Sum on the first submit; predicted O(n) and wrote O(n).',
     carry: 'Say the loop invariant out loud before you type.',
   },
+  emit_envelope_note: {
+    slip: 'You divided 50 million by 2.5 million — the month constant — instead of 10^5 for a day.',
+    fix: 'Write the anchor next to the period word before dividing: day = 10^5.',
+  },
   emit_translations: {
     translations: [
       { id: 'primer:arrays', code: 'i = 0' },
@@ -179,6 +183,7 @@ const debriefLlm = await import('./llm.debrief.js');
 const recognizeLlm = await import('./llm.recognize.js');
 // Phase F's automatic reviews: card grading and step reviews; same seam.
 const reviewLlm = await import('./llm.review.js');
+const envelopeLlm = await import('./llm.envelope.js');
 // Every call reaches the usage ledger through ONE hook in llm.client.
 const usageEvents: { source: string; role: string }[] = [];
 (await import('./llm.client.js')).useUsageRecorder((e) => usageEvents.push({ source: e.source, role: e.role }));
@@ -374,6 +379,17 @@ const CAPTURED: Record<string, unknown> = {
       earlier: [CARRY[0]],
     })
   ),
+  runEnvelopeNote: await capture(() =>
+    envelopeLlm.runEnvelopeNote({
+      question: 'Say your service handles 50 million requests a day. Roughly how many is that per second?',
+      answer: '≈ 500 per second (exactly 579 per second)',
+      split: ['50 million requests = 5 × 10⁷; a day ≈ 10⁵ seconds = 10⁵', '5 ÷ 1 = 5', '10⁷ ÷ 10⁵ → 7 − 5 = 2 → 10²', '5 × 10² = 500 per second'],
+      given: '20',
+      verdict: 'Off by 10¹, too low.',
+      cause: 'Looks like the month constant (2.5 × 10⁶ s) was used where a day (10⁵ s) belongs.',
+      working: '50M / 2.5M = 20',
+    })
+  ),
 };
 
 if (UPDATE) {
@@ -385,14 +401,15 @@ const GOLDEN = JSON.parse(readFileSync(FIXTURE, 'utf8')) as Record<string, unkno
 
 // =============================================================================
 describe('the request body of every LLM call site', () => {
-  it('covers all fifteen call sites', () => {
-    // Eighteen entries, fifteen sites: generateProblem is captured twice, and
+  it('covers all sixteen call sites', () => {
+    // Nineteen entries, sixteen sites: generateProblem is captured twice, and
     // coach and runDebrief each once more WITH Phase F carry notes. The twelfth
     // site is the Today debrief (llm.debrief.ts), the thirteenth the Recognize
     // AI check (llm.recognize.ts), the fourteenth and fifteenth Phase F's card
-    // grading and step review (llm.review.ts). A sixteenth site belongs here
+    // grading and step review (llm.review.ts), the sixteenth Phase G's
+    // Envelope miss note (llm.envelope.ts). A seventeenth site belongs here
     // before it ships.
-    expect(Object.keys(CAPTURED)).toHaveLength(18);
+    expect(Object.keys(CAPTURED)).toHaveLength(19);
     expect(Object.keys(GOLDEN)).toEqual(Object.keys(CAPTURED));
   });
 
@@ -408,8 +425,9 @@ describe('the request body of every LLM call site', () => {
   });
 
   it('every call reached the usage recorder exactly once, named by its tool', () => {
-    // 18 captures + nothing else: the ledger sees each call once.
-    expect(usageEvents).toHaveLength(18);
+    // 19 captures + nothing else: the ledger sees each call once.
+    expect(usageEvents).toHaveLength(19);
+    expect(usageEvents.filter((e) => e.source === 'emit_envelope_note')).toEqual([{ source: 'emit_envelope_note', role: 'small' }]);
     expect(usageEvents.filter((e) => e.source === 'emit_card_grade')).toEqual([{ source: 'emit_card_grade', role: 'small' }]);
     expect(usageEvents.filter((e) => e.source === 'emit_step_review')).toEqual([{ source: 'emit_step_review', role: 'small' }]);
     expect(usageEvents.filter((e) => e.source === 'text')).toHaveLength(1); // the tutor chat

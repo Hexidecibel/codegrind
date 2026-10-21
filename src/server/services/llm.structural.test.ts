@@ -30,6 +30,8 @@ const DEBRIEF_SOURCE = readFileSync(fileURLToPath(new URL('./llm.debrief.ts', im
 const RECOGNIZE_SOURCE = readFileSync(fileURLToPath(new URL('./llm.recognize.ts', import.meta.url)), 'utf8');
 // Phase F's automatic reviews (card grading, step reviews).
 const REVIEW_SOURCE = readFileSync(fileURLToPath(new URL('./llm.review.ts', import.meta.url)), 'utf8');
+// Phase G's Envelope miss note.
+const ENVELOPE_SOURCE = readFileSync(fileURLToPath(new URL('./llm.envelope.ts', import.meta.url)), 'utf8');
 // The per-kind specs (mock-kinds/) hold the mock prompts and schemas — the same
 // "what to ask" half — so they are held to the same rules, every file of them.
 const KIND_DIR = fileURLToPath(new URL('./mock-kinds/', import.meta.url));
@@ -162,6 +164,46 @@ describe('llm.review.ts stays vendor-free too', () => {
       expect(call).toMatch(/role: 'small'/);
       expect(call).toMatch(/thinking: 'off'/);
       expect(call).toMatch(/maxTokens: \d+/);
+    }
+  });
+});
+
+describe('llm.envelope.ts stays vendor-free too', () => {
+  const h = (p: RegExp) => hits(p, ENVELOPE_SOURCE);
+
+  it('has no "provider", no SDK, no wire format and no model name', () => {
+    expect(h(/provider/i)).toEqual([]);
+    expect(h(/@anthropic-ai\/sdk|openai|from '\.\/llm\.anthropic/)).toEqual([]);
+    expect(h(/messages\.create|input_schema|cache_control|type: 'ephemeral'/)).toEqual([]);
+    expect(h(/claude-|ANTHROPIC_MODEL|ANTHROPIC_API_KEY/)).toEqual([]);
+  });
+
+  it('makes exactly one call, small role, thinking off, explicit budget', () => {
+    const calls = ENVELOPE_SOURCE.match(/await structured\(\{[\s\S]*?\n\s*\}\);/g) ?? [];
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatch(/role: 'small'/);
+    expect(calls[0]).toMatch(/thinking: 'off'/);
+    expect(calls[0]).toMatch(/maxTokens: \d+/);
+  });
+});
+
+describe('the small Phase D-G tools are strict, with a free-text leak sink last', () => {
+  it('every one sets exactSchema, closes the object, requires every property, and ends on its leakSink', async () => {
+    const tools = [
+      (await import('./llm.review.js')).EMIT_CARD_GRADE_TOOL,
+      (await import('./llm.review.js')).EMIT_STEP_REVIEW_TOOL,
+      (await import('./llm.debrief.js')).EMIT_DEBRIEF_TOOL,
+      (await import('./llm.recognize.js')).EMIT_RECOGNIZE_CHECK_TOOL,
+      (await import('./llm.envelope.js')).EMIT_ENVELOPE_NOTE_TOOL,
+    ];
+    for (const t of tools) {
+      const schema = t.schema as { properties: Record<string, { type: unknown }>; required: string[]; additionalProperties?: boolean };
+      const keys = Object.keys(schema.properties);
+      expect(t.exactSchema, t.name).toBe(true);
+      expect(schema.additionalProperties, t.name).toBe(false);
+      expect([...schema.required].sort(), t.name).toEqual([...keys].sort());
+      expect(t.leakSink, t.name).toBe(keys[keys.length - 1]);
+      expect(schema.properties[t.leakSink!].type, t.name).toBe('string');
     }
   });
 });

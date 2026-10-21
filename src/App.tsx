@@ -11,6 +11,7 @@ import { HelpPage } from '@/client/pages/HelpPage';
 import { MockPage } from '@/client/pages/MockPage';
 import { TodayPage } from '@/client/pages/TodayPage';
 import { RecognizePage } from '@/client/pages/RecognizePage';
+import { EnvelopePage } from '@/client/pages/EnvelopePage';
 import { SetupWizard } from '@/client/components/setup/SetupWizard';
 import { getSetupState } from '@/client/lib/api';
 import type { SetupState } from '@/shared/types';
@@ -79,6 +80,7 @@ function App() {
             <Route path="/today" element={<TodayPage />} />
             <Route path="/grind" element={<GrindPage />} />
             <Route path="/recognize" element={<RecognizePage />} />
+            <Route path="/envelope" element={<EnvelopePage />} />
             <Route path="/manual" element={<WorkspacePage />} />
             <Route path="/progress" element={<ProgressPage />} />
             <Route path="/study" element={<StudyPage />} />

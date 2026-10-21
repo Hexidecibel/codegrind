@@ -480,6 +480,14 @@ export function clientFor(role: CallRole): LlmClient {
  */
 export async function structured(req: StructuredRequest): Promise<StructuredResult> {
   const result = await clientFor(req.role).structured(req);
+  // For the error's advice only: a hosted model needs no `--jinja`.
+  const local = (): boolean => {
+    try {
+      return routingFor(req.role === 'tutor' ? 'tutor' : 'workhorse').provider !== 'anthropic';
+    } catch {
+      return true;
+    }
+  };
   // Recorded BEFORE the guards below: a rejected answer was still paid for.
   recordUsage({ source: req.tool.name, role: req.role, meta: result.meta });
 
@@ -494,7 +502,8 @@ export async function structured(req: StructuredRequest): Promise<StructuredResu
         `("${wrongType.got}") — the model stopped emitting JSON at that field and serialized ` +
         `the rest of the call into it. Nothing downstream can tell that apart from an honest ` +
         `empty answer, which is why it is rejected here.`,
-      result.meta
+      result.meta,
+      local()
     );
   }
 
@@ -510,7 +519,8 @@ export async function structured(req: StructuredRequest): Promise<StructuredResu
         `serialized the fields that should have followed it INTO it, so those fields are ` +
         `missing. The brief was rejected rather than rendered: it would have shown that ` +
         `markup to the user with every later field blank.`,
-      result.meta
+      result.meta,
+      local()
     );
   }
   return result;

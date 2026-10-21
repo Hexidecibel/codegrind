@@ -93,6 +93,14 @@ export function explainError(err: unknown): ExplainedError {
   // that ignores them cannot run codegrind at all. The `--jinja` clause is the
   // commonest real cause and is repeated from explainProbeFailure on purpose:
   // a player who hits this mid-session gets the same fix the wizard would give.
+  // Only a LOCAL endpoint gets the `--jinja` advice: a hosted model that sent
+  // one malformed answer is not misconfigured, it just needs another go.
+  if (err instanceof LlmToolCallError && !err.local) {
+    return {
+      message: "The AI's answer came back malformed — try again, or grade it yourself.",
+      detail: raw,
+    };
+  }
   if (err instanceof LlmToolCallError) {
     return {
       message:

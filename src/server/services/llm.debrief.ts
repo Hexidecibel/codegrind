@@ -54,17 +54,21 @@ You get a compact digest of the day and the last seven days. Write a short debri
 - wins: 0-3 specific things that went well, each pointing at evidence in the digest. No generic praise.
 - fixes: 1-3 problems, each with a CONCRETE action: a named pattern to drill, a specific habit for the next problem, a mock concept to revisit. "Practice more" is not an action.
 - tomorrowFocus.patterns: 0-3 topic ids, EXACTLY from this list: ${TOPICS.join(', ')}.
-- tomorrowFocus.mockKind: one of ${MOCK_KINDS.join(', ')}, or omit it to keep the normal rotation.
+- tomorrowFocus.mockKind: one of ${MOCK_KINDS.join(', ')}, or null to keep the normal rotation.
 
 Ground everything in the digest. If the day was thin (steps skipped, nothing attempted), say so plainly and keep it short. Call emit_debrief exactly once.`;
 
+// Strict (exactSchema): every property required at every level, no extras —
+// the endpoint guarantees the types. `mockKind` stays optional in effect by
+// being nullable. The one-line `verdict` is LAST: the leak sink (ToolSpec.leakSink).
 export const EMIT_DEBRIEF_TOOL: ToolSpec = {
   name: 'emit_debrief',
   description: 'Emit the end-of-day debrief.',
+  exactSchema: true,
+  leakSink: 'verdict',
   schema: {
     type: 'object',
     properties: {
-      verdict: { type: 'string', description: 'One-line headline of the day.' },
       wins: { type: 'array', items: { type: 'string' }, description: '0-3 specific wins.' },
       fixes: {
         type: 'array',
@@ -76,18 +80,22 @@ export const EMIT_DEBRIEF_TOOL: ToolSpec = {
             action: { type: 'string', description: 'The concrete drill or action.' },
           },
           required: ['issue', 'action'],
+          additionalProperties: false,
         },
       },
       tomorrowFocus: {
         type: 'object',
         properties: {
           patterns: { type: 'array', items: { type: 'string' }, description: '0-3 exact topic ids.' },
-          mockKind: { type: 'string', description: 'Optional: tomorrow\'s mock kind.' },
+          mockKind: { type: ['string', 'null'], description: "Tomorrow's mock kind, or null for the rotation." },
         },
-        required: ['patterns'],
+        required: ['patterns', 'mockKind'],
+        additionalProperties: false,
       },
+      verdict: { type: 'string', description: 'One-line headline of the day.' },
     },
-    required: ['verdict', 'wins', 'fixes', 'tomorrowFocus'],
+    required: ['wins', 'fixes', 'tomorrowFocus', 'verdict'],
+    additionalProperties: false,
   },
 };
 

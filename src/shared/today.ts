@@ -3,7 +3,7 @@
 // =============================================================================
 // One local day = five steps, in order:
 //
-//   warmup    clear the due pile: mock drill cards + due review-queue problems
+//   warmup    clear the due pile: mock drill cards + Envelope ×5 + due review-queue problems
 //   problem1  an adaptive grind problem (Minimal editor, predict-before-solve)
 //   problem2  another one
 //   mock      one mock interview; the kind rotates daily over MOCK_KINDS
@@ -17,6 +17,7 @@
 import type { MockKind } from './mock-kinds.js';
 import type { Topic } from './types.js';
 import type { TodayRecognize } from './recognize.js';
+import type { TodayEnvelope } from './envelope.js';
 
 export const TODAY_STEPS = ['warmup', 'problem1', 'problem2', 'mock', 'debrief'] as const;
 export type TodayStepId = (typeof TODAY_STEPS)[number];
@@ -125,6 +126,11 @@ export interface TodayState {
    * blocks the day or counts toward `completed`; it is recommended when rusty.
    */
   recognize: TodayRecognize;
+  /**
+   * "Envelope ×5": back-of-the-envelope math reps, part of the warm-up (the
+   * warm-up is not done until `remaining` is 0). Due envelope cards lead it.
+   */
+  envelope: TodayEnvelope;
   /**
    * Step reviews: one short AI note per finished step (what happened + one
    * thing to carry into the next step). Written automatically, server-side,

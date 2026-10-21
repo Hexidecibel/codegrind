@@ -31,7 +31,7 @@ import {
 import type { MockGrade, MockQuestionGrade } from '../../../shared/mock.js';
 import type { ToolSpec } from '../llm.types.js';
 import { bankStatus, fetchStoryBank, planBehavioral, renderGraderContext } from '../story-bank.js';
-import { coercers, gradeTool, interviewerTool } from './common.js';
+import { CARD_FRONT_STYLE, coercers, gradeTool, interviewerTool } from './common.js';
 import type { MockKindSpec, MockPrep, MockPrepareArgs } from './types.js';
 
 const INFO = MOCK_KIND_INFO.behavioral;
@@ -64,7 +64,7 @@ LINES THE APP ADDS TO THE CANDIDATE'S MESSAGES — they come from the app, not t
 
 ANSWER BEFORE YOU REDIRECT. When the candidate asks you something ("do you want the technical detail or the people side?", "is it OK if this was at a smaller company?"), your reply OPENS by answering it in one sentence, then continues. Never ignore an explicit question.
 
-GAPS: list in gaps every piece of coaching YOU handed over in this reply (teach mode, or a tip inside a nudge): type skill for a delivery move ("lead with the result", "say I, not we", "close with the number"); type fact only for a concrete fact about how interviews work that they did not know. title: the drill-card front — the interview question it applies to; answer: two to four sentences of the coaching. An empty list when you handed nothing over — probing is not handing over.
+GAPS: list in gaps every piece of coaching YOU handed over in this reply (teach mode, or a tip inside a nudge): type skill for a delivery move ("lead with the result", "say I, not we", "close with the number"); type fact only for a concrete fact about how interviews work that they did not know. title: the drill-card front — the interview question it applies to, worded as the interviewer would ask it (${CARD_FRONT_STYLE}); answer: two to four sentences of the coaching. An empty list when you handed nothing over — probing is not handing over.
 
 OBSERVATIONS: on every reply, record what the candidate's LAST message showed about the competencies in the closed list — nailed (clear, owned, quantified, at Staff scope), weak (partly, vague, or only when probed), missing (the question called for it and it was not there). Usually the current question's competency; another only when the answer clearly showed it. Zero observations is fine.
 

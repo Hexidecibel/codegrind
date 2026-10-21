@@ -523,6 +523,13 @@ export function GrindPage() {
             >
               rusty? recognize patterns (no code)
             </Link>
+            <span className="mx-2 text-xs text-muted-foreground">·</span>
+            <Link
+              to="/envelope"
+              className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              envelope math reps
+            </Link>
           </div>
         </div>
       </div>

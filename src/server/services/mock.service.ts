@@ -22,6 +22,7 @@ import { DEFAULT_MOCK_LEVEL, isMockLevel, type MockLevel } from '../../shared/sd
 import { renderCarryBlock } from '../../shared/today.js';
 import { todayCarryNotes } from './today.service.js';
 import { aiReviewsEnabled, costOfMeta } from './ai-usage.service.js';
+import { envelopeCardsFromGaps } from './envelope.service.js';
 import { isNoAnswer, runCardCheck } from './llm.review.js';
 import {
   DEFAULT_MOCK_KIND,
@@ -537,6 +538,8 @@ export async function* runEnd(m: MockRow, end: { code?: string } = {}): AsyncGen
     }
     putGrade(m.id, grade, gradeUsage);
     storeGradeGaps(m.id, grade);
+    // Estimation/capacity gaps with a volume in them also become Envelope cards.
+    envelopeCardsFromGaps(m.id, getGaps(m.id));
     const digest = `${grade.verdict} ${m.level}: ${grade.summary.slice(0, 280)}`;
     updateMock({ ...m, status: 'graded', usage, digest, endedAt: new Date().toISOString() });
     yield { type: 'grade', grade, usage };

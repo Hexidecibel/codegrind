@@ -15,7 +15,7 @@ import { MOCK_KIND_INFO, type MockPrompt } from '../../../shared/mock-kinds.js';
 import { sdPrompt, type SdPrompt } from '../../../shared/sd-prompts.js';
 import { CANDIDATE_CARD, WARM_UP_RULE } from '../sd-candidate.js';
 import { RUBRIC_TEXT } from '../sd-rubric.js';
-import { coercers, gradeTool, interviewerTool } from './common.js';
+import { CARD_FRONT_STYLE, coercers, gradeTool, interviewerTool } from './common.js';
 import type { MockKindSpec } from './types.js';
 
 const INFO = MOCK_KIND_INFO['system-design'];
@@ -42,7 +42,7 @@ REASONING OVER RECALL. When the candidate says they do not know a fact but reaso
 GAPS: on every reply, list in gaps every fact or reasoning move YOU handed over in this reply that the candidate did not have — taught in teach mode, explained while answering their question, or given away in a nudge or a follow-up ("a 301 is cached by the browser permanently, so…"). If you told them something they did not know, it is a gap; no exceptions.
 - type fact: domain knowledge — status codes, unit shortcuts (seconds in a month), encodings (base62), what a particular technology guarantees.
 - type skill: a reasoning move — ranking failures, running the estimate, committing to a trade-off, choosing where to deep-dive.
-- title: the drill-card front, a self-contained question someone could answer cold in two weeks, naming the context ("URL shortener redirect: 301 or 302 — and what does the choice do to click analytics?").
+- title: the drill-card front, a self-contained question someone could answer cold in two weeks, naming the context ("For a URL shortener's redirects, would you use a 301 or a 302 — and what does that choice do to your click analytics?"). ${CARD_FRONT_STYLE}
 - answer: the card back, two to four sentences: the answer AND why it matters / how it connects to the rest of this design.
 An empty list when you handed nothing over.
 
@@ -70,7 +70,7 @@ Rules:
 - conceptObservations: the concepts the transcript gives evidence on, each nailed / weak / missing, from the closed list.
 - drills: 3 to 6 short follow-up drills, most valuable first, each targeting one concept. A drill is a prompt the candidate can answer in a few minutes ("You're designing X. The worst failure is Y. Say your ranking sentence."), plus why it is on the list.
 - summary: name the skill gaps as the practice areas and the fact gaps as cheap fixes, separately.
-- gaps: every fact or reasoning move the INTERVIEWER handed over that is NOT already in RECORDED GAPS below — including ones given away inside a nudge, a follow-up or an answer to the candidate's question. Each with type (fact or skill), title (a self-contained drill-card question naming the context), answer (two to four sentences: the answer and why it matters to the design) and turn (the interviewer turn number, or null). An empty list when the recorded gaps are complete.
+- gaps: every fact or reasoning move the INTERVIEWER handed over that is NOT already in RECORDED GAPS below — including ones given away inside a nudge, a follow-up or an answer to the candidate's question. Each with type (fact or skill), title (a self-contained drill-card question naming the context, worded as an interviewer would ask it — ${CARD_FRONT_STYLE}), answer (two to four sentences: the answer and why it matters to the design) and turn (the interviewer turn number, or null). An empty list when the recorded gaps are complete.
 - Write in plain language and use the candidate's own framework (seven questions, six failures, ranking sentence, principal phrases) where it applies.
 
 Return the grade by calling emit_mock_grade exactly once.`;

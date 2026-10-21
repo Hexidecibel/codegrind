@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Seed the five Envelope review cards from the 2026-10-21 diagnostic.
+# Thin wrapper around bin/seed-envelope.ts. No model call. Idempotent.
+#
+#   bin/seed-envelope --dry-run   # print what would be added
+#   bin/seed-envelope             # write (re-running adds nothing)
+#
+# Run AFTER bin/deploy, so the running service already has the envelope tables.
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+# shellcheck source=lib/node.sh
+source "$REPO/bin/lib/node.sh"
+cg_require_node
+
+if [[ -f "$REPO/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO/.env"
+  set +a
+fi
+
+exec npx tsx bin/seed-envelope.ts "$@"
