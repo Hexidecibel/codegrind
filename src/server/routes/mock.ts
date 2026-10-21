@@ -2,11 +2,11 @@
 // routes/mock — mock interviews over HTTP
 // =============================================================================
 //   GET  /api/mocks                 list            free
-//   GET  /api/mock/prompts          the prompt bank free
+//   GET  /api/mock/prompts?kind=    the prompt bank free (kind absent = system design)
 //   GET  /api/mock/cards            due drill cards free
 //   POST /api/mock/cards/:id/grade  {grade: got|shaky|missed}      free (self-graded, no model)
 //   GET  /api/mock/:id              one mock        free
-//   POST /api/mock/start            {level?, promptId?}            ONE model call
+//   POST /api/mock/start            {kind?, level?, promptId?}     ONE model call
 //   POST /api/mock/:id/turn         {expectedSeq, content, action?} ONE model call
 //   POST /api/mock/:id/end          NDJSON: wrapup → grade          ONE model call (two on a retry)
 //   POST /api/mock/:id/abandon      free
@@ -16,7 +16,7 @@
 
 import { Hono, type Context } from 'hono';
 import { stream } from 'hono/streaming';
-import { SD_PROMPTS } from '../../shared/sd-prompts.js';
+import { mockKindInfo } from '../../shared/mock-kinds.js';
 import type { MockEndEvent, MockListResponse } from '../../shared/mock.js';
 import {
   MockError,
@@ -24,6 +24,7 @@ import {
   gapCards,
   getMockView,
   gradeGapCard,
+  parseKind,
   prepareEnd,
   runEnd,
   startMock,
@@ -46,9 +47,14 @@ mockRoutes.get('/mocks', (c) => {
   return c.json(body);
 });
 
-mockRoutes.get('/mock/prompts', (c) =>
-  c.json({ prompts: SD_PROMPTS.map(({ id, title, brief, familiar }) => ({ id, title, brief, familiar })) })
-);
+mockRoutes.get('/mock/prompts', (c) => {
+  try {
+    const { prompts } = mockKindInfo(parseKind(c.req.query('kind')));
+    return c.json({ prompts: prompts.map(({ id, title, brief, familiar }) => ({ id, title, brief, familiar })) });
+  } catch (err) {
+    return fail(c, 'mock-prompts', err);
+  }
+});
 
 // Registered BEFORE /mock/:id, which would otherwise read "cards" as a mock id.
 mockRoutes.get('/mock/cards', (c) => c.json(gapCards()));

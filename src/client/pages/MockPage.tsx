@@ -1,7 +1,7 @@
 // =============================================================================
-// Mock — a system-design interview over chat, graded at a level
+// Mock — an interview over chat (system design today), graded at a level
 // =============================================================================
-//   /mock        the start card (level, prompt, the cost estimate) + recent mocks
+//   /mock        the start card (kind, level, prompt, the cost estimate) + recent mocks
 //   /mock/:id    the interview, or its grade report once graded
 //
 // No streaming, by decision: an interviewer reply takes ~5-10 seconds and the
@@ -40,24 +40,21 @@ import {
   type MockPromptOption,
 } from '@/client/lib/api';
 import {
-  MOCK_MINUTES,
-  MOCK_TURN_CAP,
   estimateMockCost,
   type MockAction,
   type MockSummary,
   type MockTurn,
   type MockView,
 } from '@/shared/mock';
+import { DEFAULT_MOCK_LEVEL, MOCK_LEVELS, MOCK_LEVEL_LABEL, type MockLevel } from '@/shared/sd';
 import {
-  DEFAULT_MOCK_LEVEL,
-  MOCK_LEVELS,
-  MOCK_LEVEL_LABEL,
-  SD_STAGES,
-  SD_STAGE_META,
-  conceptLabel,
-  type MockLevel,
-} from '@/shared/sd';
-import { sdPrompt } from '@/shared/sd-prompts';
+  DEFAULT_MOCK_KIND,
+  MOCK_KINDS,
+  UPCOMING_MOCK_KINDS,
+  mockKindInfo,
+  mockPromptTitle,
+  type MockKind,
+} from '@/shared/mock-kinds';
 import { Button } from '@/client/components/ui/button';
 import { GradeReport } from '@/client/components/GradeReport';
 import { GapCards } from '@/client/components/GapCards';
@@ -85,7 +82,7 @@ function ErrorBar({ error, onClose }: { error: ApiError | Error; onClose?: () =>
 }
 
 function titleOf(view: MockView): string {
-  return (view.promptId && sdPrompt(view.promptId)?.title) || 'System design';
+  return mockPromptTitle(view.kind, view.promptId) || mockKindInfo(view.kind).label;
 }
 
 function Markdown({ children }: { children: string }) {
@@ -102,6 +99,7 @@ function Markdown({ children }: { children: string }) {
 
 function StartCard() {
   const navigate = useNavigate();
+  const [kind, setKind] = useState<MockKind>(DEFAULT_MOCK_KIND);
   const [level, setLevel] = useState<MockLevel>(DEFAULT_MOCK_LEVEL);
   const [promptId, setPromptId] = useState('');
   const [prompts, setPrompts] = useState<MockPromptOption[]>([]);
@@ -109,20 +107,28 @@ function StartCard() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
+  const info = mockKindInfo(kind);
+
   useEffect(() => {
-    getMockPrompts().then((r) => setPrompts(r.prompts)).catch(setError);
     listMocks().then((r) => setMocks(r.mocks)).catch(() => setMocks([]));
   }, []);
 
-  const typical = estimateMockCost(25).usd;
-  const worst = estimateMockCost(MOCK_TURN_CAP).usd;
+  // Prompt ids are per kind: switching kind clears the choice and reloads the list.
+  useEffect(() => {
+    setPromptId('');
+    setPrompts([]);
+    getMockPrompts(kind).then((r) => setPrompts(r.prompts)).catch(setError);
+  }, [kind]);
+
+  const typical = estimateMockCost(info.typicalTurns).usd;
+  const worst = estimateMockCost(info.turnCap).usd;
   const active = mocks?.find((m) => m.status === 'active' || m.status === 'grade_failed');
 
   const start = async () => {
     setBusy(true);
     setError(null);
     try {
-      const view = await startMock({ level, ...(promptId ? { promptId } : {}) });
+      const view = await startMock({ kind, level, ...(promptId ? { promptId } : {}) });
       navigate(`/mock/${view.id}`);
     } catch (err) {
       setError(err as Error);
@@ -136,11 +142,7 @@ function StartCard() {
         <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
           <MessagesSquare className="h-6 w-6" /> Mock interview
         </h1>
-        <p className="text-sm text-muted-foreground">
-          A system-design interview over chat. The interviewer asks, pushes and moves you through the
-          stages; ask it to explain anything and it will break off to teach, then pick up where you
-          were. At the end it grades every stage at the level you choose and gives you drills.
-        </p>
+        <p className="text-sm text-muted-foreground">{info.start.blurb}</p>
       </div>
 
       {active && (
@@ -156,6 +158,38 @@ function StartCard() {
       )}
 
       <div className="space-y-4 rounded-lg border border-border bg-card p-4">
+        <div className="space-y-1.5">
+          <div className="text-sm font-medium">Interview</div>
+          <div className="inline-flex flex-wrap rounded-md border border-border p-0.5" role="radiogroup" aria-label="Kind">
+            {MOCK_KINDS.map((k) => (
+              <button
+                key={k}
+                role="radio"
+                aria-checked={kind === k}
+                onClick={() => setKind(k)}
+                className={cn(
+                  'min-h-9 rounded px-3 text-sm',
+                  kind === k ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {mockKindInfo(k).label}
+              </button>
+            ))}
+            {UPCOMING_MOCK_KINDS.map((k) => (
+              <button
+                key={k.id}
+                role="radio"
+                aria-checked={false}
+                disabled
+                title="Coming soon"
+                className="min-h-9 cursor-not-allowed rounded px-3 text-sm text-muted-foreground/50"
+              >
+                {k.label} <span className="text-xs">(soon)</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="space-y-1.5">
           <div className="text-sm font-medium">Graded at</div>
           <div className="inline-flex rounded-md border border-border p-0.5" role="radiogroup" aria-label="Level">
@@ -187,20 +221,20 @@ function StartCard() {
             {prompts.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.title}
-                {p.familiar ? ' (one you have built)' : ''}
+                {p.familiar ? info.start.familiarTag : ''}
               </option>
             ))}
           </select>
           <span className="block text-xs text-muted-foreground">
             {promptId
               ? prompts.find((p) => p.id === promptId)?.brief
-              : 'Your first mock starts on a system you have built before; after that, one you have not done recently.'}
+              : info.start.pickHint}
           </span>
         </label>
 
         <div className="text-xs text-muted-foreground">
-          About ${typical.toFixed(2)} for a typical mock, at most ~${worst.toFixed(2)} at the {MOCK_TURN_CAP}-turn cap
-          (estimate; each mock shows what it actually cost). {MOCK_MINUTES} minutes. Each reply takes 5–10
+          About ${typical.toFixed(2)} for a typical mock, at most ~${worst.toFixed(2)} at the {info.turnCap}-turn cap
+          (estimate; each mock shows what it actually cost). {info.minutes} minutes. Each reply takes 5–10
           seconds.
         </div>
 
@@ -244,16 +278,17 @@ function StartCard() {
 // -----------------------------------------------------------------------------
 
 function StageChips({ view }: { view: MockView }) {
+  const { stages, stageMeta } = mockKindInfo(view.kind);
   return (
     <ol className="flex flex-wrap gap-1" aria-label="Stages">
-      {SD_STAGES.map((s) => {
+      {stages.map((s) => {
         const covered = view.state.covered.includes(s);
         const skipped = view.state.skipped.includes(s);
         const current = view.state.stage === s;
         return (
           <li
             key={s}
-            title={SD_STAGE_META[s].goal}
+            title={stageMeta[s]?.goal}
             className={cn(
               'rounded-full border px-2 py-0.5 text-xs',
               covered && 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
@@ -262,7 +297,7 @@ function StageChips({ view }: { view: MockView }) {
               current && 'ring-1 ring-primary',
             )}
           >
-            {SD_STAGE_META[s].label}
+            {stageMeta[s]?.label ?? s}
           </li>
         );
       })}
@@ -279,7 +314,8 @@ function useMinutes(startedAt: string): number {
   return Math.max(0, Math.floor((now - new Date(startedAt).getTime()) / 60_000));
 }
 
-function Bubble({ turn, children }: { turn: MockTurn; children?: ReactNode }) {
+function Bubble({ turn, kind, children }: { turn: MockTurn; kind: MockKind; children?: ReactNode }) {
+  const { conceptLabel } = mockKindInfo(kind);
   if (turn.role === 'candidate') {
     return (
       <div className="flex justify-end">
@@ -414,11 +450,11 @@ function Interview({ view, onView }: { view: MockView; onView: (v: MockView) => 
 
       <div ref={scroller} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {view.turns.map((t) => (
-          <Bubble key={t.seq} turn={t}>
+          <Bubble key={t.seq} turn={t} kind={view.kind}>
             {offer && t.seq === lastSeq && (
               <div className="mt-2 flex flex-wrap gap-2">
                 <Button size="sm" onClick={() => send('teach_me')} disabled={!!sending}>
-                  <GraduationCap /> Teach me {conceptLabel(offer.concept)}
+                  <GraduationCap /> Teach me {mockKindInfo(view.kind).conceptLabel(offer.concept)}
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => send('keep_going')} disabled={!!sending}>
                   Keep going
@@ -521,7 +557,7 @@ function Graded({ view }: { view: MockView }) {
         <h1 className="text-xl font-bold tracking-tight">{titleOf(view)}</h1>
         <p className="text-sm text-muted-foreground">{view.prompt}</p>
       </div>
-      {view.grade && <GradeReport grade={view.grade} usage={view.usage} gaps={view.gaps} />}
+      {view.grade && <GradeReport grade={view.grade} usage={view.usage} gaps={view.gaps} kind={view.kind} />}
       <div>
         <Button variant="outline" size="sm" onClick={() => setShowTranscript((s) => !s)}>
           {showTranscript ? 'Hide' : 'Show'} the transcript ({view.turns.length} messages)
@@ -529,7 +565,7 @@ function Graded({ view }: { view: MockView }) {
         {showTranscript && (
           <div className="mt-3 space-y-3">
             {view.turns.map((t) => (
-              <Bubble key={t.seq} turn={t} />
+              <Bubble key={t.seq} turn={t} kind={view.kind} />
             ))}
           </div>
         )}

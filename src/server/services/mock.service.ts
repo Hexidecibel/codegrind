@@ -18,18 +18,18 @@
 //     never saw.
 
 import { nanoid } from 'nanoid';
+import { DEFAULT_MOCK_LEVEL, isMockLevel, type MockLevel } from '../../shared/sd.js';
 import {
-  DEFAULT_MOCK_LEVEL,
-  isMockLevel,
-  isSdConcept,
-  type MockLevel,
-  type SdConcept,
-} from '../../shared/sd.js';
+  DEFAULT_MOCK_KIND,
+  MOCK_KINDS,
+  isMockConcept,
+  isMockKind,
+  mockKindInfo,
+  type MockKind,
+} from '../../shared/mock-kinds.js';
 import {
   MOCK_ACTIONS,
   MOCK_MAX_ANSWER_CHARS,
-  MOCK_MINUTES,
-  MOCK_TURN_CAP,
   costOf,
   type MockAction,
   type MockEndEvent,
@@ -38,7 +38,6 @@ import {
   type MockUsage,
   type MockView,
 } from '../../shared/mock.js';
-import { pickPrompt, sdPrompt } from '../../shared/sd-prompts.js';
 import {
   gapKey,
   isGapCardGrade,
@@ -49,10 +48,10 @@ import {
 import { db } from './db.js';
 import type { CallMeta } from './llm.types.js';
 import { gradeMock, interviewerTurn } from './llm.mock.js';
+import { mockKindSpec } from './mock-kinds/index.js';
 import { errorBody } from './explain.service.js';
 import {
   applyReply,
-  buildContext,
   buildMessages,
   gapsForReply,
   initialState,
@@ -160,6 +159,7 @@ export function isBusy(id: string): boolean {
 // -----------------------------------------------------------------------------
 
 function toView(m: MockRow, turns: StoredMockTurn[], grade: MockGrade | null): MockView {
+  const info = mockKindInfo(m.kind);
   return {
     id: m.id,
     kind: m.kind,
@@ -176,7 +176,7 @@ function toView(m: MockRow, turns: StoredMockTurn[], grade: MockGrade | null): M
     gaps: getGaps(m.id),
     createdAt: m.createdAt,
     endedAt: m.endedAt,
-    limits: { turnCap: MOCK_TURN_CAP, minutes: MOCK_MINUTES },
+    limits: { turnCap: info.turnCap, minutes: info.minutes },
   };
 }
 
@@ -194,26 +194,35 @@ function lastSeq(turns: StoredMockTurn[]): number {
 // Start
 // -----------------------------------------------------------------------------
 
-export async function startMock(body: { level?: unknown; promptId?: unknown }): Promise<MockView> {
+/** A `kind` from a request: absent is system design, anything unknown is a 400. */
+export function parseKind(raw: unknown): MockKind {
+  if (raw === undefined || raw === null || raw === '') return DEFAULT_MOCK_KIND;
+  if (!isMockKind(raw)) throw new MockError(`kind must be one of: ${MOCK_KINDS.join(', ')}.`, 400);
+  return raw;
+}
+
+export async function startMock(body: { kind?: unknown; level?: unknown; promptId?: unknown }): Promise<MockView> {
+  const kind = parseKind(body.kind);
+  const spec = mockKindSpec(kind);
   if (body.level !== undefined && !isMockLevel(body.level)) {
     throw new MockError('level must be senior, staff or principal.', 400);
   }
   const level: MockLevel = isMockLevel(body.level) ? body.level : DEFAULT_MOCK_LEVEL;
   let prompt;
   if (body.promptId !== undefined && body.promptId !== null && body.promptId !== '') {
-    prompt = typeof body.promptId === 'string' ? sdPrompt(body.promptId) : null;
+    prompt = typeof body.promptId === 'string' ? spec.info.promptById(body.promptId) : null;
     if (!prompt) throw new MockError('Unknown prompt.', 400);
   } else {
-    prompt = pickPrompt(recentPromptIds());
+    prompt = spec.info.pickPrompt(recentPromptIds(kind));
   }
 
   const now = new Date();
   const id = nanoid();
-  const state = initialState(now);
-  const context = buildContext(prompt, level);
+  const state = initialState(now, kind);
+  const context = spec.buildContext(prompt, level);
   const row: MockRow = {
     id,
-    kind: 'system-design',
+    kind,
     level,
     promptId: prompt.id,
     prompt: prompt.brief,
@@ -233,8 +242,8 @@ export async function startMock(body: { level?: unknown; promptId?: unknown }): 
   insertMock(row);
   try {
     return await withLock(id, async () => {
-      const { reply, observations, meta } = await interviewerTurn(buildMessages(context, []), state.stage);
-      const next = applyReply(state, reply, false, false);
+      const { reply, observations, meta } = await interviewerTurn(buildMessages(context, []), state.stage, kind);
+      const next = applyReply(state, reply, false, false, kind);
       const usage = addUsage(row.usage, meta);
       const turn: NewTurn = {
         seq: 1,
@@ -258,7 +267,8 @@ export async function startMock(body: { level?: unknown; promptId?: unknown }): 
 // A turn
 // -----------------------------------------------------------------------------
 
-function parseTurn(body: unknown): MockTurnRequest & { action: MockAction } {
+/** `concept` is checked against the mock's kind later, once the mock is read. */
+function parseTurn(body: unknown): Omit<MockTurnRequest, 'concept'> & { action: MockAction; concept?: unknown } {
   const b = (body ?? {}) as Record<string, unknown>;
   if (!Number.isInteger(b.expectedSeq)) throw new MockError('expectedSeq is required.', 400);
   const action = (b.action ?? 'answer') as MockAction;
@@ -268,8 +278,7 @@ function parseTurn(body: unknown): MockTurnRequest & { action: MockAction } {
     throw new MockError(`That answer is over ${MOCK_MAX_ANSWER_CHARS} characters — split it up.`, 400);
   }
   if (action === 'answer' && !content.trim()) throw new MockError('Say something first.', 400);
-  const concept = isSdConcept(b.concept) ? (b.concept as SdConcept) : undefined;
-  return { expectedSeq: b.expectedSeq as number, content, action, concept };
+  return { expectedSeq: b.expectedSeq as number, content, action, concept: b.concept };
 }
 
 export async function takeTurn(id: string, body: unknown): Promise<MockView> {
@@ -278,9 +287,11 @@ export async function takeTurn(id: string, body: unknown): Promise<MockView> {
     const m = getMock(id);
     if (!m) throw new MockError('No such mock.', 404);
     if (m.status !== 'active') throw new MockError(`This mock is ${m.status.replace('_', ' ')}.`, 409);
-    if (!turnAllowed(m.state)) {
-      throw new MockError(`That was the last of ${MOCK_TURN_CAP} turns — press End & grade.`, 409);
+    if (!turnAllowed(m.state, m.kind)) {
+      throw new MockError(`That was the last of ${mockKindInfo(m.kind).turnCap} turns — press End & grade.`, 409);
     }
+    // An unknown concept is dropped, not refused: the button still means "teach me".
+    const concept = isMockConcept(m.kind, req.concept) ? req.concept : null;
     const turns = getTurns(id);
     const seq = lastSeq(turns);
     if (req.expectedSeq !== seq) {
@@ -289,14 +300,15 @@ export async function takeTurn(id: string, body: unknown): Promise<MockView> {
 
     const now = new Date();
     const { rendered, endNote } = renderCandidateMessage(
-      { content: req.content, action: req.action, concept: req.concept ?? null },
+      { content: req.content, action: req.action, concept },
       m.state,
-      now
+      now,
+      m.kind
     );
     const messages = buildMessages(m.context, toStoredTurns(turns), rendered);
-    const { reply, observations, meta } = await interviewerTurn(messages, m.state.stage);
+    const { reply, observations, meta } = await interviewerTurn(messages, m.state.stage, m.kind);
 
-    const next = applyReply(m.state, reply, true, endNote);
+    const next = applyReply(m.state, reply, true, endNote, m.kind);
     const usage = addUsage(m.usage, meta);
     const candidate: NewTurn = {
       seq: seq + 1,
@@ -354,16 +366,18 @@ export async function* runEnd(m: MockRow): AsyncGenerator<MockEndEvent> {
     updateMock({ ...m, status: 'grading' });
     yield { type: 'wrapup', status: 'grading', candidateTurns: m.state.candidateTurns };
     const turns = getTurns(m.id);
-    const prompt = m.promptId ? sdPrompt(m.promptId) : null;
+    const info = mockKindInfo(m.kind);
+    const prompt = m.promptId ? info.promptById(m.promptId) : null;
     let grade: MockGrade;
     let usage = m.usage;
     let gradeUsage = emptyUsage();
     try {
       const result = await gradeMock({
+        kind: m.kind,
         level: m.level,
-        promptTitle: prompt?.title ?? 'System design',
+        promptTitle: prompt?.title ?? info.label,
         brief: m.prompt,
-        transcript: renderTranscript(turns),
+        transcript: renderTranscript(turns, m.kind),
         skipped: m.state.skipped,
         taught: m.state.taught,
         recordedGaps: getGaps(m.id).map((g) => ({ seq: g.seq, type: g.type, title: g.title, summary: g.summary })),

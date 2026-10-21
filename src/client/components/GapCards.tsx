@@ -16,7 +16,7 @@ import {
   type GapCardGrade,
   type GapCardsResponse,
 } from '@/shared/gap-cards';
-import { conceptLabel } from '@/shared/sd';
+import { anyConceptLabel } from '@/shared/mock-kinds';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -29,7 +29,7 @@ const GRADE_LABEL: Record<GapCardGrade, string> = { got: 'Got it', shaky: 'Shaky
 
 /** The front of a card. Gaps recorded before cards existed have no title. */
 export function cardFront(card: Pick<GapCard, 'title' | 'concept' | 'summary'>): string {
-  return card.title || `${conceptLabel(card.concept)}: ${card.summary}`;
+  return card.title || `${anyConceptLabel(card.concept)}: ${card.summary}`;
 }
 
 function whenLabel(iso: string): string {
@@ -59,7 +59,7 @@ export function CardFace({
         <span className={cn('rounded border px-1.5 py-0.5 font-medium', meta.className)} title={meta.hint}>
           {meta.label}
         </span>
-        <span className="text-muted-foreground">{conceptLabel(card.concept)}</span>
+        <span className="text-muted-foreground">{anyConceptLabel(card.concept)}</span>
         {card.mockTitle && <span className="ml-auto text-muted-foreground">from {card.mockTitle}</span>}
       </div>
       <p className="font-medium leading-snug">{cardFront(card)}</p>
