@@ -31,9 +31,33 @@ function prepare() {
       WHERE key = @key
     `),
     insertAttempt: db.prepare(`
-      INSERT INTO envelope_attempts (itemKey, cardKey, kind, question, answer, working, expected, given, ok, orders, cause, createdAt)
-      VALUES (@itemKey, @cardKey, @kind, @question, @answer, @working, @expected, @given, @ok, @orders, @cause, @now)
+      INSERT INTO envelope_attempts (itemKey, cardKey, kind, question, answer, working, expected, given, ok, orders, cause, mode, failedStep, createdAt)
+      VALUES (@itemKey, @cardKey, @kind, @question, @answer, @working, @expected, @given, @ok, @orders, @cause, @mode, @failedStep, @now)
     `),
+    insertStep: db.prepare(`
+      INSERT INTO envelope_steps (itemKey, stepType, stepIndex, prompt, answer, ok, slip, feedback, counted, createdAt)
+      VALUES (@itemKey, @stepType, @stepIndex, @prompt, @answer, @ok, @slip, @feedback, @counted, @now)
+    `),
+    recentSteps: db.prepare(`SELECT stepType AS type, ok FROM envelope_steps ORDER BY createdAt DESC, id DESC LIMIT 400`),
+    countedSteps: db.prepare(`SELECT stepType AS type, ok, slip FROM envelope_steps WHERE counted = 1 ORDER BY createdAt DESC, id DESC`),
+    itemStepsSince: db.prepare(`
+      SELECT * FROM envelope_steps WHERE itemKey = ? AND createdAt > ? AND counted = 1 ORDER BY createdAt ASC, id ASC
+    `),
+    kindRows: db.prepare(`SELECT kind, ok FROM envelope_attempts ORDER BY createdAt DESC LIMIT 400`),
+    attemptDays: db.prepare(`SELECT createdAt FROM envelope_attempts WHERE createdAt < ? ORDER BY createdAt ASC`),
+    anchorRows: db.prepare(`SELECT * FROM envelope_anchor_cards`),
+    getAnchor: db.prepare(`SELECT * FROM envelope_anchor_cards WHERE id = ?`),
+    upsertAnchor: db.prepare(`
+      INSERT INTO envelope_anchor_cards (id, step, dueAt, reps, lapses, lastGrade, lastReviewedAt, retiredAt, createdAt)
+      VALUES (@id, @step, @dueAt, @reps, @lapses, @lastGrade, @lastReviewedAt, @retiredAt, @now)
+      ON CONFLICT(id) DO UPDATE SET step = excluded.step, dueAt = excluded.dueAt, reps = excluded.reps, lapses = excluded.lapses,
+        lastGrade = excluded.lastGrade, lastReviewedAt = excluded.lastReviewedAt, retiredAt = excluded.retiredAt
+    `),
+    insertSpeed: db.prepare(`
+      INSERT INTO envelope_speed_rounds (score, correct, attempted, bestStreak, createdAt) VALUES (@score, @right, @attempted, @bestStreak, @now)
+    `),
+    speedHistory: db.prepare(`SELECT score, attempted, createdAt FROM envelope_speed_rounds ORDER BY createdAt DESC LIMIT 20`),
+    speedBest: db.prepare(`SELECT MAX(score) AS best FROM envelope_speed_rounds`),
     getAttempt: db.prepare(`SELECT * FROM envelope_attempts WHERE id = ?`),
     putNote: db.prepare(`UPDATE envelope_attempts SET aiNote = ? WHERE id = ?`),
     attempts: db.prepare(`SELECT ok, orders, cause, createdAt FROM envelope_attempts ORDER BY createdAt DESC`),
@@ -120,10 +144,13 @@ export interface EnvelopeAttemptInsert {
   ok: boolean;
   orders: number;
   cause: string | null;
+  /** Phase I: plain | guided, and the guided step that broke. */
+  mode?: 'plain' | 'guided';
+  failedStep?: string | null;
 }
 
 export function insertAttempt(a: EnvelopeAttemptInsert, now: Date): number {
-  const r = S().insertAttempt.run({ ...a, ok: a.ok ? 1 : 0, now: now.toISOString() });
+  const r = S().insertAttempt.run({ ...a, mode: a.mode ?? 'plain', failedStep: a.failedStep ?? null, ok: a.ok ? 1 : 0, now: now.toISOString() });
   return Number(r.lastInsertRowid);
 }
 
@@ -172,4 +199,98 @@ export function lastAttemptAt(itemKey: string): string | null {
     | { at: string | null }
     | undefined;
   return row?.at ?? null;
+}
+
+// -----------------------------------------------------------------------------
+// Phase I: guided steps, anchors, speed rounds
+// -----------------------------------------------------------------------------
+export interface EnvelopeStepInsert {
+  itemKey: string;
+  stepType: string;
+  stepIndex: number;
+  prompt: string;
+  answer: string;
+  ok: boolean;
+  slip: string | null;
+  feedback: string;
+  /** false = a streak reset only (a final miss un-faded this step type). */
+  counted: boolean;
+}
+
+export function insertStep(s: EnvelopeStepInsert, now: Date): void {
+  S().insertStep.run({ ...s, ok: s.ok ? 1 : 0, counted: s.counted ? 1 : 0, now: now.toISOString() });
+}
+
+/** Step results, newest first (streaks; resets included). */
+export function recentSteps(): { type: string; ok: boolean }[] {
+  return (S().recentSteps.all() as { type: string; ok: number }[]).map((r) => ({ type: r.type, ok: r.ok === 1 }));
+}
+
+/** Counted step results, newest first (error rates). */
+export function countedSteps(): { type: string; ok: boolean; slip: string | null }[] {
+  return (S().countedSteps.all() as { type: string; ok: number; slip: string | null }[]).map((r) => ({ ...r, ok: r.ok === 1 }));
+}
+
+export interface EnvelopeStepRow extends Omit<EnvelopeStepInsert, 'ok' | 'counted'> {
+  id: number;
+  ok: boolean;
+  createdAt: string;
+}
+
+export function itemStepsSince(itemKey: string, iso: string): EnvelopeStepRow[] {
+  return (S().itemStepsSince.all(itemKey, iso) as Record<string, unknown>[]).map((r) => ({ ...(r as unknown as EnvelopeStepRow), ok: r.ok === 1 }));
+}
+
+/** Recent attempts' kind + ok, newest first (endless practice weights). */
+export function kindRows(): { kind: string; ok: boolean }[] {
+  return (S().kindRows.all() as { kind: string; ok: number }[]).map((r) => ({ kind: r.kind, ok: r.ok === 1 }));
+}
+
+/** createdAt of every attempt before `iso` (distinct practice days). */
+export function attemptTimesBefore(iso: string): string[] {
+  return (S().attemptDays.all(iso) as { createdAt: string }[]).map((r) => r.createdAt);
+}
+
+export interface AnchorCardRow extends GapCardSchedule {
+  id: string;
+  createdAt: string;
+}
+
+function rowToAnchor(r: Record<string, unknown>): AnchorCardRow {
+  return {
+    id: String(r.id),
+    step: Number(r.step),
+    dueAt: String(r.dueAt),
+    reps: Number(r.reps),
+    lapses: Number(r.lapses),
+    lastGrade: (r.lastGrade as GapCardGrade | null) ?? null,
+    lastReviewedAt: (r.lastReviewedAt as string | null) ?? null,
+    retiredAt: (r.retiredAt as string | null) ?? null,
+    createdAt: String(r.createdAt),
+  };
+}
+
+export function anchorRows(): AnchorCardRow[] {
+  return (S().anchorRows.all() as Record<string, unknown>[]).map(rowToAnchor);
+}
+
+export function getAnchor(id: string): AnchorCardRow | null {
+  const r = S().getAnchor.get(id) as Record<string, unknown> | undefined;
+  return r ? rowToAnchor(r) : null;
+}
+
+export function putAnchor(id: string, s: GapCardSchedule, now: Date): void {
+  S().upsertAnchor.run({ id, ...s, now: now.toISOString() });
+}
+
+export function insertSpeedRound(r: { score: number; right: number; attempted: number; bestStreak: number }, now: Date): void {
+  S().insertSpeed.run({ ...r, now: now.toISOString() });
+}
+
+export function speedHistory(): { score: number; attempted: number; createdAt: string }[] {
+  return S().speedHistory.all() as { score: number; attempted: number; createdAt: string }[];
+}
+
+export function speedBest(): number | null {
+  return (S().speedBest.get() as { best: number | null }).best ?? null;
 }

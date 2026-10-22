@@ -15,6 +15,8 @@
 // miss classifier are all unit-tested (envelope.test.ts). The server stores
 // items as JSON on cards, so an item must survive JSON round-trips.
 
+import type { StepTypeStat } from './envelope-learn.js';
+
 // -----------------------------------------------------------------------------
 // Quantities
 // -----------------------------------------------------------------------------
@@ -55,7 +57,38 @@ export const ENVELOPE_KINDS = [
   'bandwidth',
   'id-space',
 ] as const;
-export type EnvelopeKind = (typeof ENVELOPE_KINDS)[number];
+
+/**
+ * Phase I quick-check kinds: one idea each, answered in one entry. Kept apart
+ * from ENVELOPE_KINDS (the 13 interview-style kinds) so the mixed rounds and the
+ * full-split guarantees stay as they were.
+ *   words-to-sci   "500 million" → 5 × 10⁸; "200 KB" → 2 × 10⁵ bytes
+ *   direction      "per day → per second: divide or multiply?"
+ *   sci-to-number  5 × 10² → 500; 8,000 GB → 8 TB (the comma method)
+ */
+export const QUICK_KINDS = ['words-to-sci', 'direction', 'sci-to-number'] as const;
+export const ALL_KINDS = [...ENVELOPE_KINDS, ...QUICK_KINDS] as const;
+export type EnvelopeKind = (typeof ALL_KINDS)[number];
+
+/** Plain names for the drill picker. */
+export const KIND_LABEL: Readonly<Record<EnvelopeKind, string>> = {
+  'day-to-sec': 'Per day → per second',
+  'month-to-sec': 'Per month → per second',
+  'sec-to-day': 'Per second → per day',
+  'sec-to-month': 'Per second → per month',
+  'day-to-year': 'Per day → per year',
+  'gbps-to-mbs': 'Gbps → MB/s',
+  'mbs-to-gbps': 'MB/s → Gbps',
+  ladder: 'KB / MB / GB / TB',
+  qps: 'Requests per second',
+  storage: 'Storage over years',
+  'storage-day': 'Storage per day',
+  bandwidth: 'Bandwidth',
+  'id-space': 'ID length',
+  'words-to-sci': 'Words → small × 10ⁿ',
+  direction: 'Divide or multiply?',
+  'sci-to-number': '10ⁿ → normal number',
+};
 
 export const CONVERSION_KINDS: readonly EnvelopeKind[] = [
   'day-to-sec',
@@ -70,7 +103,7 @@ export const CONVERSION_KINDS: readonly EnvelopeKind[] = [
 export const ESTIMATE_KINDS: readonly EnvelopeKind[] = ['qps', 'storage', 'storage-day', 'bandwidth', 'id-space'];
 
 export function isEnvelopeKind(x: unknown): x is EnvelopeKind {
-  return typeof x === 'string' && (ENVELOPE_KINDS as readonly string[]).includes(x);
+  return typeof x === 'string' && (ALL_KINDS as readonly string[]).includes(x);
 }
 
 /** The worked split every reveal shows. */
@@ -88,7 +121,7 @@ export interface EnvelopeSplit {
 }
 
 /** The likely reason a miss happened. */
-export const ENVELOPE_CAUSES = ['month-for-day', 'bits-bytes', 'unit-ladder', 'zeros', 'arithmetic'] as const;
+export const ENVELOPE_CAUSES = ['month-for-day', 'bits-bytes', 'unit-ladder', 'zeros', 'arithmetic', 'direction', 'own-zeros', 'wrong-unit'] as const;
 export type EnvelopeCause = (typeof ENVELOPE_CAUSES)[number];
 
 export const ENVELOPE_CAUSE_TEXT: Readonly<Record<EnvelopeCause, string>> = {
@@ -97,13 +130,16 @@ export const ENVELOPE_CAUSE_TEXT: Readonly<Record<EnvelopeCause, string>> = {
   'unit-ladder': 'Off by an exact step of the 3/6/9/12 ladder: the digits are right, the unit (thousand/million/billion, or KB/MB/GB/TB) slipped.',
   zeros: 'Off by an exact power of ten: zeros were counted (or dropped) instead of adding and subtracting exponents.',
   arithmetic: 'The order of magnitude is close; the small-number math slipped.',
+  direction: 'Divide and multiply got swapped. Ask first: will the answer be bigger or smaller? Spreading out (per day → per second) is divide.',
+  'own-zeros': "The front number's own zeros were dropped. Split it first: 500 = 5 × 10², then add the word's zeros (million = 10⁶): 5 × 10⁸.",
+  'wrong-unit': 'The answer is not in the unit the question asks for. Write the target unit first, then the number.',
 };
 
 export interface EnvelopeItem {
   /** `g:<kind>:<seed>` for a generated item; cards keep the key they were made with. */
   key: string;
   kind: EnvelopeKind;
-  family: 'conversion' | 'estimate';
+  family: 'conversion' | 'estimate' | 'quick';
   /** Phrased the way an interviewer says it out loud. */
   question: string;
   /** The exact answer (real constants: 86,400 s a day, 365 days a year). */
@@ -119,6 +155,26 @@ export interface EnvelopeItem {
   split: EnvelopeSplit;
   /** Causes that make sense for this item (the classifier only names these). */
   traps: EnvelopeCause[];
+  /**
+   * Phase I. The chain the method walks (guided mode builds its steps from it)
+   * and which way the conversion goes. Absent on items stored before Phase I.
+   */
+  factors?: Factor[];
+  move?: Move;
+  /**
+   * Quick kinds: 'exact' = within 2% (a conversion, not an estimate);
+   * 'direction' = the answer is the word divide or multiply.
+   */
+  answerForm?: 'exact' | 'direction';
+  /** 'exact' items whose answer must be IN the item's unit (8 TB, not 8,000 GB). */
+  inUnit?: boolean;
+}
+
+/** Which way a conversion goes ("per day → per second": divide). */
+export interface Move {
+  from: string;
+  to: string;
+  op: 'divide' | 'multiply';
 }
 
 // -----------------------------------------------------------------------------
@@ -241,9 +297,11 @@ export function spokenBytes(x: number): string {
 // -----------------------------------------------------------------------------
 // The worked split
 // -----------------------------------------------------------------------------
-interface Factor {
+export interface Factor {
   /** "50 million requests" — what this number is. */
   label: string;
+  /** Guided mode's prompt when the label gives the answer away ("seconds in a day"). */
+  ask?: string;
   /** The number the METHOD uses (anchors rounded). */
   value: number;
   op: '×' | '÷';
@@ -288,8 +346,10 @@ export function chain(factors: readonly Factor[], dim: Dim, per: Per | null): { 
 // -----------------------------------------------------------------------------
 // Builders — one per kind, parameters in, a whole item out
 // -----------------------------------------------------------------------------
-const DAY: Factor = { label: 'a day ≈ 10⁵ seconds', value: ANCHOR.day, op: '÷' };
-const MONTH: Factor = { label: 'a month ≈ 2.5 × 10⁶ seconds', value: ANCHOR.month, op: '÷' };
+const DAY: Factor = { label: 'a day ≈ 10⁵ seconds', ask: 'seconds in a day (rounded)', value: ANCHOR.day, op: '÷' };
+const MONTH: Factor = { label: 'a month ≈ 2.5 × 10⁶ seconds', ask: 'seconds in a month (rounded)', value: ANCHOR.month, op: '÷' };
+const BITS: Factor = { label: '8 bits in a byte', ask: 'bits in a byte', value: 8, op: '÷' };
+const YEAR_DAYS: Factor = { label: 'a year ≈ 400 days (365, rounded up for easy math)', ask: 'days in a year (rounded up for easy math)', value: 400, op: '×' };
 
 function answerText(exact: number, approx: number, dim: Dim, per: Per | null): string {
   const a = fmtQuantity(approx, dim, per, 3);
@@ -306,6 +366,7 @@ interface ItemCore {
   factors: Factor[];
   sanity: string;
   traps: EnvelopeCause[];
+  move: Move;
 }
 
 function finish(c: ItemCore): EnvelopeItem {
@@ -321,6 +382,8 @@ function finish(c: ItemCore): EnvelopeItem {
     answerText: answerText(c.expected.value, approx, c.expected.dim, c.expected.per),
     split: { ...split, sanity: c.sanity },
     traps: c.traps,
+    factors: c.factors,
+    move: c.move,
   };
 }
 
@@ -344,6 +407,7 @@ export function dayToSec(key: string, p: RateParams): EnvelopeItem {
     factors: [{ label: `${spoken(p.n)} ${p.noun}`, value: p.n, op: '×' }, DAY],
     sanity: `A day is about 10⁵ seconds, so a daily number loses five zeros. Per second must be far smaller than per day: ${spoken(p.n)} a day can never be ${spoken(p.n)} a second.`,
     traps: ['month-for-day', 'zeros', 'unit-ladder', 'arithmetic'],
+    move: { from: 'per day', to: 'per second', op: 'divide' },
   });
 }
 
@@ -357,6 +421,7 @@ export function monthToSec(key: string, p: RateParams): EnvelopeItem {
     factors: [{ label: `${spoken(p.n)} ${p.noun}`, value: p.n, op: '×' }, MONTH],
     sanity: `A month is about 2.5 × 10⁶ seconds: divide by 2.5, then drop six zeros. Check: ${fmtQuantity(p.n / ANCHOR.month, 'count', null)} a second × 2.5 million seconds should give back ${spoken(p.n)}.`,
     traps: ['month-for-day', 'zeros', 'unit-ladder', 'arithmetic'],
+    move: { from: 'per month', to: 'per second', op: 'divide' },
   });
 }
 
@@ -370,6 +435,7 @@ export function secToDay(key: string, p: RateParams): EnvelopeItem {
     factors: [{ label: `${spoken(p.n)} ${p.noun} a second`, value: p.n, op: '×' }, { ...DAY, op: '×' }],
     sanity: `Per second to per day adds five zeros, never more: ${spoken(p.n)} becomes ${spoken(p.n)} followed by 00000, so ${fmtQuantity(p.n * ANCHOR.day, 'count', null)}.`,
     traps: ['month-for-day', 'zeros', 'unit-ladder', 'arithmetic'],
+    move: { from: 'per second', to: 'per day', op: 'multiply' },
   });
 }
 
@@ -383,6 +449,7 @@ export function secToMonth(key: string, p: RateParams): EnvelopeItem {
     factors: [{ label: `${spoken(p.n)} ${p.noun} a second`, value: p.n, op: '×' }, { ...MONTH, op: '×' }],
     sanity: `A month multiplies by 2.5 and adds six zeros. Cross-check with a day: × 10⁵ for a day, then × 30 ≈ 3 × 10¹ for the month — the same exponent.`,
     traps: ['month-for-day', 'zeros', 'unit-ladder', 'arithmetic'],
+    move: { from: 'per second', to: 'per month', op: 'multiply' },
   });
 }
 
@@ -403,10 +470,11 @@ export function dayToYear(key: string, p: VolumeParams): EnvelopeItem {
     unit: { label: step.name, factor: 10 ** step.exp },
     factors: [
       { label: `${spokenBytes(p.bytes)} a day`, value: p.bytes, op: '×' },
-      { label: 'a year ≈ 400 days (365, rounded up for easy math)', value: 400, op: '×' },
+      YEAR_DAYS,
     ],
     sanity: `Per day → per year is × 400: the small number × 4, plus two zeros. 1,000 GB is 1 TB, so a few thousand GB is a few TB.`,
     traps: ['unit-ladder', 'zeros', 'arithmetic'],
+    move: { from: 'per day', to: 'per year', op: 'multiply' },
   });
 }
 
@@ -418,11 +486,12 @@ export function gbpsToMBs(key: string, p: { gbps: number }): EnvelopeItem {
     expected: { value: (p.gbps * 1e9) / 8, dim: 'bytes', per: 's' },
     unit: { label: 'MB', factor: 1e6 },
     factors: [
-      { label: `${fmt(p.gbps)} gigabits per second`, value: p.gbps * 1e9, op: '×' },
-      { label: '8 bits in a byte', value: 8, op: '÷' },
+      { label: `${fmt(p.gbps)} gigabits per second`, ask: `${fmt(p.gbps)} gigabits, in bits`, value: p.gbps * 1e9, op: '×' },
+      BITS,
     ],
     sanity: `Anchor: 1 Gbps ≈ 125 MB/s. Bits are lowercase b, bytes uppercase B; going bits → bytes the number gets 8× SMALLER.`,
     traps: ['bits-bytes', 'unit-ladder', 'zeros', 'arithmetic'],
+    move: { from: 'bits', to: 'bytes', op: 'divide' },
   });
 }
 
@@ -434,11 +503,12 @@ export function mbsToGbps(key: string, p: { mbs: number }): EnvelopeItem {
     expected: { value: p.mbs * 1e6 * 8, dim: 'bits', per: 's' },
     unit: { label: 'Gb', factor: 1e9 },
     factors: [
-      { label: `${fmt(p.mbs)} megabytes per second`, value: p.mbs * 1e6, op: '×' },
-      { label: '8 bits in a byte', value: 8, op: '×' },
+      { label: `${fmt(p.mbs)} megabytes per second`, ask: `${fmt(p.mbs)} megabytes, in bytes`, value: p.mbs * 1e6, op: '×' },
+      { ...BITS, op: '×' },
     ],
     sanity: `Anchor: 125 MB/s ≈ 1 Gbps. Bytes → bits the number gets 8× BIGGER, then 10⁹ bits is a gigabit.`,
     traps: ['bits-bytes', 'unit-ladder', 'zeros', 'arithmetic'],
+    move: { from: 'bytes', to: 'bits', op: 'multiply' },
   });
 }
 
@@ -463,11 +533,12 @@ export function ladderItem(key: string, p: { n: number; fromExp: number; toExp: 
     unit: { label: to.label, factor: 10 ** to.exp },
     factors: [
       { label: `${fmt(p.n, 4)} ${from.word}`, value: p.n, op: '×' },
-      { label: `${from.label} = ${pow10(from.exp)} bytes`, value: 10 ** from.exp, op: '×' },
-      { label: `${to.label} = ${pow10(to.exp)} bytes`, value: 10 ** to.exp, op: '÷' },
+      { label: `${from.label} = ${pow10(from.exp)} bytes`, ask: `1 ${from.label}, in bytes`, value: 10 ** from.exp, op: '×' },
+      { label: `${to.label} = ${pow10(to.exp)} bytes`, ask: `1 ${to.label}, in bytes`, value: 10 ** to.exp, op: '÷' },
     ],
     sanity: `Each ladder step (KB → MB → GB → TB → PB) is three zeros. ${from.label} → ${to.label} is ${Math.abs(p.fromExp - p.toExp) / 3} step${Math.abs(p.fromExp - p.toExp) === 3 ? '' : 's'}, so the number ${p.toExp > p.fromExp ? 'shrinks' : 'grows'} by ${pow10(Math.abs(p.fromExp - p.toExp))}.`,
     traps: ['unit-ladder', 'zeros', 'arithmetic'],
+    move: { from: from.label, to: to.label, op: p.toExp > p.fromExp ? 'divide' : 'multiply' },
   });
   // The chain above counts in the TARGET unit; the expected value is bytes.
   return {
@@ -492,6 +563,7 @@ export function qpsItem(key: string, p: { users: number; perUser: number; noun: 
     ],
     sanity: `Users × actions gives the daily total; a day drops five zeros. Peak is usually 2-10× the average, so say both numbers.`,
     traps: ['month-for-day', 'zeros', 'unit-ladder', 'arithmetic'],
+    move: { from: 'per day', to: 'per second', op: 'divide' },
   });
 }
 
@@ -508,11 +580,12 @@ export function storageItem(key: string, p: { perDay: number; noun: string; byte
       { label: `${spoken(p.perDay)} ${p.noun} a day`, value: p.perDay, op: '×' },
       { label: `${spokenBytes(p.bytesEach)} each`, value: p.bytesEach, op: '×' },
       { label: `${p.copies} copies`, value: p.copies, op: '×' },
-      { label: 'a year ≈ 400 days', value: 400, op: '×' },
+      { label: 'a year ≈ 400 days', ask: 'days in a year (rounded up for easy math)', value: 400, op: '×' },
       { label: `${p.years} years`, value: p.years, op: '×' },
     ],
     sanity: `Do it per day first (count × size), then × copies, × 400 for a year, × years. Terabytes are 10¹², petabytes 10¹⁵.`,
     traps: ['unit-ladder', 'zeros', 'arithmetic'],
+    move: { from: 'per day', to: 'several years, all copies', op: 'multiply' },
   });
 }
 
@@ -532,6 +605,7 @@ export function storageDayItem(key: string, p: { users: number; perUser: number;
     ],
     sanity: `Kilobytes are 10³ bytes, so ${spokenBytes(p.bytesEach)} is ${fmtSci(p.bytesEach)} bytes. Add the exponents, then read the result off the ladder: 10¹² is a terabyte, 10¹⁵ a petabyte.`,
     traps: ['unit-ladder', 'zeros', 'arithmetic'],
+    move: { from: 'one file', to: 'everyone, all day', op: 'multiply' },
   });
 }
 
@@ -545,10 +619,11 @@ export function bandwidthItem(key: string, p: { perSec: number; noun: string; by
     factors: [
       { label: `${spoken(p.perSec)} ${p.noun} a second`, value: p.perSec, op: '×' },
       { label: `${spokenBytes(p.bytesEach)} each`, value: p.bytesEach, op: '×' },
-      { label: '8 bits in a byte', value: 8, op: '×' },
+      { ...BITS, op: '×' },
     ],
     sanity: `Bytes per second × 8 = bits per second; network links are sold in bits (Gbps). Anchor: 125 MB/s ≈ 1 Gbps.`,
     traps: ['bits-bytes', 'unit-ladder', 'zeros', 'arithmetic'],
+    move: { from: 'bytes', to: 'bits', op: 'multiply' },
   });
 }
 
@@ -571,12 +646,163 @@ export function idSpaceItem(key: string, p: { perMonth: number; years: number; n
     ],
     sanity: `Base62 powers: ${powers}. The smallest power above the total is the length: ${len} characters (one more is fine as headroom).`,
     traps: ['zeros', 'arithmetic'],
+    move: { from: 'per month', to: 'all the years', op: 'multiply' },
   });
   return {
     ...item,
     exactInt: true,
+    // Base62 length is not a small × 10ⁿ walk: no guided steps.
+    factors: undefined,
+    move: undefined,
     answerText: `${len} characters (62${sup(len)} ≈ ${fmtSci(62 ** len)} codes vs ≈ ${fmtSci(total)} needed)`,
     split: { ...item.split, back: `${item.split.back} codes needed; 62${sup(len)} ≈ ${fmtSci(62 ** len)} ≥ that, 62${sup(len - 1)} ≈ ${fmtSci(62 ** (len - 1))} is not` },
+  };
+}
+
+// -----------------------------------------------------------------------------
+// Quick-check builders (Phase I) — one idea per item, exact answers
+// -----------------------------------------------------------------------------
+const BYTE_UNIT_AT: Readonly<Record<number, string>> = { 0: 'bytes', 3: 'KB', 6: 'MB', 9: 'GB', 12: 'TB', 15: 'PB' };
+const COUNT_WORD_AT: Readonly<Record<number, string>> = { 3: 'thousand', 6: 'million', 9: 'billion', 12: 'trillion' };
+const commas = (x: number) => Math.round(x).toLocaleString('en-US');
+const zerosWord = (n: number) => `${n} zero${n === 1 ? '' : 's'}`;
+
+/** "500 million" → 5 × 10⁸; "200 KB" → 2 × 10⁵ bytes. */
+export function wordsToSciItem(key: string, p: { lead: number; exp: number; dim: 'count' | 'bytes' }): EnvelopeItem {
+  const value = p.lead * 10 ** p.exp;
+  const lead = sci(p.lead);
+  const total = lead.e + p.exp;
+  const bytes = p.dim === 'bytes';
+  const words = bytes ? `${fmt(p.lead)} ${BYTE_UNIT_AT[p.exp]}` : `${fmt(p.lead)} ${COUNT_WORD_AT[p.exp]}`;
+  const scale = bytes ? `${BYTE_UNIT_AT[p.exp]} = ${pow10(p.exp)} bytes` : `${COUNT_WORD_AT[p.exp]} = ${pow10(p.exp)}`;
+  return {
+    key,
+    kind: 'words-to-sci',
+    family: 'quick',
+    question: bytes ? `Write ${words} in bytes, as small × 10ⁿ.` : `Write "${words}" as small × 10ⁿ.`,
+    expected: { value, dim: p.dim, per: null },
+    approx: value,
+    unit: bytes ? { label: 'bytes', factor: 1 } : COUNT_UNIT,
+    answerText: `${fmtSci(value)}${bytes ? ' bytes' : ''}`,
+    split: {
+      parts: `Two pieces: the front number ${fmt(p.lead)}, and ${scale}.`,
+      small: lead.e > 0 ? `Split the front number first: ${fmt(p.lead)} = ${fmt(lead.m)} × ${pow10(lead.e)} (its own ${zerosWord(lead.e)}).` : `${fmt(p.lead)} is already small.`,
+      zeros: lead.e > 0 ? `${pow10(lead.e)} × ${pow10(p.exp)} → ${lead.e} + ${p.exp} = ${total} → ${pow10(total)}` : `Just the word's zeros: ${pow10(p.exp)}`,
+      back: `${fmtSci(value)}${bytes ? ' bytes' : ''}`,
+      sanity: `Written out it is ${commas(value)}: count every zero, ${total}.`,
+    },
+    traps: ['own-zeros', 'zeros'],
+    answerForm: 'exact',
+  };
+}
+
+export interface DirectionCase {
+  from: string;
+  to: string;
+  op: 'divide' | 'multiply';
+  /** A rate (per day) or a size unit (GB). */
+  what: 'rate' | 'size';
+  why: string;
+}
+
+export const DIRECTIONS: readonly DirectionCase[] = [
+  { from: 'per day', to: 'per second', op: 'divide', what: 'rate', why: "A day is about 100,000 seconds. The day's total gets spread over all of them, so each second gets a smaller share: divide." },
+  { from: 'per month', to: 'per second', op: 'divide', what: 'rate', why: 'A month is millions of seconds. Spreading the total out makes each second smaller: divide.' },
+  { from: 'per year', to: 'per day', op: 'divide', what: 'rate', why: 'Like $100k a year → per day: the money is spread over the days, so each day gets less: divide.' },
+  { from: 'per second', to: 'per day', op: 'multiply', what: 'rate', why: 'A day piles up about 100,000 seconds, so the total is bigger: multiply.' },
+  { from: 'per day', to: 'per year', op: 'multiply', what: 'rate', why: 'A year piles up the days (about 400, rounded), so the total is bigger: multiply.' },
+  { from: 'per second', to: 'per month', op: 'multiply', what: 'rate', why: 'A month piles up millions of seconds, so the total is bigger: multiply.' },
+  { from: 'bits', to: 'bytes', op: 'divide', what: 'size', why: 'Bits are tiny pieces, 8 per byte. To bytes = fewer = ÷ 8.' },
+  { from: 'bytes', to: 'bits', op: 'multiply', what: 'size', why: 'Bits are tiny pieces, 8 per byte. To bits = more = × 8.' },
+  { from: 'GB', to: 'TB', op: 'divide', what: 'size', why: 'A TB is a bigger box (1,000 GB). Fewer big boxes hold the same data: divide.' },
+  { from: 'TB', to: 'GB', op: 'multiply', what: 'size', why: 'A GB is a smaller box. It takes more of them for the same data: multiply.' },
+  { from: 'KB', to: 'MB', op: 'divide', what: 'size', why: 'An MB is a bigger box (1,000 KB). Fewer big boxes: divide.' },
+  { from: 'MB', to: 'KB', op: 'multiply', what: 'size', why: 'A KB is a smaller box. More small boxes: multiply.' },
+];
+
+/** "per day → per second: divide or multiply?" */
+export function directionItem(key: string, c: DirectionCase): EnvelopeItem {
+  const bigger = c.op === 'multiply';
+  return {
+    key,
+    kind: 'direction',
+    family: 'quick',
+    question:
+      c.what === 'rate'
+        ? `You have a number ${c.from}. You want it ${c.to}. Divide or multiply?`
+        : `You have a size in ${c.from}. You want it in ${c.to}. Divide or multiply?`,
+    expected: { value: 1, dim: 'count', per: null },
+    approx: 1,
+    unit: COUNT_UNIT,
+    answerText: c.op,
+    split: {
+      parts: `${c.from} → ${c.to}`,
+      small: `Will the number get bigger or smaller? ${bigger ? 'Bigger' : 'Smaller'}.`,
+      zeros: '',
+      back: `Bigger means multiply, smaller means divide: ${c.op}.`,
+      sanity: c.why,
+    },
+    traps: ['direction'],
+    answerForm: 'direction',
+    move: { from: c.from, to: c.to, op: c.op },
+  };
+}
+
+/** 5 × 10² → 500. */
+export function sciToNumberItem(key: string, p: { m: number; exp: number }): EnvelopeItem {
+  const value = Math.round(p.m * 10 ** p.exp);
+  const ten = 10 ** p.exp;
+  return {
+    key,
+    kind: 'sci-to-number',
+    family: 'quick',
+    question: `Write ${fmt(p.m)} × ${pow10(p.exp)} as a normal number.`,
+    expected: { value, dim: 'count', per: null },
+    approx: value,
+    unit: COUNT_UNIT,
+    answerText: value >= 1e6 ? `${commas(value)} (${spoken(value)})` : commas(value),
+    split: {
+      parts: `${pow10(p.exp)} = 1 followed by ${zerosWord(p.exp)} = ${commas(ten)}`,
+      small: `${fmt(p.m)} × ${commas(ten)}`,
+      zeros: `${pow10(p.exp)}: the little number ${p.exp} is the TOTAL zero count`,
+      back: `${fmt(p.m)} × ${commas(ten)} = ${commas(value)}`,
+      sanity: `Not ${commas(value * 10)}: the 0 in "10" is not an extra zero.`,
+    },
+    traps: ['zeros', 'unit-ladder'],
+    answerForm: 'exact',
+  };
+}
+
+/** 8,000 GB → 8 TB: each comma knocked off = one unit up. */
+export function commaItem(key: string, p: { n: number; fromExp: number; toExp: number }): EnvelopeItem {
+  const from = BYTE_UNIT_AT[p.fromExp];
+  const to = BYTE_UNIT_AT[p.toExp];
+  const steps = (p.toExp - p.fromExp) / 3;
+  const inTarget = p.n / 10 ** (p.toExp - p.fromExp);
+  const path = Object.entries(BYTE_UNIT_AT)
+    .map(([e, l]) => [Number(e), l] as const)
+    .filter(([e]) => e >= p.fromExp && e <= p.toExp)
+    .map(([, l]) => l)
+    .join(' → ');
+  return {
+    key,
+    kind: 'sci-to-number',
+    family: 'quick',
+    question: `${commas(p.n)} ${from} is how many ${to}?`,
+    expected: { value: p.n * 10 ** p.fromExp, dim: 'bytes', per: null },
+    approx: p.n * 10 ** p.fromExp,
+    unit: { label: to, factor: 10 ** p.toExp },
+    answerText: `${fmt(inTarget, 4)} ${to}`,
+    split: {
+      parts: `${commas(p.n)} ${from}`,
+      small: `Commas to knock off: ${steps} (${path})`,
+      zeros: `Each comma is 10³, one unit up: ${pow10(p.toExp - p.fromExp)} in all`,
+      back: `${commas(p.n)} ${from} → ${fmt(inTarget, 4)} ${to}`,
+      sanity: 'Each comma knocked off = one unit up: bytes → KB → MB → GB → TB.',
+    },
+    traps: ['unit-ladder', 'zeros'],
+    answerForm: 'exact',
+    inUnit: true,
   };
 }
 
@@ -606,7 +832,7 @@ const VOLUME_NOUNS = ['logs', 'event tables', 'metrics', 'audit records'] as con
 
 /** One item of `kind` from a seed. Same (kind, seed) → same item, always. */
 export function generateItem(kind: EnvelopeKind, seed: number): EnvelopeItem {
-  const r = rng(seed * 7919 + ENVELOPE_KINDS.indexOf(kind) * 104729 + 1);
+  const r = rng(seed * 7919 + ALL_KINDS.indexOf(kind) * 104729 + 1);
   const key = `g:${kind}:${seed}`;
   const big = (lo: number, hi: number) => pick(r, MANT) * 10 ** (lo + Math.floor(r() * (hi - lo + 1)));
   switch (kind) {
@@ -660,6 +886,20 @@ export function generateItem(kind: EnvelopeKind, seed: number): EnvelopeItem {
       });
     case 'id-space':
       return idSpaceItem(key, { perMonth: big(6, 9), years: pick(r, [5, 10, 20]), noun: pick(r, ['short links', 'invite codes', 'order numbers']) });
+    case 'words-to-sci':
+      return r() < 0.6
+        ? wordsToSciItem(key, { lead: pick(r, [2, 3, 5, 8, 20, 30, 50, 200, 500]), exp: pick(r, [3, 6, 9, 12]), dim: 'count' })
+        : wordsToSciItem(key, { lead: pick(r, [2, 5, 20, 50, 200, 500]), exp: pick(r, [3, 6, 9, 12]), dim: 'bytes' });
+    case 'direction':
+      return directionItem(key, pick(r, DIRECTIONS));
+    case 'sci-to-number': {
+      const v = r();
+      if (v < 0.5) return sciToNumberItem(key, { m: pick(r, [1, 2, 3, 4, 5, 8, 2.5, 1.5]), exp: 1 + Math.floor(r() * 9) });
+      const fromExp = pick(r, [0, 3, 6, 9]);
+      const steps = pick(r, [1, 1, 2]);
+      const toExp = Math.min(12, fromExp + 3 * steps);
+      return commaItem(key, { n: pick(r, [2, 3, 5, 8, 25, 40, 250]) * 10 ** (toExp - fromExp), fromExp, toExp });
+    }
   }
 }
 
@@ -848,6 +1088,16 @@ export function classifyMiss(ratio: number, item: Pick<EnvelopeItem, 'traps'>, p
   return 'arithmetic';
 }
 
+/**
+ * "500 million" written 5 × 10⁶: too low by exactly the front number's own
+ * zeros (500 → two). Only on words-to-sci, where the front number is known.
+ */
+function droppedOwnZeros(item: Pick<EnvelopeItem, 'kind' | 'expected'>, ratio: number): boolean {
+  if (item.kind !== 'words-to-sci') return false;
+  const leadZeros = sci(item.expected.value).e % 3;
+  return leadZeros > 0 && Math.abs(Math.log10(ratio) + leadZeros) < 0.05;
+}
+
 const PER_WORD: Readonly<Record<Per, string>> = { s: 'per second', day: 'per day', month: 'per month', year: 'per year' };
 
 /**
@@ -869,7 +1119,47 @@ export function restatesQuestion(p: Pick<ParsedAnswer, 'per' | 'dim'>, item: Pic
   return null;
 }
 
+/** "divide" / "÷" / "/" → divide; "multiply" / "times" / "×" / "x" / "*" → multiply. */
+export function parseDirection(text: string): 'divide' | 'multiply' | null {
+  const t = text.trim().toLowerCase();
+  if (/^(div|divide[sd]?|dividing|÷|\/)/.test(t) || /^(÷|\/)\s*\d/.test(t)) return 'divide';
+  if (/^(mul|multipl\w*|times|×|x|\*)/.test(t)) return 'multiply';
+  return null;
+}
+
+/**
+ * Why an answer is not in the form a quick item asks for (null when it is).
+ * The service answers 400 with this instead of grading: "500000000" for
+ * "write it as small × 10ⁿ" is not wrong, it is the wrong exercise.
+ */
+export function formHint(item: Pick<EnvelopeItem, 'kind' | 'answerForm'>, text: string): string | null {
+  if (item.answerForm === 'direction') return parseDirection(text) ? null : 'Type one word: divide or multiply.';
+  if (item.kind === 'words-to-sci' && !/(10\s*\^|10[⁰¹²³⁴⁵⁶⁷⁸⁹]|\de\s*\d)/i.test(text)) return 'Write it as small × 10ⁿ, like 5 × 10^8.';
+  return null;
+}
+
+function checkDirection(item: EnvelopeItem, text: string): EnvelopeVerdict | null {
+  const d = parseDirection(text);
+  if (!d || !item.move) return null;
+  const ok = d === item.move.op;
+  return {
+    ok,
+    read: d,
+    given: ok ? 1 : 0,
+    orders: 0,
+    verdict: ok ? `Right: ${item.move.op}.` : `Not quite: this one is ${item.move.op}.`,
+    cause: ok ? null : 'direction',
+    causeText: ok ? null : item.split.sanity,
+  };
+}
+
+/** The tolerance an item is graded at: 2% for quick (exact) items, else 30%. */
+export function toleranceOf(item: Pick<EnvelopeItem, 'answerForm'>): number {
+  return item.answerForm === 'exact' ? 0.02 : ENVELOPE_TOLERANCE;
+}
+
 export function checkAnswer(item: EnvelopeItem, text: string): EnvelopeVerdict | null {
+  if (item.answerForm === 'direction') return checkDirection(item, text);
   // "8000 GB or 8 TB", "8000 GB = 8 TB": every alternative must be right, so a
   // hedge ("500 or 5000") still fails; the first wrong one is the verdict.
   const parts = text.split(/\s+or\s+|\s*=\s*/i).filter((t) => t.trim());
@@ -887,7 +1177,13 @@ export function checkAnswer(item: EnvelopeItem, text: string): EnvelopeVerdict |
     const raw = p.number * p.prefix;
     if (Math.abs(Math.log10(raw / exact)) < Math.abs(Math.log10(given / exact)) && Math.abs(raw / exact - 1) <= ENVELOPE_TOLERANCE) given = raw;
   }
-  const read = item.exactInt ? `${fmt(given)}` : fmtQuantity(given, item.expected.dim, item.expected.per, 3);
+  const read = item.exactInt
+    ? `${fmt(given)}`
+    : item.kind === 'words-to-sci'
+      ? `${fmtSci(given)}${item.expected.dim === 'bytes' ? ' bytes' : ''}`
+      : item.kind === 'sci-to-number' && item.expected.dim === 'count'
+        ? commas(given)
+        : fmtQuantity(given, item.expected.dim, item.expected.per, 3);
   if (!(given > 0)) {
     return { ok: false, read, given, orders: 0, verdict: 'That is not a positive number.', cause: 'arithmetic', causeText: ENVELOPE_CAUSE_TEXT.arithmetic };
   }
@@ -902,11 +1198,24 @@ export function checkAnswer(item: EnvelopeItem, text: string): EnvelopeVerdict |
   if (restated) {
     return { ok: false, read, given, orders, verdict: restated, cause: null, causeText: null };
   }
+  // "8,000 GB is how many TB?" answered "8,000 GB" restates it too.
+  if (item.inUnit && p.dim !== null && p.prefix !== item.unit.factor) {
+    return {
+      ok: false,
+      read,
+      given,
+      orders,
+      verdict: `Finish in ${item.unit.label}: the question asks how many ${item.unit.label}.`,
+      cause: 'wrong-unit',
+      causeText: ENVELOPE_CAUSE_TEXT['wrong-unit'],
+    };
+  }
+  const tol = toleranceOf(item);
   const ok = item.exactInt
     ? given === exact || given === exact + 1
-    : Math.abs(ratio - 1) <= ENVELOPE_TOLERANCE || Math.abs(given / item.approx - 1) <= ENVELOPE_TOLERANCE;
+    : Math.abs(ratio - 1) <= tol || Math.abs(given / item.approx - 1) <= tol;
   if (ok) {
-    return { ok, read, given, orders, verdict: item.exactInt ? 'Right.' : 'Right — within 30%.', cause: null, causeText: null };
+    return { ok, read, given, orders, verdict: item.exactInt || item.answerForm === 'exact' ? 'Right.' : 'Right — within 30%.', cause: null, causeText: null };
   }
   const e = Math.log10(ratio);
   const k = Math.round(e);
@@ -918,9 +1227,9 @@ export function checkAnswer(item: EnvelopeItem, text: string): EnvelopeVerdict |
       : k !== 0 && (Math.abs(e - k) < 0.2 || factor >= 100)
         ? `Off by ${pow10(Math.abs(k))}, ${dir}.`
         : k === 0
-          ? `About ${fmt(factor, 2)}× ${dir} — the right order of magnitude, but outside 30%.`
+          ? `About ${fmt(factor, 2)}× ${dir} — the right order of magnitude, but ${item.answerForm === 'exact' ? 'not exact' : 'outside 30%'}.`
           : `About ${fmt(factor, 2)}× ${dir}.`;
-  const cause = classifyMiss(ratio, item, p);
+  const cause = droppedOwnZeros(item, ratio) ? 'own-zeros' : classifyMiss(ratio, item, p);
   return { ok, read, given, orders, verdict, cause, causeText: ENVELOPE_CAUSE_TEXT[cause] };
 }
 
@@ -985,6 +1294,8 @@ export interface EnvelopePrompt {
   unitHint: string;
   /** True when this is a due review card, not a fresh rep. */
   card: boolean;
+  /** Guided mode can walk this one step by step (Phase I). */
+  guided?: boolean;
 }
 
 export interface EnvelopeSession {
@@ -1009,6 +1320,8 @@ export interface EnvelopeCheckResponse {
   schedule: string;
   /** The page should ask for the AI note (a miss, with AI reviews on). */
   noteAvailable: boolean;
+  /** Guided mode: the step that broke first ("Small × 10ⁿ: asked …, typed …"). */
+  failedStep?: string | null;
 }
 
 export interface EnvelopeNote {
@@ -1034,6 +1347,8 @@ export interface EnvelopeStats {
   causes: { cause: EnvelopeCause; n: number }[];
   due: number;
   cards: number;
+  /** Phase I: error rate per guided step type. */
+  steps?: StepTypeStat[];
 }
 
 /** The Today warm-up's "Envelope ×5". */
@@ -1047,6 +1362,12 @@ export interface TodayEnvelope {
   remaining: number;
   done: boolean;
   href: string;
+  /** Phase I: the warm-up is guided while still learning (< 20 answers or < 70%). */
+  guided?: boolean;
+  /** Today's one skill while guided ("per day → per second"). */
+  skill?: { id: string; label: string } | null;
+  /** What the warm-up link adds ("&guided=1&skill=per-second"). */
+  query?: string;
 }
 
 export function envelopeRemaining(daily: number, doneToday: number, due: number): number {

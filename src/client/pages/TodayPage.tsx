@@ -324,8 +324,13 @@ function EnvelopeRow({ e }: { e: TodayState['envelope'] }) {
             <span className="text-xs text-muted-foreground">{e.remaining} to go</span>
           )}
         </div>
+        {e.skill && (
+          <div className="text-xs">
+            <span className="font-medium text-primary">Today&apos;s skill:</span> {e.skill.label} · guided, one step at a time
+          </div>
+        )}
         <div className="text-xs text-muted-foreground">
-          Back-of-the-envelope math, interview style: small × 10ⁿ, add or subtract exponents, back up the ladder.
+          Back-of-the-envelope math, interview style: small × 10ⁿ, add or subtract exponents, then back with commas.
           {e.due > 0 ? ` ${e.due} review card${e.due === 1 ? '' : 's'} due.` : ''}
         </div>
       </div>

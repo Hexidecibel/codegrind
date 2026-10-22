@@ -21,6 +21,8 @@ You get one question, the correct answer with its worked split, the candidate's 
 - slip: ONE or two sentences naming the exact step that went wrong. When they wrote working, quote the faulty step from it. Without working, reason from the number they gave (e.g. "20 is 50 million ÷ 2.5 million — the month constant, not the day"). If the checker's cause is wrong, say what it really was.
 - fix: ONE sentence — the habit that prevents this slip next time, phrased as something to do ("write 5 × 10^7 ÷ 10^5 before you touch the digits").
 
+- When a "Guided step that went wrong" is given, the slip MUST name that step and what they typed there, in plain words for a beginner.
+
 Plain words, no praise, no restating the whole solution. Call emit_envelope_note exactly once.`;
 
 // Strict (exactSchema): every property required, no extras. `fix` is last: the
@@ -55,6 +57,8 @@ export interface EnvelopeNoteInput {
   cause: string;
   /** Their typed working; '' when none. */
   working: string;
+  /** Guided mode (Phase I): the step that broke, with what they typed there. */
+  step?: string;
 }
 
 export interface EnvelopeNoteResult {
@@ -75,6 +79,7 @@ export function renderEnvelopeNoteInput(i: EnvelopeNoteInput): string {
     `Checker: ${i.verdict.trim()} Likely cause: ${i.cause.trim()}`,
     '',
     i.working.trim() ? `Candidate's working:\n${i.working.trim().slice(0, 2000)}` : "Candidate's working: (none written)",
+    ...(i.step?.trim() ? ['', `Guided step that went wrong: ${i.step.trim().slice(0, 500)}`] : []),
   ].join('\n');
 }
 

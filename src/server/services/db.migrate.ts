@@ -634,6 +634,60 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
         CREATE INDEX IF NOT EXISTS idx_forge_day ON story_forge_sessions (day);
       `);
 
+      // Phase I (Envelope learning upgrades). Additive, always-run:
+      //   envelope_steps          one row per checked guided step: the type, what
+      //                           was typed, right or not and the named slip. Rows
+      //                           with counted = 0 only reset a faded step's streak
+      //                           (a final miss brought it back) and stay out of
+      //                           the error rates.
+      //   envelope_anchor_cards   the SRS schedule per anchor flashcard (id from
+      //                           shared/envelope-learn.ts ANCHOR_CARDS)
+      //   envelope_speed_rounds   one row per 60 s speed round
+      //   envelope_attempts.mode       plain | guided
+      //   envelope_attempts.failedStep the guided step that broke (for the AI note)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS envelope_steps (
+          id        INTEGER PRIMARY KEY AUTOINCREMENT,
+          itemKey   TEXT NOT NULL,
+          stepType  TEXT NOT NULL,
+          stepIndex INTEGER NOT NULL,
+          prompt    TEXT NOT NULL,
+          answer    TEXT NOT NULL,
+          ok        INTEGER NOT NULL,
+          slip      TEXT,
+          feedback  TEXT NOT NULL DEFAULT '',
+          counted   INTEGER NOT NULL DEFAULT 1,
+          createdAt TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_envelope_steps_type ON envelope_steps (stepType, createdAt);
+        CREATE INDEX IF NOT EXISTS idx_envelope_steps_item ON envelope_steps (itemKey, createdAt);
+
+        CREATE TABLE IF NOT EXISTS envelope_anchor_cards (
+          id             TEXT PRIMARY KEY,
+          step           INTEGER NOT NULL DEFAULT 0,
+          dueAt          TEXT NOT NULL,
+          reps           INTEGER NOT NULL DEFAULT 0,
+          lapses         INTEGER NOT NULL DEFAULT 0,
+          lastGrade      TEXT,
+          lastReviewedAt TEXT,
+          retiredAt      TEXT,
+          createdAt      TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS envelope_speed_rounds (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          score      INTEGER NOT NULL,
+          correct    INTEGER NOT NULL,
+          attempted  INTEGER NOT NULL,
+          bestStreak INTEGER NOT NULL,
+          createdAt  TEXT NOT NULL
+        );
+      `);
+      if (tableExists(db, 'envelope_attempts')) {
+        addColumnIfMissing(db, 'envelope_attempts', 'mode', "TEXT NOT NULL DEFAULT 'plain'");
+        addColumnIfMissing(db, 'envelope_attempts', 'failedStep', 'TEXT');
+      }
+
       // --- VERSIONED ----------------------------------------------------------
       // Expensive or destructive. Gated on the version marker so a warm database
       // doesn't pay on every boot — but each step still asks the DATABASE
