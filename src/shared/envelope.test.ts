@@ -121,6 +121,25 @@ describe('parseAnswer', () => {
     expect(v('3 terabytes')).toMatchObject({ number: 3, prefix: 1e12, dim: 'bytes' });
     expect(v('4 gigabits per second')).toMatchObject({ dim: 'bits', per: 's' });
   });
+
+  it('reads all-lowercase "gb"/"tb" as bytes, the way people type them', () => {
+    expect(v('8 tb')).toMatchObject({ prefix: 1e12, dim: 'bytes' });
+    expect(v('8000 gb')).toMatchObject({ prefix: 1e9, dim: 'bytes' });
+    expect(v('125 mb/s')).toMatchObject({ dim: 'bytes', per: 's' });
+    expect(v('10 gbps')).toMatchObject({ dim: 'bits', per: 's' });
+    expect(v('10 gbit')).toMatchObject({ dim: 'bits' });
+  });
+});
+
+describe('checkAnswer with alternatives', () => {
+  it('accepts "8000 gb or 8 tb" when every alternative is right (2026-10-21 live miss)', () => {
+    expect(checkAnswer(GB_DAY, '8000 gb or 8 tb')?.ok).toBe(true);
+    expect(checkAnswer(GB_DAY, '8000 GB = 8 TB')?.ok).toBe(true);
+  });
+
+  it('fails a hedge when any alternative is wrong', () => {
+    expect(checkAnswer(GB_DAY, '8 TB or 80 TB')?.ok).toBe(false);
+  });
 });
 
 describe('checkAnswer on the seeded cards (the 2026-10-21 diagnostic)', () => {

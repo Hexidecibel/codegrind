@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Re-check Envelope card attempts with the current checker; fix wrong grades.
+# Thin wrapper around bin/regrade-envelope.ts. No model call. Idempotent.
+#
+#   bin/regrade-envelope --dry-run   # print what would change
+#   bin/regrade-envelope             # write (idempotent)
+#
+# Run AFTER bin/deploy, so the running service already has the envelope tables.
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+# shellcheck source=lib/node.sh
+source "$REPO/bin/lib/node.sh"
+cg_require_node
+
+if [[ -f "$REPO/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO/.env"
+  set +a
+fi
+
+exec npx tsx bin/regrade-envelope.ts "$@"

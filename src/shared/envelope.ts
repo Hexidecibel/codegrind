@@ -753,7 +753,11 @@ export function parseAnswer(text: string): ParsedAnswer | null {
   } else if (abbr && !(abbr[1] === '' && !abbr[3])) {
     // "8TB", "125MB/s", "10Gbps". A lone "B"/"b" with no prefix is "billion" ("10B"), not bytes.
     prefix = PREFIX[abbr[1].toLowerCase()] ?? 1;
-    dim = abbr[2] === 'B' && !/^it/.test(abbr[3] ?? '') ? 'bytes' : 'bits';
+    // Bits only when the answer says so: "bit(s)", a rate in "bps", or the
+    // conventional mixed case "Gb"/"Mb". All-lowercase "gb"/"tb" is how people
+    // type bytes, and reading "8 tb" as terabits failed a right answer.
+    const casualLower = abbr[1] !== '' && abbr[1] === abbr[1].toLowerCase() && !abbr[3];
+    dim = /^it/.test(abbr[3] ?? '') ? 'bits' : abbr[2] === 'B' || casualLower ? 'bytes' : 'bits';
     if (abbr[3] === 'ps') rest = `/s ${rest.slice(abbr[0].length)}`;
     else rest = rest.slice(abbr[0].length);
     rest = rest.trim();
@@ -866,6 +870,13 @@ export function restatesQuestion(p: Pick<ParsedAnswer, 'per' | 'dim'>, item: Pic
 }
 
 export function checkAnswer(item: EnvelopeItem, text: string): EnvelopeVerdict | null {
+  // "8000 GB or 8 TB", "8000 GB = 8 TB": every alternative must be right, so a
+  // hedge ("500 or 5000") still fails; the first wrong one is the verdict.
+  const parts = text.split(/\s+or\s+|\s*=\s*/i).filter((t) => t.trim());
+  if (parts.length > 1) {
+    const verdicts = parts.map((t) => checkAnswer(item, t)).filter((v): v is EnvelopeVerdict => v !== null);
+    if (verdicts.length) return verdicts.find((v) => !v.ok) ?? verdicts[0];
+  }
   const p = parseAnswer(text);
   if (!p) return null;
   let given = toItemValue(p, item);
