@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { Link } from 'react-router-dom';
+import { patternForTopic, patternHref } from '@/shared/pattern-shapes';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Problem, Difficulty } from '@/shared/types';
@@ -43,6 +45,7 @@ export function ProblemPanel({
   // See client/lib/examples.ts for why the de-duplication is per-example and
   // content-based rather than a prompt fix or a markdown edit.
   const examples = unshownExamples(problem.prompt, problem.examples);
+  const shape = patternForTopic(problem.topic);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
@@ -65,6 +68,17 @@ export function ProblemPanel({
                 >
                   {humanize(problem.pattern)}
                 </Badge>
+                {/* Same visibility as the topic badge: never in a mock, and
+                    only after the first submit when the topic is hidden. */}
+                {shape && (
+                  <Link
+                    to={patternHref(shape.id)}
+                    className="text-xs text-primary underline-offset-4 hover:underline"
+                    title={`The code shape of ${shape.title}`}
+                  >
+                    Pattern shape →
+                  </Link>
+                )}
               </>
             )}
             {/*

@@ -8,8 +8,10 @@ import {
   Sun,
   AlertTriangle,
   Sparkles,
+  Shapes,
 } from 'lucide-react';
 import { TOPICS } from '@/shared/types';
+import { patternForTopic, patternHref } from '@/shared/pattern-shapes';
 import type { Lesson, StudyPosition, Topic } from '@/shared/types';
 import { getStudyFeed, jumpToTopic, markLessonRead } from '@/client/lib/api';
 import { LessonCard } from '@/client/components/LessonCard';
@@ -333,6 +335,14 @@ export function StudyPage() {
             )}
           </div>
 
+          {/* The code shape of the current topic's pattern (or all of them). */}
+          <Link
+            to={position && patternForTopic(position.topic) ? patternHref(patternForTopic(position.topic)!.id) : '/patterns'}
+            title={position && patternForTopic(position.topic) ? `${patternForTopic(position.topic)!.title}: the code shape` : 'Pattern shapes'}
+            className="inline-flex h-11 shrink-0 items-center gap-1 rounded-md px-2 text-xs font-medium text-primary transition-colors hover:bg-accent"
+          >
+            <Shapes className="h-3.5 w-3.5" /> Shapes
+          </Link>
           {/* Phase H3: the AI-systems track (one lesson per AI concept). */}
           <Link
             to="/concepts"

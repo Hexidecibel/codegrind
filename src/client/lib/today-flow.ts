@@ -5,7 +5,7 @@
 // onward once the server says the day has moved past it. Pure, so the rule is
 // tested without a browser.
 
-import { STEP_NOTE_IDS, STEP_NOTE_LABEL, TODAY_STEPS, type StepNoteId, type TodayState, type TodayStepId } from '@/shared/today';
+import { STEP_NOTE_IDS, STEP_NOTE_LABEL, TODAY_STEPS, isTodayStep, type StepNoteId, type TodayState, type TodayStepId } from '@/shared/today';
 
 export interface TodayLink {
   label: string;
@@ -22,7 +22,9 @@ const NOTE_ORDER: Readonly<Record<StepNoteId, number>> = { warmup: 0, recognize:
 /** The carry from the latest note BEFORE `step`, or null. Pure. */
 export function carryInto(state: Pick<TodayState, 'stepNotes'>, step: TodayStepId | null): TodayLink['carry'] {
   if (step === null || !state.stepNotes) return null;
-  const at = TODAY_STEPS.indexOf(step);
+  // A Pattern Refresh step: its notes target a normal day's steps, so no carry.
+  const at = (TODAY_STEPS as readonly TodayStepId[]).indexOf(step);
+  if (at < 0) return null;
   let best: TodayLink['carry'] = null;
   for (const id of STEP_NOTE_IDS) {
     const n = state.stepNotes[id];
@@ -38,7 +40,7 @@ export function todayStepFrom(search: string): TodayStepId | null {
   const q = new URLSearchParams(search);
   if (q.get('from') !== 'today') return null;
   const step = q.get('step');
-  return (TODAY_STEPS as readonly string[]).includes(step ?? '') ? (step as TodayStepId) : null;
+  return isTodayStep(step) ? step : null;
 }
 
 const pathOf = (href: string) => href.split(/[?#]/)[0];

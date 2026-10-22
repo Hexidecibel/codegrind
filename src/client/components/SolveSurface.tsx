@@ -152,6 +152,12 @@ export interface SolveSurfaceProps {
   sidePanelLabel?: string;
   /** The buffer to open with instead of the starter (a resumed coding mock). */
   initialCode?: string;
+  /**
+   * Topic hidden until the first submit (a Pattern Refresh cold review or
+   * mixed problem): no topic / pattern badge and no "Pattern shape" link —
+   * naming the pattern is the exercise. A mock hides them for good.
+   */
+  hidePattern?: boolean;
 }
 
 const emptyPrediction = (): Prediction => ({
@@ -187,6 +193,7 @@ export function SolveSurface({
   sidePanel,
   sidePanelLabel = 'Chat',
   initialCode,
+  hidePattern,
 }: SolveSurfaceProps) {
   const [storedAssistance, setStoredAssistance] = useLocalStorage<AssistanceSettings>(
     'codegrind.assistance',
@@ -1187,7 +1194,7 @@ export function SolveSurface({
               sidePanel ? 'w-[30%]' : 'w-[42%]',
             )}
           >
-            <ProblemPanel problem={problem} hidePattern={!!mockId} />
+            <ProblemPanel problem={problem} hidePattern={!!mockId || (!!hidePattern && !submitResult)} />
           </div>
 
           {/* Right — workspace */}
@@ -1405,7 +1412,7 @@ export function SolveSurface({
           aria-labelledby="tab-problem"
           className={cn('min-h-0 flex-1', pane !== 'problem' && 'hidden')}
         >
-          <ProblemPanel problem={problem} footer={contextFooter} hidePattern={!!mockId} />
+          <ProblemPanel problem={problem} footer={contextFooter} hidePattern={!!mockId || (!!hidePattern && !submitResult)} />
         </div>
         {/* overflow-hidden: belt and braces so the editor can never paint
             outside its slot, whatever the floor above resolves to. */}

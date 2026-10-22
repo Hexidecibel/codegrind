@@ -49,6 +49,7 @@ import {
 import { humanize } from '@/client/lib/format';
 import { unshownExamples } from '@/client/lib/examples';
 import { todayStepFrom } from '@/client/lib/today-flow';
+import { patternForTopic, patternHref } from '@/shared/pattern-shapes';
 import { TodayNextBar } from '@/client/components/TodayNextBar';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -155,6 +156,15 @@ function RevealPanel({
           </>
         )}
         <span className="text-sm text-muted-foreground">· {reveal.title}</span>
+        {/* Only after the reveal: before it, this would name the answer. */}
+        {patternForTopic(reveal.topic) && (
+          <Link
+            to={patternHref(patternForTopic(reveal.topic)!.id)}
+            className="ml-auto text-xs text-primary underline-offset-4 hover:underline"
+          >
+            {patternForTopic(reveal.topic)!.title} shape →
+          </Link>
+        )}
       </div>
 
       {note && (

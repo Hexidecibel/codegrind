@@ -243,6 +243,20 @@ export function HelpPage() {
               A continuous reading feed of written lessons over the same
               curriculum, for when you would rather read than type.
             </Term>
+            <Term label="Patterns">
+              <Link to="/patterns" className="text-primary underline-offset-4 hover:underline">
+                Pattern shapes
+              </Link>{' '}
+              (under Study, and linked from Today, Recognize and every solved
+              problem): the code shape of each pattern — the clues that give it
+              away, the shape in one sentence, a JavaScript template and the
+              trap. <strong>Write it from memory</strong> hides the template:
+              type the skeleton, compare, grade yourself; the grade schedules a
+              free recall card that comes back in the warm-up. Today&apos;s{' '}
+              <strong>Pattern refresh</strong> toggle runs a 9-day plan on
+              them — one pattern a day, then a mixed day — in place of the mock
+              and concept rep.
+            </Term>
             <Term label="Settings">
               Which model writes your problems, and which language you practise
               in. The <strong>?</strong> beside it is this page.

@@ -530,6 +530,13 @@ export function GrindPage() {
             >
               envelope math reps
             </Link>
+            <span className="mx-2 text-xs text-muted-foreground">·</span>
+            <Link
+              to="/patterns"
+              className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              pattern shapes
+            </Link>
           </div>
         </div>
       </div>
