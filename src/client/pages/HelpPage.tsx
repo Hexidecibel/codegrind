@@ -742,6 +742,15 @@ export function HelpPage() {
             split, and comes back as a review card. Today's warm-up includes Envelope ×5, and a mock gap about
             capacity becomes an Envelope card too.
           </p>
+          <p>
+            New to this kind of math? Turn on <strong>Guided</strong>: it asks one small thing at a time (divide or
+            multiply? each number as small × 10ⁿ, the small math, the exponents, back to a normal number by knocking
+            off commas, then the unit) and says exactly what slipped. A step you get right 3 times in a row fills
+            itself in; a miss brings it back. You can also pick one drill type, go Endless (it leans toward what you
+            miss), flip the anchor cards (about 10 seconds each), or race a 60-second speed round. While you are still
+            learning (under 20 answers, or under 70% right), Today&apos;s warm-up is guided and works on one skill a
+            day.
+          </p>
         </HelpBlock>
       </div>
     </div>

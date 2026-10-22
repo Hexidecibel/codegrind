@@ -25,7 +25,7 @@ interface Row {
   createdAt: string;
 }
 const rows = db
-  .prepare(`SELECT id, cardKey, answer, ok, createdAt FROM envelope_attempts WHERE cardKey IS NOT NULL ORDER BY createdAt, id`)
+  .prepare(`SELECT id, cardKey, answer, ok, createdAt FROM envelope_attempts WHERE cardKey IS NOT NULL AND COALESCE(mode, 'plain') = 'plain' ORDER BY createdAt, id`)
   .all() as Row[];
 
 const flippedCards = new Set<string>();

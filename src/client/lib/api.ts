@@ -60,6 +60,14 @@ import type {
 } from '@/shared/recognize';
 import type { ConceptLesson, ConceptRepView, ConceptToday, ConceptTrack } from '@/shared/concepts';
 import type { EnvelopeCheckResponse, EnvelopeNote, EnvelopeSession, EnvelopeStats } from '@/shared/envelope';
+import type {
+  AnchorCheckResponse,
+  AnchorSession,
+  GuidedPlanResponse,
+  SpeedRoundResult,
+  SpeedRoundStart,
+  StepCheckResponse,
+} from '@/shared/envelope-learn';
 import type { ForgeOptions, ForgeSessionView } from '@/shared/story-forge';
 import type { DdProjectsResponse } from '@/shared/deep-dive';
 
@@ -718,13 +726,47 @@ export function getRecognizeStats(): Promise<RecognizeStats> {
 // ---------------------------------------------------------------------------
 
 /** GET /api/envelope/session — due cards first, then fresh reps. Free. */
-export function getEnvelopeSession(n: number): Promise<EnvelopeSession> {
-  return request<EnvelopeSession>(`/api/envelope/session?n=${n}`);
+export function getEnvelopeSession(n: number, opts: { kind?: string; skill?: string; mode?: 'endless' } = {}): Promise<EnvelopeSession> {
+  const q = new URLSearchParams({ n: String(n) });
+  if (opts.kind) q.set('kind', opts.kind);
+  if (opts.skill) q.set('skill', opts.skill);
+  if (opts.mode) q.set('mode', opts.mode);
+  return request<EnvelopeSession>(`/api/envelope/session?${q}`);
 }
 
 /** POST /api/envelope/check — parse, classify, record, schedule. Free. */
-export function checkEnvelope(key: string, answer: string, working: string): Promise<EnvelopeCheckResponse> {
-  return request<EnvelopeCheckResponse>('/api/envelope/check', { method: 'POST', body: JSON.stringify({ key, answer, working }) });
+export function checkEnvelope(key: string, answer: string, working: string, mode: 'plain' | 'guided' = 'plain'): Promise<EnvelopeCheckResponse> {
+  return request<EnvelopeCheckResponse>('/api/envelope/check', { method: 'POST', body: JSON.stringify({ key, answer, working, mode }) });
+}
+
+/** GET /api/envelope/guided — an item's guided steps (faded ones filled in). Free. */
+export function getEnvelopeGuided(key: string): Promise<GuidedPlanResponse> {
+  return request<GuidedPlanResponse>(`/api/envelope/guided?key=${encodeURIComponent(key)}`);
+}
+
+/** POST /api/envelope/step — one guided step, checked and recorded. Free. */
+export function checkEnvelopeStep(key: string, index: number, answer: string): Promise<StepCheckResponse> {
+  return request<StepCheckResponse>('/api/envelope/step', { method: 'POST', body: JSON.stringify({ key, index, answer }) });
+}
+
+/** GET /api/envelope/anchors — due anchor flashcards. Free. */
+export function getEnvelopeAnchors(): Promise<AnchorSession> {
+  return request<AnchorSession>('/api/envelope/anchors');
+}
+
+/** POST /api/envelope/anchors/check — {id, answer, ms}. Free. */
+export function checkEnvelopeAnchor(id: string, answer: string, ms: number): Promise<AnchorCheckResponse> {
+  return request<AnchorCheckResponse>('/api/envelope/anchors/check', { method: 'POST', body: JSON.stringify({ id, answer, ms }) });
+}
+
+/** GET /api/envelope/speed — a 60 s speed round. Free. */
+export function getEnvelopeSpeed(): Promise<SpeedRoundStart> {
+  return request<SpeedRoundStart>('/api/envelope/speed');
+}
+
+/** POST /api/envelope/speed — the round's answers, re-graded and scored. Free. */
+export function finishEnvelopeSpeed(answers: { key: string; answer: string; atMs: number }[]): Promise<SpeedRoundResult> {
+  return request<SpeedRoundResult>('/api/envelope/speed', { method: 'POST', body: JSON.stringify({ answers }) });
 }
 
 /** POST /api/envelope/note — ONE small model call on a miss (cached per attempt). */

@@ -172,7 +172,7 @@ export function getToday(now = new Date()): TodayState {
     cardsDue: store.cardsDueBefore(dayStart, now),
     reviewsDue: store.reviewsDue(language, dayStart, now),
     cardsReviewedToday: store.cardsReviewedSince(dayStart).length,
-    envelope: { remaining: envelope.remaining, doneToday: envelope.doneToday },
+    envelope: { remaining: envelope.remaining, doneToday: envelope.doneToday, query: envelope.query },
     skips: row.skips,
     endedEarly: !!row.endedEarlyAt,
     mockKind,

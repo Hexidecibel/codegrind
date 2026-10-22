@@ -133,7 +133,7 @@ export interface DeriveInput {
    * Envelope ×N (Phase G): what is left of today's reps (due envelope cards
    * lead them) and how many were answered. Absent = no envelope part.
    */
-  envelope?: { remaining: number; doneToday: number };
+  envelope?: { remaining: number; doneToday: number; query?: string };
   skips: readonly TodayStepId[];
   endedEarly: boolean;
   mockKind: MockKind;
@@ -237,7 +237,7 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
     input.cardsDue > 0
       ? `/mock?${from('warmup')}#cards`
       : env.remaining > 0
-        ? `/envelope?${from('warmup')}&n=${env.remaining}`
+        ? `/envelope?${from('warmup')}&n=${env.remaining}${env.query ?? ''}`
         : reviewsDue > 0
           ? `/grind?${from('warmup')}`
           : '/today';
