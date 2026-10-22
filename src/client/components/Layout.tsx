@@ -1,5 +1,5 @@
 import { type ReactNode } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import {
   CalendarCheck,
   Code2,
@@ -24,13 +24,18 @@ function Tab({
    * the six content tabs label from `md`; the gear waits for `lg`.
    */
   labelClass = 'hidden md:inline',
+  alsoActiveOn = [],
 }: {
+  /** Other paths this tab owns (Study also lights up on /patterns). */
+  alsoActiveOn?: string[];
   to: string;
   icon: ReactNode;
   label: string;
   end?: boolean;
   labelClass?: string;
 }) {
+  const { pathname } = useLocation();
+  const owned = alsoActiveOn.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   return (
     <NavLink
       to={to}
@@ -42,7 +47,7 @@ function Tab({
           // Below `sm` the label is hidden, so the text line-box no longer sets
           // the height — without min-h/min-w these collapse to a 40×28 target.
           'inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors sm:min-h-0 sm:min-w-0',
-          isActive
+          isActive || owned
             ? 'bg-secondary text-foreground'
             : 'text-muted-foreground hover:text-foreground',
         )
@@ -117,7 +122,9 @@ export function Layout({ children }: { children: ReactNode }) {
             {/* Route stays /progress so old bookmarks keep working; the label is
                 what the page actually does now. */}
             <Tab to="/progress" icon={<BarChart3 className="h-4 w-4" />} label="Reflect" />
-            <Tab to="/study" icon={<BookOpen className="h-4 w-4" />} label="Study" />
+            {/* Pattern shapes live under Study (no room for an eighth tab, see above);
+                the Study header, Today and the solve screens all link to them. */}
+            <Tab to="/study" icon={<BookOpen className="h-4 w-4" />} label="Study" alsoActiveOn={['/patterns']} />
             {/* Last, and the only tab that is not a place you practice: it is
                 where you change who writes the problems. */}
             <Tab

@@ -2,6 +2,7 @@
 // contract type from @/shared/types. Errors surface as thrown Error objects
 // (the server responds `{ error: string }` on failure).
 
+import type { PatternId, PatternsState } from '@/shared/pattern-shapes';
 import type {
   Problem,
   RunResult,
@@ -649,6 +650,29 @@ export function runTodayDebrief(regenerate = false): Promise<TodayState> {
 /** POST /api/today/quick — the "30-min day" toggle for today. Free. */
 export function setTodayQuick(on: boolean): Promise<TodayState> {
   return request<TodayState>('/api/today/quick', { method: 'POST', body: JSON.stringify({ on }) });
+}
+
+/** POST /api/today/refresh — the "Pattern refresh" toggle. Free. */
+export function setTodayRefresh(on: boolean): Promise<TodayState> {
+  return request<TodayState>('/api/today/refresh', { method: 'POST', body: JSON.stringify({ on }) });
+}
+
+// ---------------------------------------------------------------------------
+// Pattern shapes (/patterns) — all free
+// ---------------------------------------------------------------------------
+export function getPatterns(): Promise<PatternsState> {
+  return request<PatternsState>('/api/patterns');
+}
+
+export function viewPattern(id: PatternId): Promise<PatternsState> {
+  return request<PatternsState>(`/api/patterns/${encodeURIComponent(id)}/view`, { method: 'POST', body: '{}' });
+}
+
+export function gradePatternRecall(id: PatternId, grade: 'got' | 'shaky' | 'missed', answer: string): Promise<PatternsState> {
+  return request<PatternsState>(`/api/patterns/${encodeURIComponent(id)}/recall`, {
+    method: 'POST',
+    body: JSON.stringify({ grade, answer }),
+  });
 }
 
 // ---------------------------------------------------------------------------

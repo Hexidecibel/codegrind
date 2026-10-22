@@ -27,12 +27,24 @@ import {
   Timer,
   Trophy,
   Wrench,
+  Shapes,
+  RefreshCw,
 } from 'lucide-react';
-import { QUICK_OFF_STEPS, READINESS_VERDICT_LABEL, type ReadinessVerdict, type StepNote, type TodayState, type TodayStep } from '@/shared/today';
+import {
+  QUICK_OFF_STEPS,
+  READINESS_VERDICT_LABEL,
+  STEP_NOTE_IDS,
+  type ReadinessVerdict,
+  type StepNote,
+  type StepNoteId,
+  type TodayState,
+  type TodayStep,
+} from '@/shared/today';
+import { patternHref } from '@/shared/pattern-shapes';
 import { ROUND_LABEL, countdownPhrase } from '@/shared/loops';
 import { InterviewsPanel } from '@/client/components/InterviewsPanel';
 import { mockKindInfo } from '@/shared/mock-kinds';
-import { endTodayEarly, getToday, runTodayDebrief, setTodayQuick, skipTodayStep, ApiError } from '@/client/lib/api';
+import { endTodayEarly, getToday, runTodayDebrief, setTodayQuick, setTodayRefresh, skipTodayStep, ApiError } from '@/client/lib/api';
 import { humanize } from '@/client/lib/format';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -96,7 +108,7 @@ function Header({ state }: { state: TodayState }) {
             {state.current === null ? 'Day complete' : `${state.completed} of ${state.total} steps`}
             {state.endedEarly ? ' · ended early' : ''}
           </span>
-          <span>{state.quick ? '~30 min' : '~90 min'}</span>
+          <span>{state.refresh.on ? '~60 min' : state.quick ? '~30 min' : '~90 min'}</span>
         </div>
         <div
           className="h-2.5 overflow-hidden rounded-full bg-secondary"
@@ -180,7 +192,9 @@ function StepRow({
   note,
   notePending = false,
   offToday = false,
+  lockedText = 'Unlocks after the mock (or end the day early).',
 }: {
+  lockedText?: string;
   /** Turned off by the 30-min day: no Undo (turn the mode off instead). */
   offToday?: boolean;
   step: TodayStep;
@@ -226,7 +240,7 @@ function StepRow({
             </p>
           ) : (
             <p className="text-sm text-muted-foreground">
-              {step.status === 'locked' ? 'Unlocks after the mock (or end the day early).' : step.detail}
+              {step.status === 'locked' ? lockedText : step.detail}
             </p>
           )}
           <StepNoteLine note={note} pending={notePending} />
@@ -339,6 +353,86 @@ function EnvelopeRow({ e }: { e: TodayState['envelope'] }) {
           {e.done ? 'More' : 'Start'} <ArrowRight className="h-3.5 w-3.5" />
         </Link>
       </Button>
+    </div>
+  );
+}
+
+const isNoteId = (id: string): id is StepNoteId => (STEP_NOTE_IDS as readonly string[]).includes(id);
+
+/**
+ * "Pattern refresh": the 9-day plan (one pattern a day, then a mixed day).
+ * On = a big "Refresh day N of 9 — <pattern>" banner and the refresh steps;
+ * off = a toggle row like the 30-min day's, plus a note once it has finished.
+ */
+function RefreshPanel({ state, busy, onToggle }: { state: TodayState; busy: boolean; onToggle: (on: boolean) => void }) {
+  const r = state.refresh;
+  if (r.on) {
+    return (
+      <section className="space-y-2 rounded-xl border border-violet-500/40 bg-gradient-to-b from-violet-500/[0.09] to-transparent p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <RefreshCw className="h-5 w-5 text-violet-400" />
+          <h2 className="text-lg font-bold">
+            Refresh day {r.day} of {r.total} — {r.label}
+          </h2>
+          {r.dayComplete && <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-300">day done · next pattern tomorrow</span>}
+        </div>
+        <p className="text-sm text-muted-foreground">
+          {r.pattern
+            ? 'One pattern a day: re-learn its shape, write it from memory, practise it named, then a cold review of yesterday’s pattern (unnamed) and Recognize ×5. No mock or concept rep this week.'
+            : 'Last day: three mediums, any pattern, topic hidden. Name the pattern and say its shape before you code.'}{' '}
+          A missed day never skips a pattern — the day moves on only when its steps are done or skipped.
+        </p>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          {r.pattern && (
+            <Button asChild size="sm" variant="outline" className="gap-1">
+              <Link to={patternHref(r.pattern)}>
+                <Shapes className="h-3.5 w-3.5" /> {r.label} shape
+              </Link>
+            </Button>
+          )}
+          <Button asChild size="sm" variant="ghost" className="gap-1 text-muted-foreground">
+            <Link to="/patterns">All pattern shapes</Link>
+          </Button>
+          <span className="ml-auto text-xs text-muted-foreground">
+            Extras (optional): <Link to="/concept" className="underline-offset-4 hover:underline">concept rep</Link> ·{' '}
+            <Link to="/stories" className="underline-offset-4 hover:underline">story forge</Link>
+          </span>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            className="text-muted-foreground"
+            onClick={() => {
+              if (window.confirm('Turn the pattern refresh off? Today goes back to the normal day; turning it back on resumes where you left off.')) onToggle(false);
+            }}
+          >
+            Turn off
+          </Button>
+        </div>
+      </section>
+    );
+  }
+  const recentlyFinished = r.finishedAt && Date.now() - Date.parse(r.finishedAt) < 4 * 86_400_000;
+  return (
+    <div className="space-y-2">
+      {recentlyFinished && (
+        <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+          Pattern refresh finished — all {r.total} days done. Today is back to the normal routine; the pattern cards you wrote from memory come back in the warm-up when they are due.
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
+        <RefreshCw className="h-4 w-4 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="font-medium">Pattern refresh</div>
+          <div className="text-xs text-muted-foreground">
+            A 9-day reset: one pattern a day (hash map → intervals), then a mixed day. Replaces the mock and concept rep while it runs.
+            {r.completedThrough > 0 && r.completedThrough < r.total ? ` Resumes at day ${r.completedThrough + 1}.` : ''}
+          </div>
+        </div>
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => onToggle(true)}>
+          {r.completedThrough >= r.total ? 'Run it again' : 'Turn on'}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -549,13 +643,25 @@ export function TodayPage() {
       <div className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
         <Header state={state} />
 
+        {state.refresh.on && <RefreshPanel state={state} busy={busy} onToggle={(on) => void act(() => setTodayRefresh(on))} />}
+
         <InterviewsPanel today={state.date} onChange={() => void getToday().then(setState).catch(() => undefined)} />
 
         {/* Phase H4: the story forge is always one click away, not only on forge days. */}
-        <Link to="/stories" className="block text-right text-xs text-muted-foreground underline-offset-4 hover:underline">
-          Story forge — draft a behavioral story by voice →
-        </Link>
+        <div className="flex flex-wrap justify-end gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          <Link to="/patterns" className="underline-offset-4 hover:underline">
+            Pattern shapes — the code shape of each pattern →
+          </Link>
+          {!state.refresh.on && (
+            <Link to="/stories" className="underline-offset-4 hover:underline">
+              Story forge — draft a behavioral story by voice →
+            </Link>
+          )}
+        </div>
 
+        {!state.refresh.on && <RefreshPanel state={state} busy={busy} onToggle={(on) => void act(() => setTodayRefresh(on))} />}
+
+        {!state.refresh.on && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
           <Timer className="h-4 w-4 text-muted-foreground" />
           <div className="min-w-0 flex-1">
@@ -568,6 +674,7 @@ export function TodayPage() {
             {state.quick ? 'Back to the full day' : 'Short on time'}
           </Button>
         </div>
+        )}
 
         {error && <p className="text-sm text-destructive-foreground">{error}</p>}
 
@@ -580,14 +687,15 @@ export function TodayPage() {
               busy={busy}
               onSkip={() => act(() => skipTodayStep(s.id, true))}
               onUnskip={() => act(() => skipTodayStep(s.id, false))}
-              offToday={state.quick && QUICK_OFF_STEPS.includes(s.id) && s.status === 'skipped'}
-              note={s.id === 'debrief' ? undefined : state.stepNotes[s.id]}
-              notePending={s.id !== 'debrief' && state.aiPending.includes(s.id)}
+              offToday={!!s.off || (state.quick && QUICK_OFF_STEPS.includes(s.id) && s.status === 'skipped')}
+              lockedText={state.refresh.on ? 'Unlocks once today’s pattern steps are done or skipped (or end the day early).' : undefined}
+              note={isNoteId(s.id) ? state.stepNotes[s.id] : undefined}
+              notePending={isNoteId(s.id) && state.aiPending.includes(s.id)}
               extra={
                 s.id === 'warmup' ? (
                   <>
                     <EnvelopeRow e={state.envelope} />
-                    {state.recognize && (
+                    {state.recognize && !state.refresh.on && (
                       <RecognizeRow
                         r={state.recognize}
                         note={state.stepNotes.recognize}
@@ -622,9 +730,11 @@ export function TodayPage() {
               Resume the day
             </Button>
           )}
-          <span className="ml-auto text-xs text-muted-foreground">
-            Today's mock: {mockKindInfo(state.mockKind).label}
-          </span>
+          {!state.refresh.on && (
+            <span className="ml-auto text-xs text-muted-foreground">
+              Today's mock: {mockKindInfo(state.mockKind).label}
+            </span>
+          )}
         </div>
       </div>
     </div>

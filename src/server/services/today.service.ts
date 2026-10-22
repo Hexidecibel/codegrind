@@ -11,11 +11,12 @@ import type { Topic } from '../../shared/types.js';
 import { MOCK_KINDS, ROTATION_MOCK_KINDS, isMockKind, mockKindInfo } from '../../shared/mock-kinds.js';
 import { costOf } from '../../shared/mock.js';
 import {
+  ALL_STEP_IDS,
   QUICK_ENVELOPE_REPS,
   QUICK_OFF_STEPS,
+  REFRESH_CORE_STEPS,
   SKIPPABLE_STEPS,
   STEP_NOTE_LABEL,
-  TODAY_STEPS,
   applicableNotes,
   isTodayStep,
   type AiReviewTarget,
@@ -24,9 +25,23 @@ import {
   type ReadinessArea,
   type StepNote,
   type StepNoteId,
+  type TodayRefresh,
   type TodayState,
   type TodayStepId,
 } from '../../shared/today.js';
+import { REFRESH_DAYS } from '../../shared/pattern-shapes.js';
+import {
+  REFRESH_OFF,
+  completeDay,
+  deriveRefreshSteps,
+  mixedTopicsFor,
+  nextRefreshDay,
+  planOf,
+  previousPlan,
+  turnOn,
+  type RefreshProgress,
+} from './refresh.compute.js';
+import * as pstore from './patterns.store.js';
 import { getActiveLanguage, getAttemptsByProblem, getProblem, getTaggedAttempts, listLoops } from './db.js';
 import type { Language } from '../../shared/languages.js';
 import { biasKinds, loopCountdown, type LoopCountdown } from '../../shared/loops.js';
@@ -60,6 +75,7 @@ function forgeStep(now: Date): { day: boolean; doneToday: number; last: { title:
   return { day: isForgeDayNow(todayConcept(now).doneToday > 0, now), ...f };
 }
 import * as store from './today.store.js';
+import type { DerivedSteps } from './today.compute.js';
 import { runDebrief, type DebriefInput } from './llm.debrief.js';
 
 export class TodayError extends Error {
@@ -131,8 +147,9 @@ function dayContext(now: Date): DayContext {
  */
 export function breadthSlot(now = new Date()): { avoidTopic: string | null } | null {
   try {
-    const { dayStart, row } = dayContext(now);
+    const { date, dayStart, row } = dayContext(now);
     if (row.quick || row.endedEarlyAt || row.skips.includes('problem2')) return null;
+    if (refreshFor(date, now).day !== null) return null; // a refresh day has no Problem 2
     const attempts = store.attemptsSince(dayStart);
     const fresh = newProblemsToday({ attempts, dayStart });
     if (fresh.length !== 1) return null;
@@ -163,27 +180,71 @@ export function getToday(now = new Date()): TodayState {
 
   const attempts = store.attemptsSince(dayStart);
   const mocks = store.mocksSince(dayStart);
-  const envelope = todayEnvelope(dayStart, now, row.quick ? QUICK_ENVELOPE_REPS : undefined);
+  const rf = refreshFor(date, now);
+  // A refresh day keeps the warm-up short: Envelope ×3, like a 30-min day.
+  const envelope = todayEnvelope(dayStart, now, row.quick || rf.day !== null ? QUICK_ENVELOPE_REPS : undefined);
   const nextLoop = nextLoopFor(date);
-  const derived = deriveSteps({
+  const recallDue = safeCount(() => pstore.recallDueBefore(dayStart, now));
+  const patternRecall = { due: recallDue, doneToday: safeCount(() => pstore.recallReviewsSince(dayStart)) };
+  const recognize = todayRecognize(
     dayStart,
-    attempts,
-    mocks,
-    cardsDue: store.cardsDueBefore(dayStart, now),
-    reviewsDue: store.reviewsDue(language, dayStart, now),
-    cardsReviewedToday: store.cardsReviewedSince(dayStart).length,
-    envelope: { remaining: envelope.remaining, doneToday: envelope.doneToday, query: envelope.query },
-    skips: row.skips,
-    endedEarly: !!row.endedEarlyAt,
-    mockKind,
-    mockKindLabel: mockKindInfo(mockKind).label,
-    hasDebrief: !!row.debrief,
-    debriefVerdict: row.debrief?.verdict ?? null,
-    quick: row.quick,
-    concept: todayConcept(now),
-    forge: forgeStep(now),
-    finalReview: nextLoop?.isFinalReviewDay ? { company: nextLoop.company, daysLeft: nextLoop.daysLeft } : null,
-  });
+    // "the last 3 local days" = from local midnight two days ago
+    new Date(dayStartMs(previousDay(previousDay(date)), todayTz())).toISOString(),
+    now
+  );
+  let derived: DerivedSteps;
+  if (rf.day !== null) {
+    const plan = planOf(rf.day);
+    const since = new Date(dayStartMs(rf.firstDate, todayTz())).toISOString();
+    const r = deriveRefreshSteps({
+      day: rf.day,
+      since,
+      dayStart,
+      attempts,
+      cardsDue: store.cardsDueBefore(dayStart, now),
+      reviewsDue: 0,
+      cardsReviewedToday: store.cardsReviewedSince(dayStart).length,
+      envelope: { remaining: envelope.remaining, doneToday: envelope.doneToday, query: envelope.query },
+      patternRecall,
+      finalReview: nextLoop?.isFinalReviewDay ? { company: nextLoop.company, daysLeft: nextLoop.daysLeft } : null,
+      refreshAttempts: pstore.refreshAttemptsSince(since),
+      viewed: plan.pattern ? pstore.viewedSince(plan.pattern, since) : false,
+      recall: plan.pattern ? pstore.recallGradeSince(plan.pattern, since) : null,
+      coldProblemId: rf.coldProblemId,
+      mixedTopics: mixedTopicsFor(rf.firstDate),
+      recognize: { done: recognize.done, doneToday: recognize.doneToday },
+      skips: rf.skips,
+      endedEarly: !!row.endedEarlyAt,
+      hasDebrief: !!row.debrief,
+    });
+    // The day's core steps just settled: latch it, so the NEXT date moves on.
+    if (r.coreSettled && rf.day > rf.progress.completedThrough) {
+      rf.progress = completeDay(rf.progress, rf.day);
+      pstore.setProgress(rf.progress);
+    }
+    derived = r;
+  } else {
+    derived = deriveSteps({
+      dayStart,
+      attempts,
+      mocks,
+      cardsDue: store.cardsDueBefore(dayStart, now),
+      reviewsDue: store.reviewsDue(language, dayStart, now),
+      cardsReviewedToday: store.cardsReviewedSince(dayStart).length,
+      envelope: { remaining: envelope.remaining, doneToday: envelope.doneToday, query: envelope.query },
+      patternRecall,
+      skips: row.skips,
+      endedEarly: !!row.endedEarlyAt,
+      mockKind,
+      mockKindLabel: mockKindInfo(mockKind).label,
+      hasDebrief: !!row.debrief,
+      debriefVerdict: row.debrief?.verdict ?? null,
+      quick: row.quick,
+      concept: todayConcept(now),
+      forge: forgeStep(now),
+      finalReview: nextLoop?.isFinalReviewDay ? { company: nextLoop.company, daysLeft: nextLoop.daysLeft } : null,
+    });
+  }
 
   const readiness = readinessNow(language, nextLoop, now);
 
@@ -193,7 +254,7 @@ export function getToday(now = new Date()): TodayState {
     steps: derived.steps,
     current: derived.current,
     completed: derived.completed,
-    total: TODAY_STEPS.length,
+    total: derived.steps.length,
     endedEarly: !!row.endedEarlyAt,
     streak: practiceStreak(now),
     mockKind,
@@ -203,12 +264,7 @@ export function getToday(now = new Date()): TodayState {
     debriefUsage: row.debriefUsage,
     focus: dailyFocus(now),
     debriefEstimateUsd: debriefEstimateUsd(),
-    recognize: todayRecognize(
-      dayStart,
-      // "the last 3 local days" = from local midnight two days ago
-      new Date(dayStartMs(previousDay(previousDay(date)), todayTz())).toISOString(),
-      now
-    ),
+    recognize,
     envelope,
     stepNotes: row.stepNotes,
     aiPending: [...(running.get(date) ?? [])],
@@ -216,7 +272,134 @@ export function getToday(now = new Date()): TodayState {
     spend: aiSpend(dayStart, monthStart),
     quick: row.quick,
     nextLoop,
+    refresh: refreshInfo(rf),
+    patternRecallDue: recallDue,
   };
+}
+
+const safeCount = (fn: () => number): number => {
+  try {
+    return fn();
+  } catch {
+    return 0;
+  }
+};
+
+// =============================================================================
+// Pattern Refresh (refresh.compute has the rules)
+// =============================================================================
+interface RefreshContext {
+  progress: RefreshProgress;
+  /** Today's refresh day, or null when the mode is off. */
+  day: number | null;
+  /** The first local date of this refresh day (its steps count activity since). */
+  firstDate: string;
+  coldProblemId: string | null;
+  /** Skips over every date of this refresh day. */
+  skips: TodayStepId[];
+}
+
+/**
+ * Today's refresh day. A new local date gets the first uncompleted day (frozen
+ * in refresh_days); past the last day the mode turns itself off. Idempotent.
+ */
+function refreshFor(date: string, now: Date): RefreshContext {
+  let progress: RefreshProgress;
+  try {
+    progress = pstore.getProgress();
+  } catch {
+    progress = REFRESH_OFF;
+  }
+  const off: RefreshContext = { progress, day: null, firstDate: date, coldProblemId: null, skips: [] };
+  if (!progress.on) return off;
+  let row = pstore.getRefreshDay(date);
+  if (!row) {
+    // Catch up a day whose steps were finished without Today being opened
+    // again that day (the latch normally happens on a GET).
+    const pending = progress.completedThrough + 1;
+    const pendingDates = pstore.datesOfDay(pending);
+    if (pendingDates.length && pendingSettled(pending, pendingDates, new Date(dayStartMs(date, todayTz())).toISOString())) {
+      progress = completeDay(progress, pending);
+      pstore.setProgress(progress);
+    }
+    const next = nextRefreshDay(progress.completedThrough);
+    if (next === null) {
+      progress = { ...progress, on: false, finishedAt: progress.finishedAt ?? now.toISOString() };
+      pstore.setProgress(progress);
+      return { ...off, progress };
+    }
+    pstore.insertRefreshDay(date, next, now);
+    row = pstore.getRefreshDay(date)!;
+  }
+  const dates = pstore.datesOfDay(row.day);
+  const firstDate = dates[0]?.date ?? date;
+  let cold = dates.find((d) => d.coldProblemId)?.coldProblemId ?? null;
+  const prev = previousPlan(row.day);
+  if (!cold && prev?.topic) {
+    // An older problem of yesterday's topic, untouched since yesterday's
+    // refresh day began (so not its practice problem). None = the link asks
+    // the bank (or generates one) instead.
+    const prevFirst = pstore.datesOfDay(row.day - 1)[0]?.date ?? firstDate;
+    const since = new Date(dayStartMs(prevFirst, todayTz())).toISOString();
+    cold = pstore.coldCandidate(getActiveLanguage(), prev.topic, since);
+    if (cold) pstore.setColdProblem(row.day, cold);
+  }
+  const skips = new Set<TodayStepId>();
+  for (const d of dates) for (const s of store.getDay(d.date)?.skips ?? []) skips.add(s);
+  return { progress, day: row.day, firstDate, coldProblemId: cold, skips: [...skips] };
+}
+
+/** Were a past refresh day's core steps settled? (Warm-up inputs do not matter here.) */
+function pendingSettled(day: number, dates: { date: string; coldProblemId: string | null }[], until: string): boolean {
+  const plan = planOf(day);
+  const since = new Date(dayStartMs(dates[0].date, todayTz())).toISOString();
+  const skips = new Set<TodayStepId>();
+  for (const d of dates) for (const s of store.getDay(d.date)?.skips ?? []) skips.add(s);
+  return deriveRefreshSteps({
+    day,
+    since,
+    dayStart: since,
+    attempts: [],
+    cardsDue: 0,
+    reviewsDue: 0,
+    cardsReviewedToday: 0,
+    // Only what happened BEFORE the new date: today's work is today's day.
+    refreshAttempts: pstore.refreshAttemptsSince(since, until),
+    viewed: plan.pattern ? pstore.viewedSince(plan.pattern, since, until) : false,
+    recall: plan.pattern ? pstore.recallGradeSince(plan.pattern, since, until) : null,
+    coldProblemId: dates.find((d) => d.coldProblemId)?.coldProblemId ?? null,
+    mixedTopics: mixedTopicsFor(dates[0].date),
+    recognize: { done: false, doneToday: 0 },
+    skips: [...skips],
+    endedEarly: false,
+    hasDebrief: false,
+  }).coreSettled;
+}
+
+function refreshInfo(rf: RefreshContext): TodayRefresh {
+  const day = rf.day ?? Math.min(REFRESH_DAYS, rf.progress.completedThrough + 1);
+  const plan = planOf(day);
+  return {
+    on: rf.day !== null,
+    day,
+    total: REFRESH_DAYS,
+    label: plan.label,
+    pattern: plan.pattern,
+    topic: plan.topic,
+    prevLabel: previousPlan(day)?.label ?? null,
+    completedThrough: rf.progress.completedThrough,
+    dayComplete: rf.day !== null && rf.progress.completedThrough >= rf.day,
+    finishedAt: rf.progress.finishedAt,
+  };
+}
+
+/** The "Pattern refresh" toggle: on resumes (or restarts a finished run); off returns Today to normal. */
+export function setRefresh(on: boolean, now = new Date()): TodayState {
+  const { date } = dayContext(now);
+  const p = pstore.getProgress();
+  pstore.setProgress(on ? turnOn(p, now) : { ...p, on: false });
+  if (on) refreshFor(date, now);
+  return getToday(now);
 }
 
 /** The readiness strip (readiness.compute), from the last 120 days of evidence. */
@@ -292,7 +475,17 @@ export function setSkip(step: unknown, skip: boolean, now = new Date()): TodaySt
   const skips = new Set<TodayStepId>(row.skips);
   if (skip) skips.add(step);
   else skips.delete(step);
-  store.setSkips(date, TODAY_STEPS.filter((s) => skips.has(s)), now);
+  store.setSkips(date, ALL_STEP_IDS.filter((s) => skips.has(s)), now);
+  // A refresh day can span dates: un-skipping clears the skip on all of them.
+  if (!skip && REFRESH_CORE_STEPS.concat(['recognize']).includes(step)) {
+    const rf = refreshFor(date, now);
+    if (rf.day !== null) {
+      for (const d of pstore.datesOfDay(rf.day)) {
+        const r = d.date === date ? null : store.getDay(d.date);
+        if (r?.skips.includes(step)) store.setSkips(d.date, r.skips.filter((x) => x !== step), now);
+      }
+    }
+  }
   return getToday(now);
 }
 

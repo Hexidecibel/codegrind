@@ -134,6 +134,11 @@ export interface DeriveInput {
    * lead them) and how many were answered. Absent = no envelope part.
    */
   envelope?: { remaining: number; doneToday: number; query?: string };
+  /**
+   * Pattern-shape recall cards (the /patterns "write it from memory" SRS) due
+   * now that existed before today, and how many were graded today.
+   */
+  patternRecall?: { due: number; doneToday: number };
   skips: readonly TodayStepId[];
   endedEarly: boolean;
   mockKind: MockKind;
@@ -220,30 +225,46 @@ function problemResult(p: ProblemOutcome): string {
   return `${verdict} · ${p.title} · ${extra.join(', ')}`;
 }
 
-/** Every step's state for the day. Pure. */
-export function deriveSteps(input: DeriveInput): DerivedSteps {
-  const skipped = new Set(input.skips);
-  const base = new Map<TodayStepId, { status: 'done' | 'skipped' | 'in-progress' | 'todo'; href: string; detail: string; result: string | null; ok: boolean | null; label?: string }>();
+export type BaseEntry = {
+  status: 'done' | 'skipped' | 'in-progress' | 'todo';
+  href: string;
+  detail: string;
+  result: string | null;
+  ok: boolean | null;
+  label?: string;
+};
 
-  // --- warm-up --------------------------------------------------------------
+export type WarmupInput = Pick<
+  DeriveInput,
+  'attempts' | 'dayStart' | 'envelope' | 'quick' | 'reviewsDue' | 'cardsDue' | 'cardsReviewedToday' | 'finalReview' | 'patternRecall'
+>;
+
+/**
+ * The warm-up: due drill cards + Envelope ×N + due pattern-recall cards + due
+ * review problems. Shared by the normal day and the Pattern Refresh day.
+ */
+export function warmupEntry(input: WarmupInput, skipped: ReadonlySet<TodayStepId>): BaseEntry {
   const reviewsCleared = input.attempts.filter((a) => a.firstAt < input.dayStart);
   const reviewedProblems = new Set(reviewsCleared.map((a) => a.problemId)).size;
   const env = input.envelope ?? { remaining: 0, doneToday: 0 };
   // A 30-min day leaves review problems due (spacing kept) — its one problem
   // is served from the queue first anyway.
   const reviewsDue = input.quick ? 0 : input.reviewsDue;
-  const pile = input.cardsDue + env.remaining + reviewsDue;
+  const recall = input.patternRecall ?? { due: 0, doneToday: 0 };
+  const pile = input.cardsDue + env.remaining + recall.due + reviewsDue;
   const warmHref =
     input.cardsDue > 0
       ? `/mock?${from('warmup')}#cards`
       : env.remaining > 0
         ? `/envelope?${from('warmup')}&n=${env.remaining}${env.query ?? ''}`
-        : reviewsDue > 0
-          ? `/grind?${from('warmup')}`
-          : '/today';
-  const cleared = input.cardsReviewedToday + reviewedProblems + env.doneToday;
+        : recall.due > 0
+          ? `/patterns?${from('warmup')}&due=1`
+          : reviewsDue > 0
+            ? `/grind?${from('warmup')}`
+            : '/today';
+  const cleared = input.cardsReviewedToday + reviewedProblems + env.doneToday + recall.doneToday;
   const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
-  base.set('warmup', {
+  return {
     status: pile === 0 ? 'done' : skipped.has('warmup') ? 'skipped' : 'todo',
     href: warmHref,
     detail:
@@ -262,17 +283,26 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
                   .join(' + ') + ' due'
               : null,
             env.remaining ? `Envelope ×${env.remaining}` : null,
+            recall.due ? `${plural(recall.due, 'pattern shape')} to recall` : null,
           ]
             .filter(Boolean)
             .join(' + ')),
     result:
       pile === 0
         ? cleared > 0
-          ? `Cleared ${cleared} (${plural(input.cardsReviewedToday, 'card')}, ${plural(reviewedProblems, 'review')}${env.doneToday ? `, ${env.doneToday} envelope` : ''})`
+          ? `Cleared ${cleared} (${plural(input.cardsReviewedToday, 'card')}, ${plural(reviewedProblems, 'review')}${env.doneToday ? `, ${env.doneToday} envelope` : ''}${recall.doneToday ? `, ${recall.doneToday} pattern recall` : ''})`
           : 'Nothing was due'
         : null,
     ok: pile === 0 ? true : null,
-  });
+  };
+}
+
+/** Every step's state for the day. Pure. */
+export function deriveSteps(input: DeriveInput): DerivedSteps {
+  const skipped = new Set(input.skips);
+  const base = new Map<TodayStepId, BaseEntry>();
+
+  base.set('warmup', warmupEntry(input, skipped));
 
   // --- concept rep (Phase H3) -------------------------------------------------
   // Off on a 30-min day (a planned skip, like Problem 2 and the mock) — unless
@@ -349,8 +379,8 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
   // --- the sweep: end day early skips every unfinished step -----------------
   if (input.endedEarly) {
     for (const id of SKIPPABLE_STEPS) {
-      const s = base.get(id)!;
-      if (s.status !== 'done') s.status = 'skipped';
+      const s = base.get(id);
+      if (s && s.status !== 'done') s.status = 'skipped';
     }
   }
 
@@ -557,13 +587,13 @@ export function pendingReviews(input: PendingReviewsInput): AiReviewTarget[] {
   // (a second mock started after the first was graded leaves the mock step
   // "done" while the day is plainly not over).
   const allSettled =
-    SKIPPABLE_STEPS.every((id) => ['done', 'skipped'].includes(status.get(id) ?? '')) && !input.mockOpen;
+    input.steps.filter((s) => s.id !== 'debrief').every((s) => ['done', 'skipped'].includes(s.status)) && !input.mockOpen;
   // Real activity, not just "done": a warm-up with nothing due is done but empty.
+  // (Any other finished step counts too: a refresh day's practice or recall.)
   const anyDone =
     input.warmupActivity > 0 ||
     input.recognizeDone ||
-    status.get('concept') === 'done' ||
-    (['problem1', 'problem2', 'mock'] as const).some((id) => status.get(id) === 'done');
+    input.steps.some((s) => s.id !== 'warmup' && s.id !== 'debrief' && s.status === 'done');
   if (allSettled && anyDone && (!input.hasDebrief || input.debriefStale)) eligible.push('debrief');
 
   const allowed = (t: AiReviewTarget) => {

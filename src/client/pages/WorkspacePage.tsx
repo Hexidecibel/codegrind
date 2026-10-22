@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, RefreshCw, Sparkles } from 'lucide-react';
-import type { Problem, Topic, Difficulty } from '@/shared/types';
-import { ApiError, nextProblem, generateProblem, getBankStatus } from '@/client/lib/api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router-dom';
+import { EyeOff, Loader2, RefreshCw, Sparkles } from 'lucide-react';
+import { DIFFICULTIES, TOPICS, type Problem, type Topic, type Difficulty } from '@/shared/types';
+import { ApiError, nextProblem, generateProblem, getBankStatus, getProblemById } from '@/client/lib/api';
+import { presetToOverrides, type AssistanceSettings } from '@/client/lib/assistance';
+import { todayStepFrom } from '@/client/lib/today-flow';
+import { TodayNextBar } from '@/client/components/TodayNextBar';
 import { useLocalStorage } from '@/client/hooks/useLocalStorage';
 import { useControlSize } from '@/client/hooks/useMediaQuery';
 import { describeWait } from '@/client/lib/wait-copy';
@@ -41,7 +45,43 @@ const FALLBACK_SLOT: { topic: Topic; difficulty: Difficulty } = {
  * A STORED PREFERENCE ALWAYS WINS. The suggestion is only consulted when the
  * player has never picked, so nobody's chosen topic is second-guessed.
  */
+/** The Today routine's editor: Minimal, closest to CoderPad (same as Grind's). */
+const TODAY_ASSISTANCE: AssistanceSettings = { level: 2, overrides: presetToOverrides(2) };
+
+/**
+ * Deep links into Manual (all optional, never stored as the preference):
+ *
+ *   ?topic=<topic>&difficulty=<difficulty>   open on that slot ("Practice this")
+ *   ?problem=<id>                            open that exact problem (a cold review)
+ *   ?hide=1                                  topic hidden until the first submit
+ *   ?from=today&step=<id>                    the Today routine: Minimal editor + the "Next" bar
+ *
+ * Keyed on the query, so a "Next: Cold review" link from the bar re-mounts the
+ * page on the new problem instead of keeping the old one.
+ */
 export function WorkspacePage() {
+  const { search } = useLocation();
+  return <Workspace key={search} search={search} />;
+}
+
+function Workspace({ search }: { search: string }) {
+  const link = useMemo(() => {
+    const q = new URLSearchParams(search);
+    const topic = q.get('topic');
+    const difficulty = q.get('difficulty');
+    return {
+      slot:
+        topic && (TOPICS as readonly string[]).includes(topic)
+          ? {
+              topic: topic as Topic,
+              difficulty: (DIFFICULTIES as readonly string[]).includes(difficulty ?? '') ? (difficulty as Difficulty) : ('easy' as Difficulty),
+            }
+          : null,
+      problemId: q.get('problem'),
+      hide: q.get('hide') === '1',
+      todayStep: todayStepFrom(search),
+    };
+  }, [search]);
   // Null means "never chosen", which is the distinction the old default of
   // 'two-pointer' threw away — an unset preference and a deliberate choice of
   // two-pointer were indistinguishable.
@@ -56,10 +96,12 @@ export function WorkspacePage() {
 
   const [slot, setSlot] = useState<{ topic: Topic; difficulty: Difficulty } | null>(
     () =>
-      storedTopic && storedDifficulty
+      link.slot ??
+      (storedTopic && storedDifficulty
         ? { topic: storedTopic, difficulty: storedDifficulty }
-        : null,
+        : null),
   );
+  const [submitted, setSubmitted] = useState(0);
 
   const [problem, setProblem] = useState<Problem | null>(null);
   const [loadingProblem, setLoadingProblem] = useState(false);
@@ -141,10 +183,23 @@ export function WorkspacePage() {
   // is the fix: firing on mount is what made the default topic load-bearing.
   const autoLoaded = useRef(false);
   useEffect(() => {
-    if (!slot || autoLoaded.current) return;
+    if (autoLoaded.current) return;
+    if (link.problemId) {
+      autoLoaded.current = true;
+      setLoadingProblem(true);
+      getProblemById(link.problemId)
+        .then((p) => {
+          setProblem(p);
+          setSlot({ topic: p.topic, difficulty: p.difficulty });
+        })
+        .catch((err) => setError({ message: err instanceof Error ? err.message : 'Failed to load problem' }))
+        .finally(() => setLoadingProblem(false));
+      return;
+    }
+    if (!slot) return;
     autoLoaded.current = true;
     void loadNext(false);
-  }, [slot, loadNext]);
+  }, [slot, loadNext, link.problemId]);
 
   // Same elapsed-time clock as grind's "Next problem" — see wait-copy.ts.
   useEffect(() => {
@@ -196,13 +251,19 @@ export function WorkspacePage() {
         the old one and nothing about it changes retroactively.
       */}
       <LanguagePicker disabled={busy} onChange={() => void loadNext(false)} />
-      <TopicPicker
-        topic={slot?.topic ?? FALLBACK_SLOT.topic}
-        difficulty={slot?.difficulty ?? FALLBACK_SLOT.difficulty}
-        onTopic={pickTopic}
-        onDifficulty={pickDifficulty}
-        disabled={busy}
-      />
+      {link.hide ? (
+        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground" title="Name the pattern yourself; it shows after your first submit">
+          <EyeOff className="h-3.5 w-3.5" /> Topic hidden
+        </span>
+      ) : (
+        <TopicPicker
+          topic={slot?.topic ?? FALLBACK_SLOT.topic}
+          difficulty={slot?.difficulty ?? FALLBACK_SLOT.difficulty}
+          onTopic={pickTopic}
+          onDifficulty={pickDifficulty}
+          disabled={busy}
+        />
+      )}
       <Button
         variant="outline"
         size={controlSize}
@@ -274,5 +335,19 @@ export function WorkspacePage() {
     );
   }
 
-  return <SolveSurface problem={problem} toolbarExtras={toolbarExtras} />;
+  return (
+    <SolveSurface
+      key={problem.id}
+      problem={problem}
+      toolbarExtras={toolbarExtras}
+      hidePattern={link.hide}
+      sessionAssistance={link.todayStep ? TODAY_ASSISTANCE : undefined}
+      onSubmitRecorded={() => setSubmitted((n) => n + 1)}
+      footer={
+        link.todayStep ? (
+          <TodayNextBar here={link.todayStep} screenPath="/manual" refreshKey={`${submitted}:${problem.id}`} />
+        ) : undefined
+      }
+    />
+  );
 }

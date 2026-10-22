@@ -21,16 +21,48 @@ import type { Topic } from './types.js';
 import type { TodayRecognize } from './recognize.js';
 import type { TodayEnvelope } from './envelope.js';
 import type { LoopCountdown } from './loops.js';
+import type { PatternId } from './pattern-shapes.js';
+import type { Topic as TopicId } from './types.js';
 
+/** A normal day's steps, in order. */
 export const TODAY_STEPS = ['warmup', 'concept', 'problem1', 'problem2', 'mock', 'debrief'] as const;
-export type TodayStepId = (typeof TODAY_STEPS)[number];
+/**
+ * A Pattern Refresh day (days 1-8): one pattern, re-learned from its shape,
+ * written from memory, practised (named), plus a cold review of yesterday's
+ * pattern (unnamed) and Recognize ×5. No mock, no concept rep.
+ */
+export const REFRESH_STEPS = ['warmup', 'relearn', 'recall', 'practice', 'cold', 'recognize', 'debrief'] as const;
+/** The refresh's last day: three mediums, any pattern, topic hidden. */
+export const MIXED_STEPS = ['warmup', 'mixed1', 'mixed2', 'mixed3', 'recognize', 'debrief'] as const;
+
+/** Every step id any day can have. */
+export const ALL_STEP_IDS = [
+  'warmup',
+  'concept',
+  'problem1',
+  'problem2',
+  'mock',
+  'relearn',
+  'recall',
+  'practice',
+  'cold',
+  'mixed1',
+  'mixed2',
+  'mixed3',
+  'recognize',
+  'debrief',
+] as const;
+export type TodayStepId = (typeof ALL_STEP_IDS)[number];
 
 export function isTodayStep(x: unknown): x is TodayStepId {
-  return typeof x === 'string' && (TODAY_STEPS as readonly string[]).includes(x);
+  return typeof x === 'string' && (ALL_STEP_IDS as readonly string[]).includes(x);
 }
 
 /** The steps a user may skip. The debrief is the end of the day, not a step to skip. */
-export const SKIPPABLE_STEPS: readonly TodayStepId[] = ['warmup', 'concept', 'problem1', 'problem2', 'mock'];
+export const SKIPPABLE_STEPS: readonly TodayStepId[] = ALL_STEP_IDS.filter((s) => s !== 'debrief');
+
+/** A refresh day's core steps: the day advances only when these are done or skipped by hand. */
+export const REFRESH_CORE_STEPS: readonly TodayStepId[] = ['relearn', 'recall', 'practice', 'cold', 'mixed1', 'mixed2', 'mixed3'];
 
 /** Envelope reps in a "30-min day" (Phase H2), instead of the daily setting. */
 export const QUICK_ENVELOPE_REPS = 3;
@@ -43,8 +75,40 @@ export const TODAY_STEP_LABEL: Readonly<Record<TodayStepId, string>> = {
   problem1: 'Problem 1',
   problem2: 'Problem 2',
   mock: 'Mock interview',
+  relearn: 'Re-learn',
+  recall: 'Write it from memory',
+  practice: 'New pattern practice',
+  cold: 'Cold review',
+  mixed1: 'Mixed 1',
+  mixed2: 'Mixed 2',
+  mixed3: 'Mixed 3',
+  recognize: 'Recognize ×5',
   debrief: 'Debrief',
 };
+
+/**
+ * Today's "Pattern refresh" mode (the 9-day plan in shared/pattern-shapes).
+ * `on` false = a normal day; the object is still sent so the page can offer
+ * the toggle and, for a few days after the last day, say it finished.
+ */
+export interface TodayRefresh {
+  on: boolean;
+  /** 1..total: the refresh day today is (frozen per local date). */
+  day: number;
+  total: number;
+  /** "Hash map", … "Mixed day". */
+  label: string;
+  pattern: PatternId | null;
+  topic: TopicId | null;
+  /** Yesterday's pattern — the cold review's (hidden on the page until done). */
+  prevLabel: string | null;
+  /** Refresh days fully done (or skipped by hand). */
+  completedThrough: number;
+  /** Today's core steps are all settled: tomorrow moves to the next day. */
+  dayComplete: boolean;
+  /** When the refresh finished and turned itself off; null otherwise. */
+  finishedAt: string | null;
+}
 
 /**
  *   todo         not started, not the current step
@@ -68,6 +132,8 @@ export interface TodayStep {
   result: string | null;
   /** Done steps: did it go well? Drives the result's colour. Null = neutral. */
   ok: boolean | null;
+  /** Planned off today (refresh day 1's cold review): no Undo. */
+  off?: boolean;
 }
 
 /**
@@ -186,6 +252,10 @@ export interface TodayState {
   quick: boolean;
   /** The nearest upcoming interview loop, or null. */
   nextLoop: LoopCountdown | null;
+  /** The Pattern Refresh mode; `on` true replaces the day's steps. */
+  refresh: TodayRefresh;
+  /** Pattern-shape recall cards due (from earlier "write it from memory" grades). */
+  patternRecallDue: number;
 }
 
 /** The finished things a step review can be written for. `recognize` is the add-on, not a step. */

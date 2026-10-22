@@ -683,6 +683,47 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
           createdAt  TEXT NOT NULL
         );
       `);
+      // Pattern shapes (/patterns) + Today's Pattern Refresh:
+      //   pattern_recall_cards    the SRS schedule per pattern for "write it
+      //                           from memory" (id = shared/pattern-shapes
+      //                           PatternId), on the gap-card ladder
+      //   pattern_recall_reviews  one row per self-grade (what Today reads)
+      //   pattern_views           a pattern card opened from Today (Re-learn)
+      //   refresh_days            which refresh day each local date is, and
+      //                           the cold-review problem it chose
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS pattern_recall_cards (
+          id             TEXT PRIMARY KEY,
+          step           INTEGER NOT NULL DEFAULT 0,
+          dueAt          TEXT NOT NULL,
+          reps           INTEGER NOT NULL DEFAULT 0,
+          lapses         INTEGER NOT NULL DEFAULT 0,
+          lastGrade      TEXT,
+          lastReviewedAt TEXT,
+          retiredAt      TEXT,
+          createdAt      TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS pattern_recall_reviews (
+          id        INTEGER PRIMARY KEY AUTOINCREMENT,
+          pattern   TEXT NOT NULL,
+          grade     TEXT NOT NULL,
+          answer    TEXT NOT NULL DEFAULT '',
+          createdAt TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_pattern_recall_reviews ON pattern_recall_reviews (pattern, createdAt);
+        CREATE TABLE IF NOT EXISTS pattern_views (
+          id        INTEGER PRIMARY KEY AUTOINCREMENT,
+          pattern   TEXT NOT NULL,
+          createdAt TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_pattern_views ON pattern_views (pattern, createdAt);
+        CREATE TABLE IF NOT EXISTS refresh_days (
+          date          TEXT PRIMARY KEY,
+          day           INTEGER NOT NULL,
+          coldProblemId TEXT,
+          createdAt     TEXT NOT NULL
+        );
+      `);
       if (tableExists(db, 'envelope_attempts')) {
         addColumnIfMissing(db, 'envelope_attempts', 'mode', "TEXT NOT NULL DEFAULT 'plain'");
         addColumnIfMissing(db, 'envelope_attempts', 'failedStep', 'TEXT');

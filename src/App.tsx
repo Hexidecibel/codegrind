@@ -14,6 +14,7 @@ import { RecognizePage } from '@/client/pages/RecognizePage';
 import { EnvelopePage } from '@/client/pages/EnvelopePage';
 import { ConceptPage, ConceptTrackPage, ConceptLessonPage } from '@/client/pages/ConceptPage';
 import { StoriesPage } from '@/client/pages/StoriesPage';
+import { PatternsPage } from '@/client/pages/PatternsPage';
 import { SetupWizard } from '@/client/components/setup/SetupWizard';
 import { getSetupState } from '@/client/lib/api';
 import type { SetupState } from '@/shared/types';
@@ -92,6 +93,8 @@ function App() {
             <Route path="/manual" element={<WorkspacePage />} />
             <Route path="/progress" element={<ProgressPage />} />
             <Route path="/study" element={<StudyPage />} />
+            {/* The code shape of each pattern (+ "write it from memory"). */}
+            <Route path="/patterns" element={<PatternsPage />} />
             {/* Mock interviews. /mock is the start card, /mock/:id one interview
                 or its grade — a link that survives a reload. */}
             <Route path="/mock" element={<MockPage />} />
