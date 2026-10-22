@@ -7,6 +7,9 @@
 //                                    at most once per step per day; see
 //                                    today.service.kickAiReviews
 //   (skip / end kick them too: ending the day early is a completion event)
+//   GET  /api/today/readiness        readiness verdicts + concept-rep counts only;
+//                                    read-only, never kicks AI reviews  free
+//                                    (polled by resume-builder's bin/readiness-sync)
 //   POST /api/today/skip             {step, skip?: boolean}                free
 //   POST /api/today/end              {ended?: boolean}  end day early      free
 //   POST /api/today/quick            {on?: boolean}  the "30-min day" toggle free
@@ -15,7 +18,7 @@
 //                                    `regenerate` is a free read)
 
 import { Hono, type Context } from 'hono';
-import { TodayError, debrief, getTodayAndKick, kickAiReviews, setEndedEarly, setQuick, setSkip } from '../services/today.service.js';
+import { TodayError, debrief, getTodayAndKick, kickAiReviews, readinessSnapshot, setEndedEarly, setQuick, setSkip } from '../services/today.service.js';
 import type { TodayState } from '../../shared/today.js';
 import { errorBody } from '../services/explain.service.js';
 
@@ -29,6 +32,14 @@ function fail(c: Context, tag: string, err: unknown) {
 function kicked(state: TodayState): TodayState {
   return kickAiReviews(state) ? getTodayAndKick() : state;
 }
+
+todayRoutes.get('/today/readiness', (c) => {
+  try {
+    return c.json(readinessSnapshot());
+  } catch (err) {
+    return fail(c, 'today-readiness', err);
+  }
+});
 
 todayRoutes.get('/today', (c) => {
   try {

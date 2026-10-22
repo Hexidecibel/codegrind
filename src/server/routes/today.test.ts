@@ -158,6 +158,25 @@ describe('GET /api/today', () => {
   });
 });
 
+describe('GET /api/today/readiness', () => {
+  it('returns the verdicts and concept counts only, writes nothing, kicks no AI review', async () => {
+    setSetting('ai.reviews', true);
+    const daysBefore = (db.prepare('SELECT COUNT(*) AS n FROM daily_sessions').get() as { n: number }).n;
+    const res = await app.request('/api/today/readiness');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.date).toBe('2026-10-21');
+    expect(body.readiness.map((a: { id: string }) => a.id)).toEqual(['algos', 'system-design', 'behavioral', 'coding']);
+    expect(Object.keys(body.readiness[0]).sort()).toEqual(['evidence', 'hint', 'id', 'label', 'verdict']);
+    expect(body.concepts).toMatchObject({ knownAi: 0, unlockAt: 5, knownClassic: 0 });
+    expect(body.concepts.totalAi).toBeGreaterThan(0);
+    expect(body).not.toHaveProperty('steps');
+    expect((db.prepare('SELECT COUNT(*) AS n FROM daily_sessions').get() as { n: number }).n).toBe(daysBefore);
+    expect(review.runStepReview).not.toHaveBeenCalled();
+    expect(fake.runDebrief).not.toHaveBeenCalled();
+  });
+});
+
 describe('skip and end early', () => {
   it('a skip persists and moves the current step; un-skip restores it', async () => {
     let body = await (await post('/api/today/skip', { step: 'concept' })).json();

@@ -21,6 +21,7 @@ import {
   type AiReviewTarget,
   type CarryNote,
   type DebriefUsage,
+  type ReadinessArea,
   type StepNote,
   type StepNoteId,
   type TodayState,
@@ -50,7 +51,7 @@ import { SMALL_CALL_SHAPES, aiReviewsEnabled, aiSpend, costOfMeta, smallCallEsti
 import { runStepReview, type StepReviewInput } from './llm.review.js';
 import { todayRecognize } from './recognize.service.js';
 import { envelopeDigest, todayEnvelope } from './envelope.service.js';
-import { conceptDigest, readinessReps, todayConcept } from './concept.service.js';
+import { conceptDigest, readinessReps, todayConcept, track } from './concept.service.js';
 import { forgeDigest, isForgeDayNow, todayForge } from './forge.service.js';
 
 /** Phase H4: whether today's concept step is a story forge, and what it did. Never throws. */
@@ -229,6 +230,36 @@ function readinessNow(language: Language, nextLoop: LoopCountdown | null, now: D
     conceptReps: readinessReps(since),
     nextLoop: nextLoop ? { company: nextLoop.company, daysLeft: nextLoop.daysLeft, rounds: nextLoop.rounds } : null,
   });
+}
+
+/** GET /api/today/readiness — what resume-builder's held lane reads. */
+export interface ReadinessSnapshot {
+  date: string;
+  readiness: Pick<ReadinessArea, 'id' | 'label' | 'verdict' | 'evidence' | 'hint'>[];
+  concepts: { knownAi: number; unlockAt: number; totalAi: number; knownClassic: number; totalClassic: number };
+}
+
+/**
+ * The readiness verdicts and the concept-rep counts, and nothing else. Unlike
+ * GET /api/today this never kicks the automatic AI reviews and writes nothing,
+ * so a timer can poll it for free (resume-builder's bin/readiness-sync).
+ */
+export function readinessSnapshot(now = new Date()): ReadinessSnapshot {
+  const date = localDay(now.getTime(), todayTz());
+  const readiness = readinessNow(getActiveLanguage(), nextLoopFor(date), now);
+  const t = track(now);
+  const of = (category: string) => t.items.filter((i) => i.category === category);
+  return {
+    date,
+    readiness: readiness.map(({ id, label, verdict, evidence, hint }) => ({ id, label, verdict, evidence, hint })),
+    concepts: {
+      knownAi: t.knownAi,
+      unlockAt: t.unlockAt,
+      totalAi: of('ai').length,
+      knownClassic: of('classic').filter((i) => i.state === 'known').length,
+      totalClassic: of('classic').length,
+    },
+  };
 }
 
 /** Turn the day's "30-min day" mode on or off. */
