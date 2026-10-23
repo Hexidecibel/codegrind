@@ -1859,8 +1859,10 @@ ${s.code}
     // A topic's whole snippet set, in and out, plus headroom. Each snippet is a
     // one-screen teaching fragment, so ~9 of them is a few hundred lines; a
     // truncated batch loses the tail of the topic, which is why this is not
-    // sized to the average.
-    maxTokens: 8000,
+    // sized to the average. 8000 was too tight for Go: binary-search (14
+    // snippets) and graphs hit exactly 8000 output tokens, the tool call came
+    // back truncated with no translations, and every retry re-paid ~$0.10.
+    maxTokens: 16000,
     // Off: a mechanical, well-specified rewrite emitted as a forced tool call.
     // There is no plan to make.
     thinking: 'off',
