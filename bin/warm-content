@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Pre-generate everything codegrind otherwise generates lazily on first view and
+# caches forever: Study primers/outlines/lessons, per-language snippet
+# translations, the AI-systems track lessons, queued mistake/walkthrough
+# lessons, and a stocked problem bank (every topic x difficulty). Thin wrapper
+# around bin/warm-content.ts, like bin/warm-lessons.
+#
+# Idempotent (cached things are skipped) and budget-capped against the app's own
+# ai_usage ledger. Writes into the live DB while the service runs, exactly as
+# bin/warm-lessons and bin/seed-bank do.
+#
+#   bin/warm-content --dry-run        # plan + estimated cost, spend nothing
+#   bin/warm-content --budget 20      # run it (concurrency 3)
+#   bin/warm-content --help
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+# shellcheck source=lib/node.sh
+source "$REPO/bin/lib/node.sh"
+cg_require_node
+
+if [[ -f "$REPO/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO/.env"
+  set +a
+fi
+
+exec npx tsx bin/warm-content.ts "$@"
