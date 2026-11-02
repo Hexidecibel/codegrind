@@ -133,6 +133,11 @@ function report(result: DryRunResult, index: number, total: number): void {
     console.log(
       `       ${result.sampleTests} sample / ${result.hiddenTests} hidden tests survived canonicalization`
     );
+    console.log(
+      result.exampleFixes.length
+        ? `       examples corrected against the reference:\n${result.exampleFixes.map((a) => `         ${a}`).join('\n')}`
+        : `       examples: all agree with the reference`
+    );
     console.log(`       stored: ${result.storedId ?? 'no (dry run)'}`);
     // The silent-corruption vector: `args` is kept VERBATIM from the model and
     // only `expected` is replaced by the sandbox's output, so an over-structured

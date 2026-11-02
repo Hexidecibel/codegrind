@@ -36,9 +36,12 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 const mocks = vi.hoisted(() => ({
   generateProblem: vi.fn(),
   runTests: vi.fn(),
+  rewriteExampleExplanation: vi.fn(),
 }));
 
 vi.mock('./llm.service.js', () => ({ generateProblem: mocks.generateProblem }));
+// Example verification's one model call (a corrected example's new explanation).
+vi.mock('./llm.examples.js', () => ({ rewriteExampleExplanation: mocks.rewriteExampleExplanation }));
 vi.mock('./sandbox.service.js', () => ({ runTests: mocks.runTests }));
 
 const db = await import('./db.js');
@@ -110,6 +113,8 @@ beforeEach(() => {
   mocks.generateProblem.mockReset();
   mocks.runTests.mockReset();
   sandboxAgrees();
+  mocks.rewriteExampleExplanation.mockReset();
+  mocks.rewriteExampleExplanation.mockResolvedValue('Rewritten explanation.');
 });
 
 // =============================================================================
@@ -234,5 +239,66 @@ describe('dryRunGenerate asks what the app asks', () => {
     // this stops being true, one path has been tuned and the other has not.
     expect(real?.noveltyHint?.endsWith(dry?.noveltyHint ?? '')).toBe(true);
     expect(real?.noveltyHint).toContain('Introduce this pattern gently');
+  });
+});
+
+// =============================================================================
+// The examples are run through the reference too, not just the tests
+// =============================================================================
+/** A sandbox running `max(nums)` as the reference: every case, examples included. */
+function sandboxIsMax() {
+  mocks.runTests.mockImplementation(async ({ tests }: { tests: Array<{ args: unknown[] }> }) => ({
+    results: tests.map((t) => ({ stderr: '', actual: JSON.stringify(Math.max(...(t.args[0] as number[]))) })),
+  }));
+}
+
+describe('generation verifies its examples against the reference', () => {
+  it('replaces a wrong example output with the reference\'s and rewrites its explanation', async () => {
+    sandboxIsMax();
+    mocks.generateProblem.mockResolvedValue({
+      ...generated('Largest', 'Return the largest value.'),
+      examples: [
+        { input: 'nums = [3, 9, 4]', output: '4', explanation: 'Four is the largest, obviously.' },
+        { input: 'nums = [1, 5]', output: '5', explanation: 'Five beats one.' },
+      ],
+    });
+
+    const rec = await bank.generateAndStore('python', 'arrays', 'easy');
+    expect(rec.examples).toEqual([
+      { input: 'nums = [3, 9, 4]', output: '9', explanation: 'Rewritten explanation.' },
+      { input: 'nums = [1, 5]', output: '5', explanation: 'Five beats one.' },
+    ]);
+    // Only the wrong one costs a model call, and it is told the CORRECT output.
+    expect(mocks.rewriteExampleExplanation).toHaveBeenCalledTimes(1);
+    expect(mocks.rewriteExampleExplanation.mock.calls[0][1]).toEqual({ input: 'nums = [3, 9, 4]', output: '9' });
+    // And what was stored is what came back.
+    expect(db.getProblem(rec.id)?.examples).toEqual(rec.examples);
+  });
+
+  it('rebuilds an unparseable example from a canonical sample test when nothing else is usable', async () => {
+    sandboxIsMax();
+    mocks.generateProblem.mockResolvedValue({
+      ...generated('Largest', 'Return the largest value.'),
+      examples: [{ input: 'nums = [1, 2, ..., n]', output: 'n' }],
+    });
+
+    const res = await bank.dryRunGenerate('python', 'arrays', 'easy');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.problem.examples).toEqual([
+      { input: 'nums = [1, 2]', output: '2', explanation: 'Rewritten explanation.' },
+    ]);
+    expect(res.exampleFixes.join('\n')).toMatch(/replaced from sample test "s1".*unparseable/);
+  });
+
+  it('leaves examples that agree with the reference exactly as written', async () => {
+    sandboxIsMax();
+    const examples = [{ input: 'nums = [2, 7]', output: '7', explanation: 'Seven.' }];
+    mocks.generateProblem.mockResolvedValue({ ...generated('Largest', 'Return the largest value.'), examples });
+
+    const res = await bank.dryRunGenerate('python', 'arrays', 'easy');
+    expect(res.ok && res.problem.examples).toEqual(examples);
+    expect(res.ok && res.exampleFixes).toEqual([]);
+    expect(mocks.rewriteExampleExplanation).not.toHaveBeenCalled();
   });
 });

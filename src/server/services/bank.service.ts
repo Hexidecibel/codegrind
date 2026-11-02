@@ -4,6 +4,8 @@ import type { Language } from '../../shared/languages.js';
 import { generateProblem, type GeneratedProblem, type GenerateProblemOpts } from './llm.service.js';
 import type { SchedulerIntent } from './scheduler.service.js';
 import { runTests } from './sandbox.service.js';
+import { validateExamples, fixExamples } from './examples.service.js';
+import { rewriteExampleExplanation } from './llm.examples.js';
 import { recordGeneration } from './pace.service.js';
 import {
   insertProblem,
@@ -84,6 +86,33 @@ export async function canonicalize(
 }
 
 /**
+ * The examples get what the tests just got: each one's input is run through
+ * the reference (examples.service), a wrong output is replaced by the
+ * reference's with a rewritten explanation, and an example that cannot be
+ * checked is dropped or rebuilt from a canonical sample test. Only called on a
+ * canonicalized problem — the sandbox has just been shown to work, so a
+ * failure here is logged and the examples kept as written rather than costing
+ * the whole generation.
+ */
+async function verifyExamples(language: Language, gen: GeneratedProblem): Promise<{
+  gen: GeneratedProblem;
+  actions: string[];
+}> {
+  try {
+    const problem = { language, ...gen };
+    const checks = await validateExamples(problem);
+    const fix = await fixExamples(problem, checks, { explain: rewriteExampleExplanation });
+    if (fix.changed) console.warn(`[bank] "${gen.title}": examples corrected — ${fix.actions.join('; ')}`);
+    return { gen: { ...gen, examples: fix.examples }, actions: fix.actions };
+  } catch (err) {
+    console.warn(
+      `[bank] "${gen.title}": examples left unverified (${err instanceof Error ? err.message : err})`
+    );
+    return { gen, actions: [] };
+  }
+}
+
+/**
  * Generate a fresh problem via Claude, canonicalize its tests against the
  * reference solution (so the problem is internally consistent), and store it.
  * Regenerates if the reference is too broken to yield enough usable tests.
@@ -137,7 +166,7 @@ export async function generateAndStore(
     try {
       const canon = await canonicalize(language, raw);
       if (canon) {
-        gen = canon;
+        gen = (await verifyExamples(language, canon)).gen;
         canonicalized = true;
         break;
       }
@@ -251,6 +280,8 @@ export type DryRunResult =
       /** Test counts AFTER canonicalization — i.e. tests that actually ran. */
       sampleTests: number;
       hiddenTests: number;
+      /** What example verification changed (empty: every example was right). */
+      exampleFixes: string[];
       /** The id it was stored under, or null when this was a true dry run. */
       storedId: string | null;
       ms: number;
@@ -303,7 +334,8 @@ export type DryRunResult =
  * every time; a caller measuring a SEQUENCE passes what it has already seen and
  * gets the sequence the app would actually produce.
  *
- * Cost: exactly one generation call, plus two sandbox runs when it succeeds.
+ * Cost: exactly one generation call, plus three sandbox runs when it succeeds
+ * (tests twice, examples once) and one small call per example it corrects.
  */
 export async function dryRunGenerate(
   language: Language,
@@ -361,6 +393,9 @@ export async function dryRunGenerate(
     };
   }
 
+  const verified = await verifyExamples(language, canon);
+  canon = verified.gen;
+
   let storedId: string | null = null;
   if (opts.keep) {
     // Only ever reached on success, so this is always a canonicalized record.
@@ -375,6 +410,7 @@ export async function dryRunGenerate(
     problem: canon,
     sampleTests: canon.sampleTests.length,
     hiddenTests: canon.hiddenTests.length,
+    exampleFixes: verified.actions,
     storedId,
     ms: elapsed(),
   };
