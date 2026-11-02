@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Check every banked problem's worked examples against its own reference
+# solution (and, with --crosscheck, the reference against an independent brute
+# force). Thin wrapper around bin/audit-problems.ts — see it for the details.
+#
+#   bin/audit-problems --dry-run          # report only (the default): read-only, no model calls
+#   bin/audit-problems --apply            # back up the DB, then fix examples (idempotent)
+#   bin/audit-problems --crosscheck       # + brute-force cross-check (model calls; reports only)
+#   bin/audit-problems --id <id> --verbose
+#
+# Needs the sandbox (Docker + runner images). Report: data/tmp/audit-problems-<ts>.{md,json}
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+# shellcheck source=lib/node.sh
+source "$REPO/bin/lib/node.sh"
+cg_require_node
+
+if [[ -f "$REPO/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO/.env"
+  set +a
+fi
+
+if [[ " $* " == *" --apply "* ]]; then
+  "$REPO/bin/backup-db" pre-audit-problems
+fi
+
+exec npx tsx bin/audit-problems.ts "$@"

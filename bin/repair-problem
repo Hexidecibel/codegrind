@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Hand-repair banked problems from JSON patches (statement, constraints, starter,
+# reference, examples, malformed tests, retire). Thin wrapper around
+# bin/repair-problem.ts — see it for the checks every write goes through.
+#
+#   bin/repair-problem --id <id> --patch data/tmp/repairs/<id>.json --dry-run
+#   bin/repair-problem --id <id> --patch data/tmp/repairs/<id>.json
+#   bin/repair-problem --patch a.json --patch b.json      # ids from the files
+#
+# Patches live under data/tmp/repairs/ so every hand edit is traceable.
+# Needs the sandbox (Docker + runner images). Backs the DB up unless --dry-run.
+set -euo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+# shellcheck source=lib/node.sh
+source "$REPO/bin/lib/node.sh"
+cg_require_node
+
+if [[ -f "$REPO/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO/.env"
+  set +a
+fi
+
+if [[ " $* " != *" --dry-run "* && " $* " != *" -h "* && " $* " != *" --help "* ]]; then
+  "$REPO/bin/backup-db" pre-repair-problem
+fi
+
+exec npx tsx bin/repair-problem.ts "$@"
