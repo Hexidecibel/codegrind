@@ -128,6 +128,17 @@ describe('reveal / code — the ledger', () => {
     expect(fake.generatePrimer).toHaveBeenCalledTimes(1);
   });
 
+  it('the quiet routes never call a model, primer or not, and never ask for an auto-check', async () => {
+    const session = await (await app.request('/api/recognize/quiet/session?n=5')).json();
+    expect(session.cards).toHaveLength(5);
+    const r = await (await post('/api/recognize/quiet/reveal', { problemId: 'p-heap', picked: 'heap' })).json();
+    expect(r).toMatchObject({ topic: 'heap', patternCorrect: true, primer: null, autoCheck: false });
+    const cached = await (await post('/api/recognize/quiet/reveal', { problemId: 'p-arrays', picked: 'heap' })).json();
+    expect(cached.primer.skeleton).toBe('for (const x of xs) {}');
+    expect(fake.generatePrimer).not.toHaveBeenCalled();
+    expect(fake.runRecognizeCheck).not.toHaveBeenCalled();
+  });
+
   it('showing code writes the reveal ledger, so a later grind counts as assisted', async () => {
     const r = await (await post('/api/recognize/code', { problemId: 'p-math' })).json();
     expect(r.referenceSolution).toBe('function f() { return 42; }');

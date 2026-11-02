@@ -9,6 +9,11 @@
 //   GET  /api/recognize/stats            per-pattern accuracy, due counts    free
 //
 // * a topic with no cached primer yet generates one, once, ever (shared cache).
+//
+//   GET  /api/recognize/quiet/session?n=   as session, never stocks a topic   no model call
+//   POST /api/recognize/quiet/reveal       as reveal, cached primer or none   no model call
+// For a caller that must never spend (edge-dash's panel), whatever the AI toggle says.
+// New paths rather than a flag: an older server answers 404 instead of ignoring a flag.
 // None of these is a solve: no attempts, skill_state, tier credit or review_queue.
 
 import { Hono, type Context } from 'hono';
@@ -36,6 +41,23 @@ recognizeRoutes.post('/recognize/reveal', async (c) => {
   try {
     const b = await body(c);
     return c.json(await reveal(b.problemId, b.picked));
+  } catch (err) {
+    return fail(c, 'recognize-reveal', err);
+  }
+});
+
+recognizeRoutes.get('/recognize/quiet/session', (c) => {
+  try {
+    return c.json(startSession(c.req.query('n'), new Date(), true));
+  } catch (err) {
+    return fail(c, 'recognize-session', err);
+  }
+});
+
+recognizeRoutes.post('/recognize/quiet/reveal', async (c) => {
+  try {
+    const b = await body(c);
+    return c.json(await reveal(b.problemId, b.picked, true));
   } catch (err) {
     return fail(c, 'recognize-reveal', err);
   }

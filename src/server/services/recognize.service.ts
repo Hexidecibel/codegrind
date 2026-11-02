@@ -106,7 +106,7 @@ function sizeOf(n: unknown): number {
 /** The LOCAL day used to seed the choice shuffle, so a reload shows the same four. */
 const seedDay = (now: Date) => localDay(now.getTime(), todayTz());
 
-export function startSession(n: unknown, now = new Date()): RecognizeSession {
+export function startSession(n: unknown, now = new Date(), quiet = false): RecognizeSession {
   const size = sizeOf(n);
   const language = getActiveLanguage();
   const rows = store.candidates().filter((r) => isTopic(r.topic));
@@ -152,7 +152,7 @@ export function startSession(n: unknown, now = new Date()): RecognizeSession {
       codeFree: r.used || r.attempted || r.revealed,
     });
   }
-  stockEmptyTopic(rows, language, now);
+  if (!quiet) stockEmptyTopic(rows, language, now);
   return { cards, dueLeft: sel.dueLeft };
 }
 
@@ -236,9 +236,10 @@ async function primerFor(topic: Topic, now = Date.now()): Promise<Primer | null>
   return job;
 }
 
-export async function reveal(problemId: unknown, picked: unknown): Promise<RecognizeReveal> {
+/** `quiet` is the no-model path: a cached primer or none, and never an auto-check. */
+export async function reveal(problemId: unknown, picked: unknown, quiet = false): Promise<RecognizeReveal> {
   const p = requireProblem(problemId);
-  const primer = await primerFor(p.topic);
+  const primer = quiet ? getPrimer(getActiveLanguage(), p.topic) : await primerFor(p.topic);
   return {
     problemId: p.id,
     title: p.title,
@@ -251,7 +252,7 @@ export async function reveal(problemId: unknown, picked: unknown): Promise<Recog
       : null,
     note: store.getNote(p.id),
     language: p.language,
-    autoCheck: aiReviewsEnabled(),
+    autoCheck: !quiet && aiReviewsEnabled(),
     checkEstimateUsd: smallCallEstimateUsd(SMALL_CALL_SHAPES.recognizeCheck),
   };
 }
