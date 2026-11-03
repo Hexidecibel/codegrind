@@ -5,12 +5,14 @@
 <html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <!-- interactive-widget=resizes-content: the soft keyboard shrinks the layout
+    <!-- viewport-fit=cover: the phone tab bar runs to the bottom edge and pads
+         itself with env(safe-area-inset-bottom) above the home indicator.
+         interactive-widget=resizes-content: the soft keyboard shrinks the layout
          viewport (and h-dvh with it) instead of covering the pinned action bar.
          Honoured by Chrome/Android; iOS Safari ignores it. -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content"
+      content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content, viewport-fit=cover"
     />
     <!-- Dark-only UI: keep UA form controls/scrollbars and the Android status
          bar in dark instead of light-mode defaults. Colours mirror

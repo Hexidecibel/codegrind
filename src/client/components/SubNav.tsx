@@ -53,7 +53,15 @@ export function SubNav() {
   const items = subNavFor(pathname);
   if (!items) return null;
   return (
-    <nav aria-label="Section" className="flex gap-1 overflow-x-auto border-b border-border bg-card/60 px-4 short:hidden">
+    // Practice's strip is all coding places plus Drills; on a phone the tab bar's
+    // Drills tab IS that page, so the strip would only offer the iPad's places.
+    <nav
+      aria-label="Section"
+      className={cn(
+        'flex gap-1 overflow-x-auto border-b border-border bg-card/60 px-4 short:hidden',
+        items === PRACTICE_SUBNAV && 'phone:hidden',
+      )}
+    >
       {items.map((item) => (
         <Link
           key={item.to}

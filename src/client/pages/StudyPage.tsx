@@ -315,14 +315,17 @@ export function StudyPage() {
             to="/grind"
             aria-label="Back to grind"
             title="Back to grind"
-            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground phone:hidden"
           >
             <ArrowLeft className="h-4 w-4" />
           </Link>
 
-          <div className="min-w-0 flex-1 px-1">
+          {/* On a phone the title is the whole bar (no back arrow, no AI
+              systems link: the tab bar has both), so it wraps instead of
+              truncating the topic name. */}
+          <div className="min-w-0 flex-1 px-1 phone:pl-2">
             {position ? (
-              <p className="truncate text-sm font-semibold">
+              <p className="truncate text-sm font-semibold phone:whitespace-normal phone:leading-snug">
                 {humanize(position.topic)}
                 <span className="ml-2 text-xs font-normal tabular-nums text-muted-foreground">
                   {position.seq + 1}/{position.total}
@@ -347,7 +350,7 @@ export function StudyPage() {
           <Link
             to="/concepts"
             title="AI-systems track"
-            className="inline-flex h-11 shrink-0 items-center rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex h-11 shrink-0 items-center rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground phone:hidden"
           >
             AI systems
           </Link>

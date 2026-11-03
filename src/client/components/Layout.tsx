@@ -5,6 +5,7 @@ import { useAppHeight } from '@/client/hooks/useAppHeight';
 import { cn } from '@/lib/utils';
 import { MoreMenu } from '@/client/components/MoreMenu';
 import { LEARN_SUBNAV, PRACTICE_SUBNAV, SubNav, groupPaths } from '@/client/components/SubNav';
+import { BottomTabBar } from '@/client/components/BottomTabBar';
 
 function Tab({
   to,
@@ -84,10 +85,13 @@ export function Layout({ children }: { children: ReactNode }) {
     // soft keyboard goes one better and tracks the visual viewport
     // (`--app-height`), which is the only thing that shrinks for it on iOS; a
     // mouse-driven desktop leaves that unset and falls through to dvh.
-    <div className="flex h-[var(--app-height,100dvh)] flex-col overflow-hidden bg-background text-foreground">
+    // On a phone the header gives way to BottomTabBar (after <main>, so the
+    // header's <nav> stays the first one), and the shell keeps clear of the
+    // notch under `viewport-fit=cover`.
+    <div className="flex h-[var(--app-height,100dvh)] flex-col overflow-hidden bg-background text-foreground phone:pt-[env(safe-area-inset-top)] phone:pl-[env(safe-area-inset-left)] phone:pr-[env(safe-area-inset-right)]">
       {/* `short:` = landscape with the keyboard up (see index.css): every
           vertical pixel is contested there, so the header tightens to ~40px. */}
-      <header className="flex items-center gap-0 sm:gap-4 border-b border-border bg-card px-4 py-2.5 short:py-1">
+      <header className="flex items-center gap-0 sm:gap-4 border-b border-border bg-card px-4 py-2.5 short:py-1 phone:hidden">
         <div className="flex items-center gap-2">
           <div className="hidden h-7 w-7 items-center justify-center sm:flex rounded-md bg-primary text-primary-foreground short:h-6 short:w-6">
             <Code2 className="h-4 w-4" />
@@ -127,6 +131,7 @@ export function Layout({ children }: { children: ReactNode }) {
       </header>
       <SubNav />
       <main className="min-h-0 flex-1">{children}</main>
+      <BottomTabBar />
     </div>
   );
 }
