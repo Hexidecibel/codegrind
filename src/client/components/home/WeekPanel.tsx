@@ -24,7 +24,25 @@ export function weekdayOf(date: string): string {
 
 const MAX_UNTOUCHED = 4;
 
-export function WeekPanel({ week }: { week: WeeklyResponse }) {
+/** The seven day dots on their own: the week at a glance. */
+export function WeekDots({ week }: { week: WeeklyResponse }) {
+  return (
+    <ol className="flex justify-between gap-1" aria-label="Days practised">
+      {week.daily.map((d) => (
+        <li key={d.date} className="flex flex-col items-center gap-1 text-[11px] text-muted-foreground">
+          <span
+            className={cn('h-3.5 w-3.5 rounded-full', d.practiced ? 'bg-emerald-400' : 'border border-border bg-muted')}
+            aria-label={`${d.date}: ${d.practiced ? 'practised' : 'no practice'}`}
+          />
+          {weekdayOf(d.date)}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** `dotsOnly`: the phone's This week, the dots row and nothing else. */
+export function WeekPanel({ week, dotsOnly = false }: { week: WeeklyResponse; dotsOnly?: boolean }) {
   const top = week.topics.slice(0, 3);
   const untouched = week.untouched.slice(0, MAX_UNTOUCHED);
   const { volume, nearMisses } = week;
@@ -39,18 +57,9 @@ export function WeekPanel({ week }: { week: WeeklyResponse }) {
         </>
       }
     >
-      <ol className="flex justify-between gap-1" aria-label="Days practised">
-        {week.daily.map((d) => (
-          <li key={d.date} className="flex flex-col items-center gap-1 text-[11px] text-muted-foreground">
-            <span
-              className={cn('h-3.5 w-3.5 rounded-full', d.practiced ? 'bg-emerald-400' : 'border border-border bg-muted')}
-              aria-label={`${d.date}: ${d.practiced ? 'practised' : 'no practice'}`}
-            />
-            {weekdayOf(d.date)}
-          </li>
-        ))}
-      </ol>
-
+      <WeekDots week={week} />
+      {!dotsOnly && (
+      <>
       <p className="text-sm">
         {volume.subs === 0 ? (
           'No problems submitted yet this week.'
@@ -106,6 +115,8 @@ export function WeekPanel({ week }: { week: WeeklyResponse }) {
             ))}
           </div>
         </div>
+      )}
+      </>
       )}
     </HomeCard>
   );

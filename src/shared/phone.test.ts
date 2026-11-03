@@ -63,6 +63,13 @@ describe('phoneNext', () => {
     expect(phoneNext(day(TODAY_STEPS, all), 'behavioral')).toBeNull();
   });
 
+  it('a warm-up down to its review problems waits for the iPad', () => {
+    const d = day(TODAY_STEPS);
+    d[0].href = '/grind?from=today&step=warmup';
+    expect(phoneNext(d, 'behavioral')?.id).toBe('concept');
+    expect(splitByPlace(d, 'behavioral').ipad.map((s) => s.id)).toEqual(['warmup', 'problem1', 'problem2']);
+  });
+
   it('skipped steps are not offered', () => {
     expect(phoneNext(day(TODAY_STEPS, { warmup: 'skipped' }), 'behavioral')?.id).toBe('concept');
   });

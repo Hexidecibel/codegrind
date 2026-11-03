@@ -29,6 +29,23 @@ export function stepPlace(id: TodayStepId, mockKind: MockKind): StepPlace {
   return PHONE_STEPS.has(id) ? 'phone' : 'ipad';
 }
 
+/** Pages that are an editor first: a step that points at one is the iPad's for now. */
+const IPAD_PATHS = ['/grind', '/manual', '/workspace'];
+
+/** Does this link open a coding page? (The warm-up's last pile, review problems, does.) */
+export function isIpadHref(href: string): boolean {
+  const path = href.split(/[?#]/)[0];
+  return IPAD_PATHS.some((p) => path === p || path.startsWith(`${p}/`));
+}
+
+/**
+ * Where this step is done right now: its id's place, unless its link opens a
+ * coding page (a warm-up down to its review problems).
+ */
+export function placeOf(step: Pick<TodayStep, 'id' | 'href'>, mockKind: MockKind): StepPlace {
+  return isIpadHref(step.href) ? 'ipad' : stepPlace(step.id, mockKind);
+}
+
 /** Startable and not yet finished. A locked debrief is neither. */
 export function isOpen(step: TodayStep): boolean {
   return step.status === 'todo' || step.status === 'current' || step.status === 'in-progress';
@@ -36,13 +53,13 @@ export function isOpen(step: TodayStep): boolean {
 
 /** The first unfinished step a phone can do, or null when the phone is done for the day. */
 export function phoneNext(steps: readonly TodayStep[], mockKind: MockKind): TodayStep | null {
-  return steps.find((s) => isOpen(s) && stepPlace(s.id, mockKind) === 'phone') ?? null;
+  return steps.find((s) => isOpen(s) && placeOf(s, mockKind) === 'phone') ?? null;
 }
 
 /** Split the day into the phone's steps and the iPad's, order kept. */
 export function splitByPlace(steps: readonly TodayStep[], mockKind: MockKind): { phone: TodayStep[]; ipad: TodayStep[] } {
   const phone: TodayStep[] = [];
   const ipad: TodayStep[] = [];
-  for (const s of steps) (stepPlace(s.id, mockKind) === 'phone' ? phone : ipad).push(s);
+  for (const s of steps) (placeOf(s, mockKind) === 'phone' ? phone : ipad).push(s);
   return { phone, ipad };
 }

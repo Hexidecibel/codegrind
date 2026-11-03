@@ -42,10 +42,37 @@ export function leverHref(area: ReadinessArea): string {
   return AREA_HREF[area.id] ?? '/grind';
 }
 
-export function LeverLine({ areas, defaultOpen = false }: { areas: readonly ReadinessArea[]; defaultOpen?: boolean }) {
+/** The four areas as coloured dots, labelled. */
+function AreaDots({ areas }: { areas: readonly ReadinessArea[] }) {
+  return (
+    <>
+      {areas.map((a) => (
+        <span key={a.id} className={cn('inline-flex items-center gap-1.5', a.inLoop === false && 'opacity-60')}>
+          <span className={cn('h-2.5 w-2.5 rounded-full', DOT[a.verdict])} aria-hidden />
+          {a.label} <span className="sr-only">{READINESS_VERDICT_LABEL[a.verdict]}</span>
+        </span>
+      ))}
+    </>
+  );
+}
+
+/**
+ * `dotsOnly`: the phone's Readiness, the area to push by name and the four dots.
+ * No hint sentence, no tiles, and no Work on it (it often opens an editor).
+ */
+export function LeverLine({ areas, defaultOpen = false, dotsOnly = false }: { areas: readonly ReadinessArea[]; defaultOpen?: boolean; dotsOnly?: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
   const lever = leverArea(areas);
   if (!areas.length) return null;
+  if (dotsOnly) {
+    return (
+      <HomeCard title="Readiness" icon={Gauge} aside={lever ? <span className="font-medium text-foreground">{lever.label}</span> : undefined}>
+        <p className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+          <AreaDots areas={areas} />
+        </p>
+      </HomeCard>
+    );
+  }
   return (
     <HomeCard title="Readiness" icon={Gauge}>
       <div className="flex flex-wrap items-center gap-4">
@@ -75,12 +102,7 @@ export function LeverLine({ areas, defaultOpen = false }: { areas: readonly Read
           onClick={() => setOpen((v) => !v)}
           className="flex min-h-11 w-full flex-wrap items-center gap-x-4 gap-y-1 rounded-md text-left text-xs text-muted-foreground transition-colors hover:text-foreground sm:pointer-fine:min-h-8"
         >
-          {areas.map((a) => (
-            <span key={a.id} className={cn('inline-flex items-center gap-1.5', a.inLoop === false && 'opacity-60')}>
-              <span className={cn('h-2.5 w-2.5 rounded-full', DOT[a.verdict])} aria-hidden />
-              {a.label} <span className="sr-only">{READINESS_VERDICT_LABEL[a.verdict]}</span>
-            </span>
-          ))}
+          <AreaDots areas={areas} />
           <span className="ml-auto inline-flex items-center gap-0.5">
             {open ? 'Hide' : 'Details'}
             {open ? <ChevronUp className="h-3.5 w-3.5" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden />}

@@ -41,7 +41,15 @@ import {
   Shapes,
   RefreshCw,
   Repeat,
+  BookOpen,
+  Calculator,
+  ChevronRight,
+  Eye,
+  Smartphone,
+  Tablet,
 } from 'lucide-react';
+import { isIpadHref, isOpen, phoneNext, splitByPlace } from '@/shared/phone';
+import { useIsPhone } from '@/client/hooks/useMediaQuery';
 import {
   QUICK_OFF_STEPS,
   STEP_NOTE_IDS,
@@ -700,12 +708,247 @@ function ComingUp({
   );
 }
 
+// -----------------------------------------------------------------------------
+// The phone's Today
+// -----------------------------------------------------------------------------
+// A phone does the talking, tapping and one-line steps; the coding waits for
+// the iPad. So: one Next card that only ever points at a phone step, the
+// phone's steps as compact rows, the iPad's folded into one quiet row, and,
+// once the phone's share is done, a few extras that never change the day's
+// count. Everything that is detail on a big screen (readiness tiles, target,
+// AI spend, end day early) stays there.
+
+const phoneRow = 'flex min-h-12 items-center gap-3 px-3';
+
+function PhoneHeader({ state }: { state: TodayState }) {
+  const pct = Math.round((state.completed / state.total) * 100);
+  const done = state.current === null;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-baseline gap-2">
+        <h1 className="text-2xl font-bold tracking-tight">Today</h1>
+        <span className="text-sm text-muted-foreground">
+          {new Date(`${state.date}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+        </span>
+        <span className="ml-auto inline-flex items-center gap-1 text-sm font-semibold" title="Consecutive days with practice">
+          <Flame className={cn('h-4 w-4', state.streak > 0 ? 'text-amber-400' : 'text-muted-foreground')} aria-hidden />
+          {state.streak}
+        </span>
+      </div>
+      {state.nextLoop && (
+        <p className="flex items-center gap-2 text-sm">
+          <Briefcase className="h-4 w-4 text-muted-foreground" aria-hidden />
+          <span className="font-semibold">
+            {state.nextLoop.company} {countdownPhrase(state.nextLoop.daysLeft)}
+          </span>
+        </p>
+      )}
+      <div className="flex items-center gap-3">
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+          <div className={cn('h-full rounded-full transition-all', done ? 'bg-emerald-400' : 'bg-primary')} style={{ width: `${pct}%` }} />
+        </div>
+        <span className={cn('text-xs tabular-nums', done ? 'font-semibold text-emerald-400' : 'text-muted-foreground')}>
+          {done ? 'Day complete' : `${state.completed}/${state.total}`}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function PhoneNextCard({ state, step, busy, onSkip }: { state: TodayState; step: TodayStep; busy: boolean; onSkip: (id: TodayStep['id']) => void }) {
+  const isDebrief = step.id === 'debrief';
+  // The review-problems pile is the iPad's; the rest of the warm-up is here.
+  const items = step.id === 'warmup' ? warmupItems(state).filter((i) => !isIpadHref(i.href)) : [];
+  return (
+    <section aria-label="Next" className="space-y-4 rounded-2xl border border-primary/40 bg-primary/5 p-4">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium uppercase tracking-wide text-primary">Next</p>
+          <p className="text-xl font-semibold leading-tight">{step.label}</p>
+        </div>
+        {!isDebrief && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Skip this step"
+            title="Skip this step"
+            onClick={() => onSkip(step.id)}
+            disabled={busy}
+            className="-mr-2 -mt-1 h-11 w-11 shrink-0 text-muted-foreground"
+          >
+            <SkipForward className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
+      {items.length > 0 && <WarmupChecklist items={items} />}
+      {isDebrief ? (
+        <Button size="lg" className="h-14 w-full gap-2 text-base" onClick={scrollToDebrief}>
+          Debrief <ArrowRight className="h-5 w-5" />
+        </Button>
+      ) : (
+        <Button asChild size="lg" className="h-14 w-full gap-2 text-base">
+          <Link to={step.href}>
+            {step.status === 'in-progress' ? 'Continue' : 'Start'} <ArrowRight className="h-5 w-5" />
+          </Link>
+        </Button>
+      )}
+    </section>
+  );
+}
+
+function PhoneStepRow({ step, index, next }: { step: TodayStep; index: number; next: boolean }) {
+  const line = step.status === 'done' || step.status === 'skipped' ? step.result : null;
+  return (
+    <li className={cn(phoneRow, next && 'bg-primary/5')}>
+      <StepIcon step={next && step.status === 'todo' ? { ...step, status: 'current' } : step} index={index} />
+      <span className={cn('min-w-0 flex-1 truncate text-sm', step.status === 'done' || step.status === 'skipped' ? 'text-muted-foreground' : 'font-medium')}>
+        {step.label}
+      </span>
+      {line && (
+        <span className={cn('max-w-[45%] shrink-0 truncate text-xs', step.ok === true ? 'text-emerald-400' : step.ok === false ? 'text-rose-300' : 'text-muted-foreground')}>
+          {line}
+        </span>
+      )}
+      {step.status === 'skipped' && !line && <span className="shrink-0 text-xs text-muted-foreground">skipped</span>}
+    </li>
+  );
+}
+
+/** The iPad's steps, folded: a count, and the list without a Start in sight. */
+function OnIpad({ steps }: { steps: readonly TodayStep[] }) {
+  const [open, setOpen] = useState(false);
+  if (!steps.length) return null;
+  const left = steps.filter(isOpen).length;
+  return (
+    <div className="overflow-hidden rounded-xl border border-border">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className={cn(phoneRow, 'w-full text-left text-sm text-muted-foreground')}
+      >
+        <Tablet className="h-4 w-4 shrink-0" aria-hidden />
+        <span className="flex-1">
+          On iPad · <span className="tabular-nums">{left}</span>
+        </span>
+        {open ? <ChevronUp className="h-4 w-4" aria-hidden /> : <ChevronDown className="h-4 w-4" aria-hidden />}
+      </button>
+      {open && (
+        <ol aria-label="On iPad" className="divide-y divide-border border-t border-border">
+          {steps.map((s, i) => (
+            <PhoneStepRow key={s.id} step={s} index={i} next={false} />
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+export interface SessionItem {
+  key: string;
+  label: string;
+  icon: typeof Timer;
+  href: string;
+  /** A small count on the right ("3 due", "2 today"), or null. */
+  count: string | null;
+}
+
+/** The phone's extras once its steps are done. Never part of the day's count. */
+export function phoneSessionItems(state: Pick<TodayState, 'recognize' | 'envelope' | 'patternRecallDue'>): SessionItem[] {
+  const items: SessionItem[] = [
+    {
+      key: 'recognize',
+      label: 'Recognize ×5',
+      icon: Eye,
+      href: '/recognize?n=5',
+      count: state.recognize?.due ? `${state.recognize.due} due` : state.recognize?.doneToday ? `${state.recognize.doneToday} today` : null,
+    },
+    {
+      key: 'envelope',
+      label: 'Envelope ×5',
+      icon: Calculator,
+      href: '/envelope?n=5',
+      count: state.envelope?.due ? `${state.envelope.due} due` : state.envelope?.doneToday ? `${state.envelope.doneToday} today` : null,
+    },
+  ];
+  if (state.patternRecallDue > 0) {
+    items.push({ key: 'recall', label: 'Pattern recall', icon: Shapes, href: '/patterns?due=1', count: `${state.patternRecallDue} due` });
+  }
+  items.push({ key: 'lesson', label: 'One lesson', icon: BookOpen, href: '/study', count: null });
+  return items;
+}
+
+function PhoneSession({ state }: { state: TodayState }) {
+  const items = phoneSessionItems(state);
+  return (
+    <section aria-label="Phone session" className={cn(CARD, 'space-y-2 p-2 sm:p-2')}>
+      <h2 className="flex items-center gap-2 px-2 pt-2 text-sm font-semibold text-muted-foreground">
+        <Smartphone className="h-4 w-4" aria-hidden /> Phone session
+      </h2>
+      <ul>
+        {items.map(({ key, label, icon: Icon, href, count }) => (
+          <li key={key}>
+            <Link to={href} className={cn(phoneRow, 'rounded-lg text-[15px] active:bg-secondary')}>
+              <Icon className="h-5 w-5 shrink-0 text-primary" aria-hidden />
+              <span className="flex-1">{label}</span>
+              {count && <span className="text-xs tabular-nums text-muted-foreground">{count}</span>}
+              <ChevronRight className="h-4 w-4 text-muted-foreground/60" aria-hidden />
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** The phone's Home: one Next, the phone's steps, the iPad's folded away. */
+export function PhoneToday({
+  state,
+  week,
+  busy,
+  onSkip,
+  onTurnOffRefresh,
+  error,
+  debrief,
+}: {
+  state: TodayState;
+  week: WeeklyResponse | null;
+  busy: boolean;
+  onSkip: (id: TodayStep['id']) => void;
+  onTurnOffRefresh: () => void;
+  error?: string | null;
+  /** The debrief panel, rendered at the bottom. */
+  debrief?: ReactNode;
+}) {
+  const next = phoneNext(state.steps, state.mockKind);
+  const { phone, ipad } = splitByPlace(state.steps, state.mockKind);
+  return (
+    <div className="mx-auto max-w-md space-y-4 p-4">
+      <PhoneHeader state={state} />
+      {state.refresh.on && <RefreshBanner r={state.refresh} busy={busy} onTurnOff={onTurnOffRefresh} />}
+      {next ? <PhoneNextCard state={state} step={next} busy={busy} onSkip={onSkip} /> : <PhoneSession state={state} />}
+      {error && <p className="text-sm text-destructive-foreground">{error}</p>}
+      <ol aria-label="Phone steps" className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+        {phone.map((s, i) => (
+          <PhoneStepRow key={s.id} step={s} index={i} next={s.id === next?.id} />
+        ))}
+      </ol>
+      <OnIpad steps={ipad} />
+      {week && <WeekPanel week={week} dotsOnly />}
+      <LeverLine areas={state.readiness} dotsOnly />
+      {debrief}
+      <div className="pb-2" />
+    </div>
+  );
+}
+
 export function HomePage() {
   const [state, setState] = useState<TodayState | null>(null);
   const [week, setWeek] = useState<WeeklyResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [debriefBusy, setDebriefBusy] = useState(false);
+  const isPhone = useIsPhone();
 
   useEffect(() => {
     getToday()
@@ -781,6 +1024,22 @@ export function HomePage() {
 
   // Mocks: a card when one is owed; otherwise (one done, or the refresh is on,
   // which replaces mocks) a quiet line with the other one-liners in Coming up.
+  if (isPhone) {
+    return (
+      <div className="h-full overflow-y-auto">
+        <PhoneToday
+          state={state}
+          week={week}
+          busy={busy}
+          error={error}
+          onSkip={(id) => void act(() => skipTodayStep(id, true))}
+          onTurnOffRefresh={() => void act(() => setTodayRefresh(false))}
+          debrief={<DebriefPanel state={state} busy={debriefBusy} onRun={runDebrief} />}
+        />
+      </div>
+    );
+  }
+
   const mockRefresh = state.refresh.on ? state.refresh : null;
   const mockLine = week && mockNudgeIsLine(week.mocks, mockRefresh) ? <MockNudge mocks={week.mocks} refresh={mockRefresh} /> : null;
 
