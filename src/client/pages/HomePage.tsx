@@ -829,7 +829,8 @@ function OnIpad({ steps }: { steps: readonly TodayStep[] }) {
       >
         <Tablet className="h-4 w-4 shrink-0" aria-hidden />
         <span className="flex-1">
-          On iPad · <span className="tabular-nums">{left}</span>
+          On iPad ·{' '}
+          {left ? <span className="tabular-nums">{left}</span> : <span className="text-emerald-400">done</span>}
         </span>
         {open ? <ChevronUp className="h-4 w-4" aria-hidden /> : <ChevronDown className="h-4 w-4" aria-hidden />}
       </button>
