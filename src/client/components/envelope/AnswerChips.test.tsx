@@ -69,6 +69,8 @@ describe('direction buttons', () => {
       const other = d.answer === 'divide' ? 'multiply' : 'divide';
       expect(checkStep(d, d.answer).ok).toBe(true);
       expect(checkStep(d, other).ok).toBe(false);
+      // GuidedRunner hides this exact tail on a phone, where buttons replace typing.
+      expect(d.prompt.endsWith(' Type divide or multiply.')).toBe(true);
     }
   });
 });

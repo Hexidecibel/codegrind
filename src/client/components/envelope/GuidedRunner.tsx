@@ -21,6 +21,8 @@ import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
 import { ANSWER_INPUT, AnswerChips, chipsFor, inputModeFor } from './AnswerChips';
 
+const TYPE_DIRECTION = ' Type divide or multiply.';
+
 interface Done {
   answer: string;
   r: StepCheckResponse | null;
@@ -143,7 +145,17 @@ export function GuidedRunner({
         <p className="text-xs uppercase tracking-wide text-muted-foreground">
           {allFaded ? step.label : `Step ${at + 1} of ${steps.length} · ${step.label}`}
         </p>
-        <p className="text-base">{step.prompt}</p>
+        <p className="text-base">
+          {isDirection && step.prompt.endsWith(TYPE_DIRECTION) ? (
+            // The phone has buttons for this; "Type …" would be wrong there.
+            <>
+              {step.prompt.slice(0, -TYPE_DIRECTION.length)}
+              <span className="phone:hidden">{TYPE_DIRECTION}</span>
+            </>
+          ) : (
+            step.prompt
+          )}
+        </p>
         {isDirection && !checked && (
           // On a phone the direction is two big buttons, sending the same
           // words the checker reads; elsewhere it stays a typed answer.
