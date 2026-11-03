@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# READ-ONLY practice report: volume (grind vs free), per-topic stats, recognize
+# accuracy, SRS queue, readiness, envelope. Never writes to the database.
+#
+#   bin/progress-report            # last 14 and 30 days
+#   bin/progress-report 7 60       # custom windows (days)
+set -euo pipefail
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_DIR}"
+
+if [[ -f "${REPO_DIR}/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "${REPO_DIR}/.env"
+  set +a
+fi
+
+# shellcheck source=lib/node.sh
+source "${REPO_DIR}/bin/lib/node.sh"
+if ! cg_use_node; then
+  echo "no usable Node found." >&2
+  cg_node_advice >&2
+  exit 1
+fi
+
+exec npx tsx bin/progress-report.ts "$@"
