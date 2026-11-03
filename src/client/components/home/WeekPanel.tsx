@@ -12,6 +12,7 @@ import type { Topic } from '@/shared/types';
 import { practiceHref } from '@/shared/pattern-shapes';
 import { humanize } from '@/client/lib/format';
 import { cn } from '@/lib/utils';
+import { HomeCard } from './HomeCard';
 
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -28,16 +29,16 @@ export function WeekPanel({ week }: { week: WeeklyResponse }) {
   const untouched = week.untouched.slice(0, MAX_UNTOUCHED);
   const { volume, nearMisses } = week;
   return (
-    <section aria-label="This week" className="flex h-full flex-col gap-4 rounded-xl border border-border bg-card p-4">
-      <div className="flex items-baseline justify-between gap-2">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">
-          <CalendarDays className="h-4 w-4 text-primary" aria-hidden /> This week
-        </h2>
-        <span className="text-sm text-muted-foreground">
-          {week.activeDays} of {week.days} days
-        </span>
-      </div>
-
+    <HomeCard
+      title="This week"
+      icon={CalendarDays}
+      className="h-full"
+      aside={
+        <>
+          <span className="font-semibold text-foreground">{week.activeDays}</span> of {week.days} days
+        </>
+      }
+    >
       <ol className="flex justify-between gap-1" aria-label="Days practised">
         {week.daily.map((d) => (
           <li key={d.date} className="flex flex-col items-center gap-1 text-[11px] text-muted-foreground">
@@ -106,6 +107,6 @@ export function WeekPanel({ week }: { week: WeeklyResponse }) {
           </div>
         </div>
       )}
-    </section>
+    </HomeCard>
   );
 }

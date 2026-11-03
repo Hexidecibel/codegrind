@@ -53,7 +53,7 @@ const WEEK: WeeklyResponse = {
 describe('MockNudge', () => {
   it('no mock: one sentence and a Start button to /mock', () => {
     const out = html(<MockNudge mocks={{ thisWeek: 0, lastAt: null }} />);
-    expect(out).toContain('No mock this week.');
+    expect(out).toContain('No mock this week');
     expect(out).toContain('One 45-min mock beats ten problems for readiness.');
     expect(out).toContain('href="/mock"');
   });
@@ -113,7 +113,7 @@ describe('LeverLine', () => {
 describe('WeekPanel', () => {
   const out = html(<WeekPanel week={WEEK} />);
   it('counts days and draws 7 dots', () => {
-    expect(out).toContain('2 of 7 days');
+    expect(out).toMatch(/>2<\/span> of 7 days/);
     expect(out.match(/rounded-full bg-emerald-400/g)).toHaveLength(2);
     expect(out).toContain('aria-label="2026-10-15: no practice"');
   });

@@ -12,6 +12,7 @@ import { READINESS_VERDICT_LABEL, type ReadinessArea, type ReadinessVerdict } fr
 import { ReadinessTile } from '@/client/components/ReadinessTile';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
+import { HomeCard } from './HomeCard';
 
 /** Lower = push here first. */
 const RANK: Readonly<Record<ReadinessVerdict, number>> = { 'not-yet': 0, 'not-enough': 1, close: 2, ready: 3 };
@@ -46,51 +47,53 @@ export function LeverLine({ areas, defaultOpen = false }: { areas: readonly Read
   const lever = leverArea(areas);
   if (!areas.length) return null;
   return (
-    <section aria-label="Readiness" className="space-y-3 rounded-xl border border-border bg-card p-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <Gauge className="h-4 w-4 shrink-0 text-primary" aria-hidden />
-        <p className="min-w-0 flex-1 text-sm">
+    <HomeCard title="Readiness" icon={Gauge}>
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="min-w-0 flex-1 space-y-1">
           {lever ? (
             <>
-              <span className="font-semibold">{lever.label}:</span> {lever.hint}
+              <p className="font-semibold">{lever.label}</p>
+              <p className="text-sm text-muted-foreground">{lever.hint}</p>
             </>
           ) : (
-            'Every area reads ready. Keep it warm.'
+            <p className="text-sm text-muted-foreground">Every area reads ready. Keep it warm.</p>
           )}
-        </p>
+        </div>
         {lever && (
-          <Button asChild size="sm" variant="secondary" className="gap-1">
+          <Button asChild variant="secondary" className="gap-1.5">
             <Link to={leverHref(lever)}>
-              Start <ArrowRight className="h-3.5 w-3.5" />
+              Start <ArrowRight className="h-4 w-4" />
             </Link>
           </Button>
         )}
       </div>
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls="readiness-tiles"
-        onClick={() => setOpen((v) => !v)}
-        className="flex min-h-11 w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-md px-1 text-left text-xs text-muted-foreground transition-colors hover:text-foreground sm:pointer-fine:min-h-0"
-      >
-        {areas.map((a) => (
-          <span key={a.id} className={cn('inline-flex items-center gap-1', a.inLoop === false && 'opacity-60')}>
-            <span className={cn('h-2.5 w-2.5 rounded-full', DOT[a.verdict])} aria-hidden />
-            {a.label} <span className="sr-only">{READINESS_VERDICT_LABEL[a.verdict]}</span>
-          </span>
-        ))}
-        <span className="ml-auto inline-flex items-center gap-0.5">
-          {open ? 'Hide' : 'Details'}
-          {open ? <ChevronUp className="h-3.5 w-3.5" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden />}
-        </span>
-      </button>
-      {open && (
-        <div id="readiness-tiles" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="space-y-3 border-t border-border pt-2">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls="readiness-tiles"
+          onClick={() => setOpen((v) => !v)}
+          className="flex min-h-11 w-full flex-wrap items-center gap-x-4 gap-y-1 rounded-md text-left text-xs text-muted-foreground transition-colors hover:text-foreground sm:pointer-fine:min-h-8"
+        >
           {areas.map((a) => (
-            <ReadinessTile key={a.id} area={a} />
+            <span key={a.id} className={cn('inline-flex items-center gap-1.5', a.inLoop === false && 'opacity-60')}>
+              <span className={cn('h-2.5 w-2.5 rounded-full', DOT[a.verdict])} aria-hidden />
+              {a.label} <span className="sr-only">{READINESS_VERDICT_LABEL[a.verdict]}</span>
+            </span>
           ))}
-        </div>
-      )}
-    </section>
+          <span className="ml-auto inline-flex items-center gap-0.5">
+            {open ? 'Hide' : 'Details'}
+            {open ? <ChevronUp className="h-3.5 w-3.5" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden />}
+          </span>
+        </button>
+        {open && (
+          <div id="readiness-tiles" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {areas.map((a) => (
+              <ReadinessTile key={a.id} area={a} />
+            ))}
+          </div>
+        )}
+      </div>
+    </HomeCard>
   );
 }
