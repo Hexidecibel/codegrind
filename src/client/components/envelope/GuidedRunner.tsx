@@ -3,9 +3,9 @@
 // =============================================================================
 // Each step is checked as you go (free, deterministic) and the feedback names
 // the exact slip. After a step, the right answer is shown so you carry the
-// right number forward. Steps you have got right 3 times in a row fade: they are
-// not asked and show no numbers, so you do them in your head, and a miss brings
-// them back as questions. When every step has faded it is the question and an
+// right number forward. Fading is OPTIONAL (Settings, off by default): when on,
+// steps you have got right 3 times in a row are not asked and show no numbers,
+// so you do them in your head, and a miss brings them back as questions. When every step has faded it is the question and an
 // answer box, as in plain mode. The last step is the answer itself, graded the
 // same way as plain mode (and still recorded as guided, so a miss can bring
 // steps back).

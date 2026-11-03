@@ -380,6 +380,7 @@ export function updateSettings(patch: {
   language?: Language;
   apiKey?: string;
   aiReviews?: boolean;
+  envelopeFadeSteps?: boolean;
 }): Promise<SettingsResponse> {
   return request<SettingsResponse>('/api/settings', {
     method: 'PUT',

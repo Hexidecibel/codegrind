@@ -71,9 +71,10 @@ import {
   type SpeedRoundStart,
   type StepCheckResponse,
   type StepSlip,
+  type StepType,
   type StepTypeStat,
 } from '../../shared/envelope-learn.js';
-import { getSetting } from './db.js';
+import { getSetting, setSetting } from './db.js';
 import { aiReviewsEnabled, costOfMeta } from './ai-usage.service.js';
 import { scheduleRecognizeCard } from './recognize.compute.js';
 import { dayStartMs, localDay, todayTz } from './today.compute.js';
@@ -278,7 +279,7 @@ function guidedFailedStep(
 ): string | null {
   const plan = guidedPlan(item)!;
   const unit = plan[plan.length - 1];
-  const faded = fadedTypes(stepStreaks(store.recentSteps()));
+  const faded = envelopeFadeEnabled() ? fadedTypes(stepStreaks(store.recentSteps())) : new Set<StepType>();
   store.insertStep(
     { itemKey: item.key, stepType: 'unit', stepIndex: plan.length - 1, prompt: unit.prompt, answer, ok: final.ok, slip: final.slip, feedback: final.feedback, counted: true },
     now
@@ -297,13 +298,28 @@ function guidedFailedStep(
 // -----------------------------------------------------------------------------
 // Guided steps (Phase I)
 // -----------------------------------------------------------------------------
+export const ENVELOPE_FADE_KEY = 'envelope.fadeSteps';
+
+/** Fading is opt-in (default OFF): a beginner does every step, every time. */
+export function envelopeFadeEnabled(): boolean {
+  try {
+    return getSetting<unknown>(ENVELOPE_FADE_KEY) === true;
+  } catch {
+    return false;
+  }
+}
+
+export function setEnvelopeFade(on: boolean): void {
+  setSetting(ENVELOPE_FADE_KEY, on);
+}
+
 /** GET /api/envelope/guided?key= — the item's steps; faded ones carry no answer or prompt. */
 export function guidedSteps(key: unknown): GuidedPlanResponse {
   const { item } = resolveItem(key);
   const plan = guidedPlan(item);
   if (!plan) throw new EnvelopeError('This one has no guided steps; answer it directly.', 409);
   const streaks = stepStreaks(store.recentSteps());
-  return { key: item.key, streaks, steps: servedSteps(plan, fadedTypes(streaks)) };
+  return { key: item.key, streaks, steps: servedSteps(plan, envelopeFadeEnabled() ? fadedTypes(streaks) : new Set()) };
 }
 
 /** POST /api/envelope/step — {key, index, answer}. One step, checked and recorded. Free. */
@@ -320,7 +336,7 @@ export function checkGuidedStep(body: unknown, now = new Date()): StepCheckRespo
   const r = checkStep(step, answer);
   store.insertStep({ itemKey: item.key, stepType: step.type, stepIndex: index, prompt: step.prompt, answer, ok: r.ok, slip: r.slip, feedback: r.feedback, counted: true }, now);
   const streak = stepStreaks(store.recentSteps())[step.type];
-  return { ok: r.ok, slip: r.slip, feedback: r.feedback, answer: step.answer, streak, fadesNow: r.ok && streak === FADE_AFTER };
+  return { ok: r.ok, slip: r.slip, feedback: r.feedback, answer: step.answer, streak, fadesNow: envelopeFadeEnabled() && r.ok && streak === FADE_AFTER };
 }
 
 /** Error rate per step type, from counted steps. Pure. */

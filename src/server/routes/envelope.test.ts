@@ -243,7 +243,21 @@ describe('guided mode over HTTP', () => {
     expect(fake.runEnvelopeNote.mock.calls[0][0].step).toBeUndefined();
   });
 
-  it('a step type right 3 times in a row fades with no answer; a final miss that points at it brings it back as a question', async () => {
+  it('by default (fading off) a step right 3+ times in a row is still asked every time', async () => {
+    svc.seedEnvelopeCards(NOW);
+    for (let i = 0; i < 4; i++) {
+      vi.setSystemTime(new Date(NOW.getTime() + i * 60_000));
+      const r = await step(3, '5');
+      expect(r.ok).toBe(true);
+      expect(r.fadesNow).toBe(false);
+    }
+    const g = await (await app.request(`/api/envelope/guided?key=${KEY}`)).json();
+    expect(g.steps[3].auto).toBe(false);
+    expect(g.steps[3].prompt).not.toBe('');
+  });
+
+  it('with fading on, a step type right 3 times in a row fades with no answer; a final miss that points at it brings it back as a question', async () => {
+    setSetting('envelope.fadeSteps', true);
     svc.seedEnvelopeCards(NOW);
     for (let i = 0; i < 3; i++) {
       vi.setSystemTime(new Date(NOW.getTime() + i * 60_000));
@@ -268,6 +282,7 @@ describe('guided mode over HTTP', () => {
 });
 
 describe('guided mode with every step faded', () => {
+  beforeEach(() => setSetting('envelope.fadeSteps', true));
   const KEY = 'seed:50m-day-to-sec';
   const fadeAll = () => {
     for (const type of ['direction', 'split', 'small', 'exponent', 'back'])

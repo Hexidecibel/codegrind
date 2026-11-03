@@ -359,6 +359,7 @@ export function SettingsPage() {
   const [language, setLanguage] = useState<Language | null>(null);
   const [aiReviews, setAiReviews] = useState(true);
   const [aiBusy, setAiBusy] = useState(false);
+  const [fadeSteps, setFadeSteps] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // The measurement from the last successful save, and the banner that says the
@@ -377,6 +378,7 @@ export function SettingsPage() {
     setApiKey(settings.apiKey);
     setLanguage(settings.language);
     setAiReviews(settings.aiReviews !== false);
+    setFadeSteps(settings.envelopeFadeSteps === true);
   }, []);
 
   const toggleAiReviews = useCallback(async (on: boolean) => {
@@ -389,6 +391,16 @@ export function SettingsPage() {
       setAiReviews(!on);
     } finally {
       setAiBusy(false);
+    }
+  }, []);
+
+  const toggleFadeSteps = useCallback(async (on: boolean) => {
+    setFadeSteps(on);
+    try {
+      const next = await updateSettings({ envelopeFadeSteps: on });
+      setFadeSteps(next.envelopeFadeSteps === true);
+    } catch {
+      setFadeSteps(!on);
     }
   }, []);
 
@@ -606,6 +618,30 @@ export function SettingsPage() {
               {aiReviews
                 ? 'On — reviews run automatically.'
                 : 'Off — grade yourself; AI checks and the debrief run only when you click.'}
+            </span>
+          </label>
+        </Section>
+
+        <Section
+          title="Envelope guided steps"
+          blurb={
+            <>
+              Guided mode asks every step, every time. Turn this on to let a step type fade (you do it
+              in your head) once you get it right 3 times in a row; a miss brings it back.
+            </>
+          }
+        >
+          <label className="flex items-center gap-3 rounded-xl border bg-card p-4 shadow">
+            <Switch
+              checked={fadeSteps}
+              onCheckedChange={(v) => void toggleFadeSteps(v)}
+              aria-label="Fade guided steps"
+            />
+            <span className="text-sm">
+              Fade guided steps after 3 right in a row
+              <span className="block text-xs text-muted-foreground">
+                {fadeSteps ? 'On — steps you have mastered are skipped.' : 'Off — every step, every time.'}
+              </span>
             </span>
           </label>
         </Section>

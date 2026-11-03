@@ -31,12 +31,13 @@ import { getActiveLanguage, setActiveLanguage } from '../services/db.js';
 import { harnessExists, unsupportedLanguageMessage } from '../services/harness.service.js';
 import * as apikey from '../services/apikey.service.js';
 import { aiReviewsEnabled, setAiReviews } from '../services/ai-usage.service.js';
+import { envelopeFadeEnabled, setEnvelopeFade } from '../services/envelope.service.js';
 
 export const settingsRoutes = new Hono();
 
 /** The whole live settings state, assembled from its individual accessors. */
 function readSettings(): SettingsResponse {
-  return { language: getActiveLanguage(), apiKey: apikey.describe(), aiReviews: aiReviewsEnabled() };
+  return { language: getActiveLanguage(), apiKey: apikey.describe(), aiReviews: aiReviewsEnabled(), envelopeFadeSteps: envelopeFadeEnabled() };
 }
 
 /**
@@ -59,6 +60,12 @@ const WRITERS: Record<string, SettingWriter> = {
     validate: (value) => (typeof value === 'boolean' ? null : 'aiReviews must be true or false'),
     commit: (value) => {
       if (typeof value === 'boolean') setAiReviews(value);
+    },
+  },
+  envelopeFadeSteps: {
+    validate: (value) => (typeof value === 'boolean' ? null : 'envelopeFadeSteps must be true or false'),
+    commit: (value) => {
+      if (typeof value === 'boolean') setEnvelopeFade(value);
     },
   },
   language: {

@@ -800,6 +800,8 @@ export interface SettingsResponse {
    * grading, the Recognize check on reveal, step reviews, the auto debrief.
    */
   aiReviews: boolean;
+  /** Envelope Guided: fade a step type after 3 right in a row (default off). */
+  envelopeFadeSteps: boolean;
 }
 
 /** Body for PUT /api/settings. Every field optional — omitted means unchanged. */
@@ -812,6 +814,7 @@ export interface SettingsUpdateRequest {
    */
   apiKey?: string;
   aiReviews?: boolean;
+  envelopeFadeSteps?: boolean;
 }
 
 // -----------------------------------------------------------------------------
