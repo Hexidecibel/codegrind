@@ -2,19 +2,18 @@
 //
 // Opens the database with { readonly: true } on its OWN connection. It must not
 // import services/db.ts: that module runs the migration on import (a write).
-// Pure compute (readiness, closeness) is reused.
+// Pure compute is reused: readiness, and the window numbers in
+// services/weekly.compute.ts (also behind Home's "This week"), whose SELECTs live
+// in services/weekly.rows.ts and take this read-only handle as an argument.
 //
-// Grind vs free: attempts carry NO session id. A problem is "grind" here when it
-// was first submitted inside a sitting: after a `sessions` row was created, and
-// among the first `served` distinct problems that began after it (same-day,
-// within 8h). Everything else is "free". That is a heuristic; the app itself
-// treats both identically (see submit.ts: skill_state, review_queue).
+// Grind vs free is a heuristic: see weekly.compute.classifyGrind.
 
 import Database from 'better-sqlite3';
 import path from 'node:path';
 import { computeReadiness } from '../src/server/services/readiness.compute.js';
-import { isNearMiss } from '../src/shared/closeness.js';
-import { TOPICS } from '../src/shared/types.js';
+import { classifyGrind, summarizeWindow } from '../src/server/services/weekly.compute.js';
+import type { WeeklyTrendHalf } from '../src/shared/weekly.js';
+import { loadWeeklyRows } from '../src/server/services/weekly.rows.js';
 
 const DATA_DIR = process.env.DATA_DIR || './data';
 const db = new Database(path.join(DATA_DIR, 'codegrind.db'), { readonly: true });
@@ -24,87 +23,51 @@ const DAY = 86_400_000;
 const windows = process.argv.slice(2).map(Number).filter((n) => n > 0);
 if (windows.length === 0) windows.push(14, 30);
 
-const day = (iso: string) => new Date(iso).toLocaleDateString('en-CA', { timeZone: TZ });
 const pct = (a: number, b: number) => (b ? `${Math.round((100 * a) / b)}%` : '-');
 const pad = (s: unknown, n: number) => String(s).padEnd(n);
 const lpad = (s: unknown, n: number) => String(s).padStart(n);
 const q = <T>(sql: string, ...p: unknown[]) => db.prepare(sql).all(...p) as T[];
 
-interface Att { id: string; problemId: string; pattern: string; difficulty: string; solved: number; hintsUsed: number; testsPassed: number; testsTotal: number; createdAt: string; language: string }
-const all = q<Att>(`SELECT id, problemId, pattern, difficulty, solved, hintsUsed, testsPassed, testsTotal, createdAt, language FROM attempts ORDER BY createdAt`);
-const sessions = q<{ createdAt: string; served: number }>(`SELECT createdAt, served FROM sessions ORDER BY createdAt`);
-
-// Classify each problem's first-in-window submission as grind or free.
-const grindProblems = new Set<string>();
-for (const s of sessions) {
-  const start = Date.parse(s.createdAt);
-  const seen: string[] = [];
-  for (const a of all) {
-    const t = Date.parse(a.createdAt);
-    if (t < start || t > start + 8 * 3600_000) continue;
-    if (!seen.includes(a.problemId)) seen.push(a.problemId);
-  }
-  seen.slice(0, s.served).forEach((p) => grindProblems.add(`${s.createdAt}|${p}`));
-}
-const grindAttempt = new Set<string>(); // attempt ids inside a sitting
-for (const s of sessions) {
-  const start = Date.parse(s.createdAt);
-  const picked = [...grindProblems].filter((k) => k.startsWith(s.createdAt + '|')).map((k) => k.split('|')[1]);
-  for (const a of all) {
-    const t = Date.parse(a.createdAt);
-    if (t >= start && t <= start + 8 * 3600_000 && picked.includes(a.problemId)) grindAttempt.add(a.id);
-  }
-}
+// Every row ever (the header counts them all); weekly.compute filters per window.
+const rows = loadWeeklyRows(db, '');
+const all = rows.attempts;
+const sessions = rows.sessions;
+const grindAttempt = classifyGrind(all, sessions);
 
 console.log(`codegrind progress report  (tz ${TZ}, now ${new Date(NOW).toISOString()}, ${all.length} attempts total, ${sessions.length} sittings ever)`);
 
+const rate = (h: WeeklyTrendHalf) => (h.n ? pct(h.solved, h.n) : '-');
+
 for (const W of windows) {
-  const since = NOW - W * DAY;
-  const mid = NOW - (W * DAY) / 2;
-  const inW = all.filter((a) => Date.parse(a.createdAt) >= since);
+  const s = summarizeWindow({
+    attempts: all,
+    grindIds: grindAttempt,
+    recognize: rows.recognize,
+    envelope: rows.envelope,
+    mocks: rows.mocks,
+    since: NOW - W * DAY,
+    now: NOW,
+    tz: TZ,
+  });
   console.log(`\n==================== LAST ${W} DAYS ====================`);
-  console.log(`1. VOLUME  submissions ${inW.length}, distinct problems ${new Set(inW.map((a) => a.problemId)).size}, active days ${new Set(inW.map((a) => day(a.createdAt))).size}/${W}`);
-  const g = inW.filter((a) => grindAttempt.has(a.id));
-  console.log(`   grind(sitting, heuristic) ${g.length} subs / ${new Set(g.map((a) => a.problemId)).size} problems;  free ${inW.length - g.length} subs / ${new Set(inW.filter((a) => !grindAttempt.has(a.id)).map((a) => a.problemId)).size} problems`);
-  const byDay = new Map<string, { n: number; g: number; s: number }>();
-  for (const a of inW) {
-    const d = byDay.get(day(a.createdAt)) ?? { n: 0, g: 0, s: 0 };
-    d.n++; if (grindAttempt.has(a.id)) d.g++; d.s += a.solved;
-    byDay.set(day(a.createdAt), d);
-  }
+  console.log(`1. VOLUME  submissions ${s.subs}, distinct problems ${s.problems}, active days ${s.activeDays}/${W}`);
+  console.log(`   grind(sitting, heuristic) ${s.grind.subs} subs / ${s.grind.problems} problems;  free ${s.free.subs} subs / ${s.free.problems} problems`);
   console.log('   day         subs grind free solved');
-  for (const [d, v] of [...byDay].sort()) console.log(`   ${d}  ${lpad(v.n, 4)} ${lpad(v.g, 5)} ${lpad(v.n - v.g, 4)} ${lpad(v.s, 6)}`);
+  for (const v of s.daily.filter((d) => d.subs > 0)) console.log(`   ${v.date}  ${lpad(v.subs, 4)} ${lpad(v.grind, 5)} ${lpad(v.subs - v.grind, 4)} ${lpad(v.solved, 6)}`);
 
   console.log(`2. PER TOPIC (first half -> second half solved rate)`);
   console.log(`   ${pad('topic', 20)}${lpad('att', 4)}${lpad('free', 5)}${lpad('solv', 6)}${lpad('near', 5)}${lpad('hint', 5)}${lpad('unaid', 6)}  trend`);
-  const topics = [...new Set<string>([...TOPICS, ...all.map((a) => a.pattern)])];
-  const untouched: string[] = [];
-  const rows = topics.map((t) => {
-    const r = inW.filter((a) => a.pattern === t);
-    const solved = r.filter((a) => a.solved);
-    const h1 = r.filter((a) => Date.parse(a.createdAt) < mid), h2 = r.filter((a) => Date.parse(a.createdAt) >= mid);
-    const rate = (x: Att[]) => (x.length ? pct(x.filter((a) => a.solved).length, x.length) : '-');
-    return { t, r, solved, h1, h2, rate };
-  });
-  for (const x of rows.sort((a, b) => b.r.length - a.r.length)) {
-    if (x.r.length === 0) { untouched.push(x.t); continue; }
-    const hinted = x.solved.filter((a) => a.hintsUsed > 0).length;
-    console.log(`   ${pad(x.t, 20)}${lpad(x.r.length, 4)}${lpad(x.r.filter((a) => !grindAttempt.has(a.id)).length, 5)}${lpad(pct(x.solved.length, x.r.length), 6)}${lpad(x.r.filter(isNearMissRow).length, 5)}${lpad(hinted, 5)}${lpad(x.solved.length - hinted, 6)}  ${x.rate(x.h1)}(${x.h1.length}) -> ${x.rate(x.h2)}(${x.h2.length})`);
+  for (const x of s.topics) {
+    const { before: h1, after: h2 } = x.trend;
+    console.log(`   ${pad(x.topic, 20)}${lpad(x.attempts, 4)}${lpad(x.free, 5)}${lpad(pct(x.solved, x.attempts), 6)}${lpad(x.nearMisses, 5)}${lpad(x.hinted, 5)}${lpad(x.unaided, 6)}  ${rate(h1)}(${h1.n}) -> ${rate(h2)}(${h2.n})`);
   }
-  console.log(`3. UNTOUCHED in window: ${untouched.join(', ') || '(none)'}`);
+  console.log(`3. UNTOUCHED in window: ${s.untouched.join(', ') || '(none)'}`);
 
-  const rec = q<{ topic: string; patternCorrect: number; grade: string }>(`SELECT topic, patternCorrect, grade FROM recognize_attempts WHERE createdAt >= ?`, new Date(since).toISOString());
-  console.log(`4. RECOGNIZE cards ${rec.length}` + (rec.length ? '' : '  (none in window)'));
-  const rt = new Map<string, { n: number; ok: number; got: number }>();
-  for (const r of rec) { const v = rt.get(r.topic) ?? { n: 0, ok: 0, got: 0 }; v.n++; v.ok += r.patternCorrect; v.got += r.grade === 'got' ? 1 : 0; rt.set(r.topic, v); }
-  for (const [t, v] of [...rt].sort((a, b) => b[1].n - a[1].n)) console.log(`   ${pad(t, 20)} n=${lpad(v.n, 3)} pattern-correct ${pct(v.ok, v.n)}  graded-got ${pct(v.got, v.n)}`);
+  console.log(`4. RECOGNIZE cards ${s.recognizeTotal}` + (s.recognizeTotal ? '' : '  (none in window)'));
+  for (const v of s.recognize) console.log(`   ${pad(v.topic, 20)} n=${lpad(v.n, 3)} pattern-correct ${pct(v.patternCorrect, v.n)}  graded-got ${pct(v.got, v.n)}`);
 
-  const env = q<{ ok: number; mode: string }>(`SELECT ok, mode FROM envelope_attempts WHERE createdAt >= ?`, new Date(since).toISOString());
-  const envDays = new Set(q<{ createdAt: string }>(`SELECT createdAt FROM envelope_attempts WHERE createdAt >= ?`, new Date(since).toISOString()).map((r) => day(r.createdAt))).size;
-  console.log(`7. ENVELOPE attempts ${env.length} (ok ${pct(env.filter((e) => e.ok).length, env.length)}) on ${envDays} days`);
+  console.log(`7. ENVELOPE attempts ${s.envelope.n} (ok ${pct(s.envelope.ok, s.envelope.n)}) on ${s.envelope.days} days`);
 }
-
-function isNearMissRow(a: Att) { return isNearMiss({ solved: !!a.solved, testsPassed: a.testsPassed, testsTotal: a.testsTotal }); }
 
 // ---- 5. SRS / review queue state (now) ----------------------------------
 console.log(`\n==================== STATE NOW ====================`);
