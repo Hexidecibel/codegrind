@@ -1,12 +1,17 @@
 // =============================================================================
-// TodayPage — the guided daily routine, the app's landing page
+// HomePage — the landing page: today's next step, one lever, this week
 // =============================================================================
-// One highlighted current step with a big Start / Continue button; done steps
-// show how they went, each with a short AI step review and what to carry into
-// the next step; a progress bar, the streak, AI spend and per-area readiness on
-// top; the debrief at the bottom. The reviews and the debrief are written
-// server-side (once each, gated by Settings → AI reviews); this page only
-// reads, polling briefly while one is pending.
+// Rendered at /home and /today (today-flow returns to /today, with ?query and
+// #debrief). Top to bottom, one calm column:
+//   1. Today: date, streak, progress, ONE big Start / Continue for the current
+//      step. Every step, the 30-min day, the refresh controls and the AI spend
+//      sit in "Show all steps" (open by default only while the day is going).
+//   2. One lever: the weakest readiness area's hint; the tiles open on tap.
+//   3. This week + 4. Target next (side by side at md+), from /api/home/weekly.
+//   5. Mock nudge.  6. Coming up: interview loops, reviews due.
+//   7. "See full progress", then the debrief (#debrief).
+// Step reviews and the debrief are written server-side (gated by Settings → AI
+// reviews); this page only reads, polling briefly while one is pending.
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -14,6 +19,8 @@ import {
   ArrowRight,
   CalendarCheck,
   Check,
+  ChevronDown,
+  ChevronUp,
   Coins,
   Flame,
   Loader2,
@@ -29,6 +36,7 @@ import {
   Wrench,
   Shapes,
   RefreshCw,
+  Repeat,
 } from 'lucide-react';
 import {
   QUICK_OFF_STEPS,
@@ -38,12 +46,25 @@ import {
   type TodayState,
   type TodayStep,
 } from '@/shared/today';
+import type { WeeklyResponse } from '@/shared/weekly';
 import { patternHref } from '@/shared/pattern-shapes';
 import { ROUND_LABEL, countdownPhrase } from '@/shared/loops';
 import { InterviewsPanel } from '@/client/components/InterviewsPanel';
-import { ReadinessTile } from '@/client/components/ReadinessTile';
+import { LeverLine } from '@/client/components/home/LeverLine';
+import { MockNudge } from '@/client/components/home/MockNudge';
+import { TargetCard } from '@/client/components/home/TargetCard';
+import { WeekPanel } from '@/client/components/home/WeekPanel';
 import { mockKindInfo } from '@/shared/mock-kinds';
-import { endTodayEarly, getToday, runTodayDebrief, setTodayQuick, setTodayRefresh, skipTodayStep, ApiError } from '@/client/lib/api';
+import {
+  endTodayEarly,
+  getToday,
+  getWeekly,
+  runTodayDebrief,
+  setTodayQuick,
+  setTodayRefresh,
+  skipTodayStep,
+  ApiError,
+} from '@/client/lib/api';
 import { humanize } from '@/client/lib/format';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -53,7 +74,7 @@ function longDate(date: string): string {
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
-function Header({ state }: { state: TodayState }) {
+function Header({ state, children }: { state: TodayState; children?: ReactNode }) {
   const pct = Math.round((state.completed / state.total) * 100);
   return (
     <section className="space-y-4 rounded-xl border border-border bg-card p-4 sm:p-5">
@@ -62,13 +83,6 @@ function Header({ state }: { state: TodayState }) {
           <CalendarCheck className="h-6 w-6 text-primary" /> Today
         </h1>
         <span className="text-sm text-muted-foreground">{longDate(state.date)}</span>
-        <span
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground"
-          title={`Every model call the app made: ${state.spend.todayCalls} today, ${state.spend.monthCalls} this month${state.aiReviews ? '' : ' · AI reviews are off (Settings)'}`}
-        >
-          <Coins className="h-3.5 w-3.5" /> AI ${state.spend.todayUsd.toFixed(2)} today · ${state.spend.monthUsd.toFixed(2)} this month
-          {!state.aiReviews && <span className="ml-1 rounded bg-secondary px-1.5 py-0.5 text-[10px]">reviews off</span>}
-        </span>
         <span
           className="ml-auto inline-flex items-center gap-1 text-sm font-semibold"
           title="Consecutive days with practice"
@@ -113,11 +127,7 @@ function Header({ state }: { state: TodayState }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {state.readiness.map((a) => (
-          <ReadinessTile key={a.id} area={a} />
-        ))}
-      </div>
+      {children}
     </section>
   );
 }
@@ -170,8 +180,11 @@ function StepRow({
   note,
   notePending = false,
   offToday = false,
+  hideActions = false,
   lockedText = 'Unlocks after the mock (or end the day early).',
 }: {
+  /** The current step's Start / Skip live on the big card above the list. */
+  hideActions?: boolean;
   lockedText?: string;
   /** Turned off by the 30-min day: no Undo (turn the mode off instead). */
   offToday?: boolean;
@@ -235,7 +248,7 @@ function StepRow({
         )}
       </div>
 
-      {active && !isDebrief && (
+      {active && !isDebrief && !hideActions && (
         <div className="mt-4 flex flex-wrap items-center gap-2 pl-11">
           <Button asChild size="lg" className="gap-2">
             <Link to={step.href}>
@@ -540,8 +553,253 @@ function DebriefPanel({
   );
 }
 
-export function TodayPage() {
+/** "Show all steps" starts open only while the day is under way (started, not complete). */
+export function stepsOpenByDefault(state: Pick<TodayState, 'completed' | 'current' | 'steps'>): boolean {
+  if (state.current === null) return false;
+  return state.completed > 0 || state.steps.some((s) => s.status === 'in-progress');
+}
+
+function scrollToDebrief() {
+  document.getElementById('debrief')?.scrollIntoView({ behavior: 'smooth' });
+}
+
+/** The ONE thing to do now: the current step, big. */
+export function CurrentStepCard({
+  state,
+  busy,
+  onSkip,
+}: {
+  state: TodayState;
+  busy: boolean;
+  onSkip: (id: TodayStep['id']) => void;
+}) {
+  const step = state.current ? state.steps.find((s) => s.id === state.current) : undefined;
+  if (!step) {
+    return (
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-4 py-3">
+        <Check className="h-5 w-5 text-emerald-400" aria-hidden />
+        <p className="flex-1 text-sm font-semibold">Day complete. Nice work.</p>
+        {state.steps.some((s) => s.id === 'debrief' && s.status !== 'locked') && (
+          <Button variant="secondary" onClick={scrollToDebrief}>
+            Read the debrief
+          </Button>
+        )}
+      </div>
+    );
+  }
+  const isDebrief = step.id === 'debrief';
+  const label = step.status === 'in-progress' ? 'Continue' : 'Start';
+  return (
+    <div className="space-y-3 rounded-lg border border-primary/60 bg-primary/5 p-4">
+      <div className="space-y-0.5">
+        <p className="text-xs text-muted-foreground">Next up</p>
+        <p className="text-lg font-semibold">{step.label}</p>
+        <p className="text-sm text-muted-foreground">{step.detail}</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {isDebrief ? (
+          <Button size="lg" className="gap-2" onClick={scrollToDebrief}>
+            Go to the debrief <ArrowRight className="h-4 w-4" />
+          </Button>
+        ) : (
+          <>
+            <Button asChild size="lg" className="gap-2">
+              <Link to={step.href}>
+                {label} <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+            <Button variant="ghost" onClick={() => onSkip(step.id)} disabled={busy} className="gap-1.5 text-muted-foreground">
+              <SkipForward className="h-4 w-4" /> Skip step
+            </Button>
+          </>
+        )}
+      </div>
+      {step.id === 'warmup' && (
+        <>
+          <EnvelopeRow e={state.envelope} />
+          {state.recognize && !state.refresh.on && (
+            <RecognizeRow r={state.recognize} note={state.stepNotes.recognize} pending={state.aiPending.includes('recognize')} />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Refresh on: one line and one button. The full panel is in "Show all steps". */
+function RefreshLine({ r }: { r: TodayState['refresh'] }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-violet-500/40 bg-violet-500/5 px-3 py-2">
+      <RefreshCw className="h-4 w-4 text-violet-400" aria-hidden />
+      <p className="min-w-0 flex-1 text-sm font-semibold">
+        Refresh day {r.day} of {r.total} — {r.label}
+      </p>
+      <Button asChild size="sm" variant="outline" className="gap-1">
+        <Link to={r.pattern ? patternHref(r.pattern) : '/patterns'}>
+          <Shapes className="h-3.5 w-3.5" /> {r.pattern ? 'Open the shape' : 'All shapes'}
+        </Link>
+      </Button>
+    </div>
+  );
+}
+
+function SpendLine({ state }: { state: TodayState }) {
+  return (
+    <p className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+      <Coins className="h-3.5 w-3.5" aria-hidden /> AI ${state.spend.todayUsd.toFixed(2)} today · ${state.spend.monthUsd.toFixed(2)} this
+      month · {state.spend.todayCalls} calls today
+      {!state.aiReviews && <span className="ml-1 rounded bg-secondary px-1.5 py-0.5 text-[10px]">reviews off</span>}
+    </p>
+  );
+}
+
+/** Everything else about today, behind one disclosure. */
+function DayDetails({
+  state,
+  busy,
+  act,
+}: {
+  state: TodayState;
+  busy: boolean;
+  act: (fn: () => Promise<TodayState>) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(() => stepsOpenByDefault(state));
+  const canEndEarly = !state.endedEarly && state.current !== null && state.current !== 'debrief';
+  return (
+    <div className="space-y-3">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls="today-steps"
+        onClick={() => setOpen((v) => !v)}
+        className="flex min-h-11 w-full items-center gap-1 rounded-md px-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+      >
+        {open ? <ChevronUp className="h-4 w-4" aria-hidden /> : <ChevronDown className="h-4 w-4" aria-hidden />}
+        {open ? 'Hide steps' : 'Show all steps'}
+        <span className="ml-auto text-xs">
+          {state.completed} of {state.total} done
+        </span>
+      </button>
+      {open && (
+        <div id="today-steps" className="space-y-3">
+          <ol className="space-y-2.5">
+            {state.steps.map((s, i) => (
+              <StepRow
+                key={s.id}
+                step={s}
+                index={i}
+                busy={busy}
+                hideActions={s.id === state.current}
+                onSkip={() => act(() => skipTodayStep(s.id, true))}
+                onUnskip={() => act(() => skipTodayStep(s.id, false))}
+                offToday={!!s.off || (state.quick && QUICK_OFF_STEPS.includes(s.id) && s.status === 'skipped')}
+                lockedText={state.refresh.on ? 'Unlocks once today’s pattern steps are done or skipped (or end the day early).' : undefined}
+                note={isNoteId(s.id) ? state.stepNotes[s.id] : undefined}
+                notePending={isNoteId(s.id) && state.aiPending.includes(s.id)}
+                extra={
+                  s.id === 'warmup' && s.id !== state.current ? (
+                    <>
+                      <EnvelopeRow e={state.envelope} />
+                      {state.recognize && !state.refresh.on && (
+                        <RecognizeRow r={state.recognize} note={state.stepNotes.recognize} pending={state.aiPending.includes('recognize')} />
+                      )}
+                    </>
+                  ) : undefined
+                }
+              />
+            ))}
+          </ol>
+
+          <RefreshPanel state={state} busy={busy} onToggle={(on) => void act(() => setTodayRefresh(on))} />
+
+          {!state.refresh.on && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
+              <Timer className="h-4 w-4 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">30-min day {state.quick && <span className="text-xs text-emerald-400">on</span>}</div>
+                <div className="text-xs text-muted-foreground">
+                  Warm-up cards + Envelope ×3, one problem, the debrief (no concept rep, Problem 2 or mock). Streak and spacing are kept; review problems stay due.
+                </div>
+              </div>
+              <Button size="sm" variant={state.quick ? 'outline' : 'secondary'} disabled={busy} onClick={() => act(() => setTodayQuick(!state.quick))}>
+                {state.quick ? 'Back to the full day' : 'Short on time'}
+              </Button>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <Link to="/patterns" className="tap-link underline-offset-4 hover:underline">
+              Pattern shapes →
+            </Link>
+            {!state.refresh.on && (
+              <Link to="/stories" className="tap-link underline-offset-4 hover:underline">
+                Story forge — draft a behavioral story by voice →
+              </Link>
+            )}
+            {!state.refresh.on && <span className="ml-auto">Today's mock: {mockKindInfo(state.mockKind).label}</span>}
+          </div>
+
+          <SpendLine state={state} />
+
+          {(canEndEarly || (state.endedEarly && state.current !== null)) && (
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              {canEndEarly && (
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => {
+                    if (window.confirm('End the day early? Unfinished steps are skipped and the debrief unlocks.')) {
+                      void act(() => endTodayEarly(true));
+                    }
+                  }}
+                >
+                  End day early
+                </Button>
+              )}
+              {state.endedEarly && state.current !== null && (
+                <Button variant="ghost" disabled={busy} onClick={() => act(() => endTodayEarly(false))}>
+                  Resume the day
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "Coming up": interview loops (collapsed) and the review problems due. */
+function ComingUp({ state, week, onLoopsChange }: { state: TodayState; week: WeeklyResponse | null; onLoopsChange: () => void }) {
+  const due = week ? week.reviewDue.reduce((n, r) => n + r.due, 0) : 0;
+  return (
+    <section aria-label="Coming up" className="space-y-2">
+      <h2 className="px-1 text-sm font-semibold text-muted-foreground">Coming up</h2>
+      <InterviewsPanel today={state.date} onChange={onLoopsChange} />
+      {week && (
+        <p className="flex items-center gap-2 px-1 text-sm">
+          <Repeat className="h-4 w-4 text-muted-foreground" aria-hidden />
+          {due === 0 ? (
+            <span className="text-muted-foreground">No review problems due.</span>
+          ) : (
+            <>
+              <span>
+                {due} review {due === 1 ? 'problem' : 'problems'} due
+              </span>
+              <Link to="/grind" className="tap-link text-primary underline-offset-4 hover:underline">
+                Grind them →
+              </Link>
+            </>
+          )}
+        </p>
+      )}
+    </section>
+  );
+}
+
+export function HomePage() {
   const [state, setState] = useState<TodayState | null>(null);
+  const [week, setWeek] = useState<WeeklyResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [debriefBusy, setDebriefBusy] = useState(false);
@@ -550,6 +808,10 @@ export function TodayPage() {
     getToday()
       .then(setState)
       .catch((e: Error) => setError(e.message));
+    // "This week" is extra: if it fails, Home still shows today.
+    getWeekly()
+      .then(setWeek)
+      .catch(() => setWeek(null));
   }, []);
 
   // Step reviews / the auto debrief are written server-side in the background.
@@ -614,107 +876,41 @@ export function TodayPage() {
     );
   }
 
-  const canEndEarly = !state.endedEarly && state.current !== null && state.current !== 'debrief';
-
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
-        <Header state={state} />
+        <Header state={state}>
+          {state.refresh.on && <RefreshLine r={state.refresh} />}
+          <CurrentStepCard state={state} busy={busy} onSkip={(id) => void act(() => skipTodayStep(id, true))} />
+          {error && <p className="text-sm text-destructive-foreground">{error}</p>}
+          <DayDetails state={state} busy={busy} act={act} />
+        </Header>
 
-        {state.refresh.on && <RefreshPanel state={state} busy={busy} onToggle={(on) => void act(() => setTodayRefresh(on))} />}
+        <LeverLine areas={state.readiness} />
 
-        <InterviewsPanel today={state.date} onChange={() => void getToday().then(setState).catch(() => undefined)} />
-
-        {/* Phase H4: the story forge is always one click away, not only on forge days. */}
-        <div className="flex flex-wrap justify-end gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <Link to="/patterns" className="tap-link underline-offset-4 hover:underline">
-            Pattern shapes — the code shape of each pattern →
-          </Link>
-          {!state.refresh.on && (
-            <Link to="/stories" className="tap-link underline-offset-4 hover:underline">
-              Story forge — draft a behavioral story by voice →
-            </Link>
-          )}
-        </div>
-
-        {!state.refresh.on && <RefreshPanel state={state} busy={busy} onToggle={(on) => void act(() => setTodayRefresh(on))} />}
-
-        {!state.refresh.on && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
-          <Timer className="h-4 w-4 text-muted-foreground" />
-          <div className="min-w-0 flex-1">
-            <div className="font-medium">30-min day {state.quick && <span className="text-xs text-emerald-400">on</span>}</div>
-            <div className="text-xs text-muted-foreground">
-              Warm-up cards + Envelope ×3, one problem, the debrief (no concept rep, Problem 2 or mock). Streak and spacing are kept; review problems stay due.
-            </div>
+        {week && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <WeekPanel week={week} />
+            <TargetCard target={week.target} />
           </div>
-          <Button size="sm" variant={state.quick ? 'outline' : 'secondary'} disabled={busy} onClick={() => act(() => setTodayQuick(!state.quick))}>
-            {state.quick ? 'Back to the full day' : 'Short on time'}
-          </Button>
-        </div>
         )}
 
-        {error && <p className="text-sm text-destructive-foreground">{error}</p>}
+        {week && !state.refresh.on && <MockNudge mocks={week.mocks} />}
 
-        <ol className="space-y-2.5">
-          {state.steps.map((s, i) => (
-            <StepRow
-              key={s.id}
-              step={s}
-              index={i}
-              busy={busy}
-              onSkip={() => act(() => skipTodayStep(s.id, true))}
-              onUnskip={() => act(() => skipTodayStep(s.id, false))}
-              offToday={!!s.off || (state.quick && QUICK_OFF_STEPS.includes(s.id) && s.status === 'skipped')}
-              lockedText={state.refresh.on ? 'Unlocks once today’s pattern steps are done or skipped (or end the day early).' : undefined}
-              note={isNoteId(s.id) ? state.stepNotes[s.id] : undefined}
-              notePending={isNoteId(s.id) && state.aiPending.includes(s.id)}
-              extra={
-                s.id === 'warmup' ? (
-                  <>
-                    <EnvelopeRow e={state.envelope} />
-                    {state.recognize && !state.refresh.on && (
-                      <RecognizeRow
-                        r={state.recognize}
-                        note={state.stepNotes.recognize}
-                        pending={state.aiPending.includes('recognize')}
-                      />
-                    )}
-                  </>
-                ) : undefined
-              }
-            />
-          ))}
-        </ol>
+        <ComingUp state={state} week={week} onLoopsChange={() => void getToday().then(setState).catch(() => undefined)} />
+
+        <div className="flex justify-end">
+          <Link to="/progress" className="tap-link text-sm text-primary underline-offset-4 hover:underline">
+            See full progress →
+          </Link>
+        </div>
 
         <DebriefPanel state={state} busy={debriefBusy} onRun={runDebrief} />
-
-        <div className="flex flex-wrap items-center gap-3 pb-6 text-sm">
-          {canEndEarly && (
-            <Button
-              variant="outline"
-              disabled={busy}
-              onClick={() => {
-                if (window.confirm('End the day early? Unfinished steps are skipped and the debrief unlocks.')) {
-                  void act(() => endTodayEarly(true));
-                }
-              }}
-            >
-              End day early
-            </Button>
-          )}
-          {state.endedEarly && state.current !== null && (
-            <Button variant="ghost" disabled={busy} onClick={() => act(() => endTodayEarly(false))}>
-              Resume the day
-            </Button>
-          )}
-          {!state.refresh.on && (
-            <span className="ml-auto text-xs text-muted-foreground">
-              Today's mock: {mockKindInfo(state.mockKind).label}
-            </span>
-          )}
-        </div>
+        <div className="pb-6" />
       </div>
     </div>
   );
 }
+
+/** Kept for old imports: /today renders the same page. */
+export const TodayPage = HomePage;

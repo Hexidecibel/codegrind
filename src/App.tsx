@@ -9,7 +9,7 @@ import { StudyPage } from '@/client/pages/StudyPage';
 import { SettingsPage } from '@/client/pages/SettingsPage';
 import { HelpPage } from '@/client/pages/HelpPage';
 import { MockPage } from '@/client/pages/MockPage';
-import { TodayPage } from '@/client/pages/TodayPage';
+import { HomePage } from '@/client/pages/HomePage';
 import { RecognizePage } from '@/client/pages/RecognizePage';
 import { EnvelopePage } from '@/client/pages/EnvelopePage';
 import { ConceptPage, ConceptTrackPage, ConceptLessonPage } from '@/client/pages/ConceptPage';
@@ -80,7 +80,7 @@ function App() {
             {/* Today — the guided daily routine — is the landing page. Grind
                 moved to /grind; the routine deep-links into it. */}
             <Route path="/" element={<Navigate to="/today" replace />} />
-            <Route path="/today" element={<TodayPage />} />
+            <Route path="/today" element={<HomePage />} />
             <Route path="/grind" element={<GrindPage />} />
             <Route path="/recognize" element={<RecognizePage />} />
             <Route path="/envelope" element={<EnvelopePage />} />
