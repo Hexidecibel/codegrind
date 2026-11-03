@@ -89,6 +89,7 @@ export function CloseCalls() {
   return (
     <Section
       title="Close calls"
+      foldOnPhone
       description={
         <>
           {thresholdAsTests(threshold)} tests passing on a failed run means the idea was right — a

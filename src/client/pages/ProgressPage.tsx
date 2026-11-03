@@ -126,10 +126,10 @@ export function ProgressPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-5xl space-y-8 p-4 pb-24 sm:p-6">
+      <div className="mx-auto max-w-5xl space-y-8 p-4 pb-24 sm:p-6 phone:space-y-6 phone:pb-8">
         <header>
           <h1 className="text-2xl font-bold">Progress</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-sm text-muted-foreground phone:hidden">
             Where you are in the curriculum, what opens next, and whether the
             grind is actually working.
           </p>
@@ -146,8 +146,10 @@ export function ProgressPage() {
           totalTopics={tree.length || TOPICS.length}
         />
 
-        {/* 2 — the hero. */}
+        {/* 2 — the hero. On a phone the tree is too wide to read; the tier
+            ladder below carries the same tiers as bars, so it stands in. */}
         <Section
+          className="phone:hidden"
           title="Skill tree"
           description="Each topic opens once a prerequisite completes its easy tier — 3 distinct problems solved with no hints."
           // The description states the rule; the hint says what a tier is and
@@ -275,6 +277,7 @@ export function ProgressPage() {
         {/* Two metrics, two charts. Never two y-axes on one. */}
         <Section
           title="Trend"
+          foldOnPhone
           description="One point per problem, oldest to newest."
           table={
             <DataTable
@@ -328,6 +331,7 @@ export function ProgressPage() {
 
         <Section
           title="Recurring mistakes"
+          foldOnPhone
           description="The tags the coach keeps attaching to your submissions."
           table={
             <DataTable head={['Mistake', 'Total', 'Recent', 'Earlier', 'Change']}>
@@ -356,7 +360,7 @@ export function ProgressPage() {
         <RecognizeAccuracy />
         <EnvelopeAccuracy />
 
-        <Section title="Recent attempts">
+        <Section title="Recent attempts" foldOnPhone>
           {attempts.length === 0 ? (
             <Empty>
               {empty.fresh

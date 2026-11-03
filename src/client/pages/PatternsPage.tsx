@@ -15,7 +15,8 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, Check, Eye, PencilLine, Shapes, Zap } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, Eye, Mic, PencilLine, Shapes, Zap } from 'lucide-react';
+import { useIsPhone } from '@/client/hooks/useMediaQuery';
 import {
   PATTERN_SHAPES,
   WHICH_ONE,
@@ -122,6 +123,9 @@ function PatternCard({
   onRecallOpen: (open: boolean) => void;
   onGraded: (s: PatternsState) => void;
 }) {
+  // A phone says it instead of typing it: no textarea, reveal, then grade
+  // yourself. The server's answer is optional, so the grade goes with ''.
+  const sayIt = useIsPhone();
   const [answer, setAnswer] = useState('');
   const [compared, setCompared] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -207,9 +211,23 @@ function PatternCard({
       ) : (
         <div className="space-y-3 rounded-lg border border-primary/40 bg-primary/5 p-3">
           <div className="text-sm font-medium">
-            <PencilLine className="mr-1 inline h-4 w-4 text-primary" /> Write it from memory
+            <PencilLine className="mr-1 inline h-4 w-4 text-primary" /> {sayIt ? 'Say it from memory' : 'Write it from memory'}
           </div>
-          {!compared ? (
+          {!compared && sayIt ? (
+            <>
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Mic className="h-4 w-4 shrink-0" /> The loop, the check, the update. Out loud.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => setCompared(true)} className="h-12 flex-1 gap-1.5 text-base">
+                  <Eye className="h-4 w-4" /> Reveal
+                </Button>
+                <Button variant="ghost" className="h-12 text-muted-foreground" onClick={() => onRecallOpen(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </>
+          ) : !compared ? (
             <>
               <p className="text-xs text-muted-foreground">
                 The template is hidden. Type the skeleton — the loop, the check, the update. Names and syntax don&apos;t matter; the shape does.
@@ -236,7 +254,7 @@ function PatternCard({
           ) : (
             <>
               <div className="grid gap-3 md:grid-cols-2">
-                <div className="min-w-0">
+                <div className={cn('min-w-0', sayIt && 'hidden')}>
                   <div className="mb-1 text-xs font-medium text-muted-foreground">Yours</div>
                   <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-border bg-black/20 p-3 font-mono text-[12.5px] leading-relaxed">
                     {answer.trim() || '(nothing written)'}
@@ -265,7 +283,7 @@ function PatternCard({
               ) : (
                 <div className="space-y-1.5">
                   <div className="text-xs text-muted-foreground">How close was yours? Be strict: the shape, not the names.</div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className={cn('flex flex-wrap gap-2', sayIt && 'grid grid-cols-3')}>
                     <Button size="sm" disabled={busy} onClick={() => void grade('got')} className="bg-emerald-600 text-white hover:bg-emerald-500">
                       Got it
                     </Button>
@@ -302,7 +320,7 @@ function PatternCard({
               onRecallOpen(true);
             }}
           >
-            <PencilLine className="h-3.5 w-3.5" /> Write it from memory
+            <PencilLine className="h-3.5 w-3.5" /> {sayIt ? 'Say it from memory' : 'Write it from memory'}
           </Button>
         )}
       </div>

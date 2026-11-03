@@ -12,7 +12,8 @@
 //                    legal alongside a secondary encoding).
 
 import { useId, useState, type ReactNode } from 'react';
-import { Table2 } from 'lucide-react';
+import { ChevronDown, Table2 } from 'lucide-react';
+import { useIsPhone } from '@/client/hooks/useMediaQuery';
 import type { Difficulty } from '@/shared/types';
 import { DIFFICULTY_COLOR } from './chart';
 import { cn } from '@/lib/utils';
@@ -25,9 +26,15 @@ export function Section({
   aside,
   table,
   className,
+  foldOnPhone = false,
   children,
 }: {
   title: string;
+  /**
+   * A long section on a phone starts folded to its heading: the page stays a
+   * scroll of headings, and nothing is gone, only a tap away.
+   */
+  foldOnPhone?: boolean;
   description?: ReactNode;
   /** Rendered top-right of the heading row, before the show-data toggle. */
   aside?: ReactNode;
@@ -37,32 +44,53 @@ export function Section({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const [unfolded, setUnfolded] = useState(false);
+  const isPhone = useIsPhone();
+  const foldable = foldOnPhone && isPhone;
+  const folded = foldable && !unfolded;
   const panelId = useId();
   return (
     <section className={cn('space-y-3', className)}>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h2 className="text-lg font-bold">{title}</h2>
-        {description && (
-          <p className="min-w-0 flex-1 text-sm text-muted-foreground">{description}</p>
-        )}
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          {aside}
-          {table && (
+        <h2 className="text-lg font-bold">
+          {foldable ? (
             <button
               type="button"
-              onClick={() => setOpen((v) => !v)}
-              aria-expanded={open}
-              aria-controls={panelId}
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:pointer-fine:min-h-8"
+              onClick={() => setUnfolded((v) => !v)}
+              aria-expanded={!folded}
+              className="inline-flex min-h-11 items-center gap-1.5"
             >
-              <Table2 className="h-3.5 w-3.5" />
-              {open ? 'Hide data' : 'Show data'}
+              {title}
+              <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', !folded && 'rotate-180')} />
             </button>
+          ) : (
+            title
           )}
-        </div>
+        </h2>
+        {description && !folded && (
+          // On a phone the caption sits under the heading, not squeezed beside it.
+          <p className="min-w-0 flex-1 text-sm text-muted-foreground phone:order-last phone:basis-full">{description}</p>
+        )}
+        {!folded && (
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            {aside}
+            {table && (
+              <button
+                type="button"
+                onClick={() => setOpen((v) => !v)}
+                aria-expanded={open}
+                aria-controls={panelId}
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:pointer-fine:min-h-8"
+              >
+                <Table2 className="h-3.5 w-3.5" />
+                {open ? 'Hide data' : 'Show data'}
+              </button>
+            )}
+          </div>
+        )}
       </div>
-      {children}
-      {table && open && (
+      {!folded && children}
+      {table && open && !folded && (
         <div id={panelId} className="overflow-x-auto rounded-lg border border-border">
           {table}
         </div>
