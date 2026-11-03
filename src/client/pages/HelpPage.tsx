@@ -219,14 +219,17 @@ export function HelpPage() {
             let the app decide which ones. Everything else exists to serve that.
           </p>
           <Terms>
-            <Term label="Grind">
-              Sit down and be handed a problem. No topic picking, no difficulty
-              picking — a scheduler reads your history and chooses. This is the
-              tab to live in.
+            <Term label="Home">
+              Today&apos;s next step behind one big button, the one area to
+              push, and this week at a glance. The full step list is under{' '}
+              <strong>Show all steps</strong>.
             </Term>
-            <Term label="Manual">
-              Pick a topic and a difficulty yourself, for when you know exactly
-              what you want to drill.
+            <Term label="Practice">
+              <strong>Daily grind</strong>: sit down and be handed a problem —
+              no topic or difficulty picking, a scheduler reads your history and
+              chooses. This is the place to live in. <strong>Pick a problem</strong>:
+              choose a topic and difficulty yourself. <strong>Drills</strong>:
+              Recognize, Envelope, Concept rep and Story forge.
             </Term>
             <Term label="Mock">
               A system-design interview over chat, graded at Senior, Staff or
@@ -236,20 +239,22 @@ export function HelpPage() {
               </a>
               .
             </Term>
-            <Term label="Reflect">
+            <Term label="Progress">
               Where you are in the curriculum, what opens next, and whether the
               grind is working. Numbers, a prerequisite tree, and your recent
               attempts.
             </Term>
-            <Term label="Study">
-              A continuous reading feed of written lessons over the same
-              curriculum, for when you would rather read than type.
+            <Term label="Learn">
+              <strong>Lessons</strong>: a continuous reading feed of written
+              lessons over the same curriculum, for when you would rather read
+              than type. <strong>Pattern shapes</strong> and{' '}
+              <strong>Concepts</strong> sit beside it.
             </Term>
             <Term label="Patterns">
               <Link to="/patterns" className="tap-inline text-primary underline-offset-4 hover:underline">
                 Pattern shapes
               </Link>{' '}
-              (under Study, and linked from Today, Recognize and every solved
+              (under Learn, and linked from Home, Recognize and every solved
               problem): the code shape of each pattern — the clues that give it
               away, the shape in one sentence, a JavaScript template and the
               trap. <strong>Write it from memory</strong> hides the template:
@@ -259,9 +264,10 @@ export function HelpPage() {
               them — one pattern a day, then a mixed day — in place of the mock
               and concept rep.
             </Term>
-            <Term label="Settings">
-              Which model writes your problems, and which language you practise
-              in. The <strong>?</strong> beside it is this page.
+            <Term label="More">
+              <strong>Settings</strong> (which model writes your problems, and
+              which language you practise in) and <strong>Help</strong>, this
+              page.
             </Term>
           </Terms>
           <p>
@@ -577,7 +583,7 @@ export function HelpPage() {
             </Term>
           </Terms>
           <p>
-            <strong>Reflect shows one language at a time</strong> — the active
+            <strong>Progress shows one language at a time</strong> — the active
             one. Solved, tiers cleared, hint-free, review due and the whole tree
             are that language&rsquo;s own. Two numbers are not: lessons read (the
             Study corpus is shared, so a lesson you read is read) and your day
@@ -702,7 +708,7 @@ export function HelpPage() {
             on a timer, and an idle tab costs nothing.
           </KeyIdea>
           <p>
-            Choosing your next problem, the tier ladder, everything on Reflect
+            Choosing your next problem, the tier ladder, everything on Progress
             and running your code are all free — no model is involved in any of
             them. The expensive click is <strong>Next problem</strong> when the
             bank has nothing suitable and one has to be written: that is tens of

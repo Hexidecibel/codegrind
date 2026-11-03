@@ -472,7 +472,7 @@ export function EnvelopePage() {
             </p>
             <p className="text-sm text-muted-foreground">
               Every miss is practice that sticks: misses come back tomorrow. Accuracy, and which steps slip most, are on{' '}
-              <Link to="/progress" className="underline underline-offset-4">Reflect</Link>.
+              <Link to="/progress" className="underline underline-offset-4">Progress</Link>.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button onClick={() => void start()} variant="outline">

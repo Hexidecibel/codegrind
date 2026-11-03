@@ -1,18 +1,10 @@
 import { type ReactNode } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import {
-  CalendarCheck,
-  Code2,
-  BarChart3,
-  Zap,
-  BookOpen,
-  Settings,
-  CircleQuestionMark,
-  MessagesSquare,
-} from 'lucide-react';
+import { Home, Code2, BarChart3, Dumbbell, BookOpen, MessagesSquare } from 'lucide-react';
 import { useAppHeight } from '@/client/hooks/useAppHeight';
 import { cn } from '@/lib/utils';
-import { HELP_ROUTE } from '@/client/lib/help-content';
+import { MoreMenu } from '@/client/components/MoreMenu';
+import { LEARN_SUBNAV, PRACTICE_SUBNAV, SubNav, groupPaths } from '@/client/components/SubNav';
 
 function Tab({
   to,
@@ -21,12 +13,12 @@ function Tab({
   end,
   /**
    * Where the text label starts showing. See the header-budget note on Layout:
-   * the six content tabs label from `md`; the gear waits for `lg`.
+   * the five tabs and More label from `md`.
    */
   labelClass = 'hidden md:inline',
   alsoActiveOn = [],
 }: {
-  /** Other paths this tab owns (Study also lights up on /patterns). */
+  /** Other paths this tab owns (Learn also lights up on /patterns). */
   alsoActiveOn?: string[];
   to: string;
   icon: ReactNode;
@@ -63,27 +55,26 @@ function Tab({
 }
 
 /**
- * THE HEADER IS A FIXED-WIDTH BUDGET, and Today (the seventh tab) spent the
- * last of it. Write down what pays for what — the failure mode is silent: the
- * row simply overflows on a phone nobody tested on.
+ * THE HEADER IS A FIXED-WIDTH BUDGET. Write down what pays for what — the
+ * failure mode is silent: the row simply overflows on a phone nobody tested on.
  *
- * The row holds: a 28px logo mark, the `codegrind` wordmark (~85px), a tagline
- * (~145px), seven nav tabs, and the Help `?`. Each icon-only tab is a 44px
- * touch target, each labelled tab roughly 76-96px, the `?` 36px. With 32px of
- * page padding:
+ * Five tabs (Home, Practice, Mock, Learn, Progress) and a More button
+ * (Settings, Help). Each place a tab stands for keeps its own route; SubNav
+ * shows a group's siblings under the header (Practice: grind / pick a problem /
+ * drills; Learn: lessons / pattern shapes / concepts). The row holds a 28px
+ * logo mark, the `codegrind` wordmark (~85px), a tagline (~145px), the five tabs
+ * and More. Icon-only, each is a 44px touch target; labelled, ~76-100px. With
+ * 32px of page padding:
  *
- *   < sm   7 icons, no gap (308) + gap-1 (4) + ? (36) + padding (32), header gap 0 = 380 of 390
- *   sm     7 icons + gaps (332) + ? (40) + mark (28) + gap (16) + padding (32)    = 448 of 640
- *   md     6 labels + gear (~560) + ? (40) + mark (28) + gap (16) + padding (32)  = ~676 of 768
- *   lg     the above plus the wordmark (93) and the gear's label (50)             = ~819 of 1024
- *   xl     the above plus the tagline (153)                                       = ~972 of 1280
+ *   < sm   6 icons, no gap (264) + padding (32), header gap 0              = 296 of 390
+ *   sm     6 icons + gaps (284) + mark (28) + gap (16) + padding (32)      = 360 of 640
+ *   md     6 labels (~540) + mark (28) + gap (16) + padding (32)           = ~616 of 768
+ *   lg     the above plus the wordmark (93)                                = ~709 of 1024
+ *   xl     the above plus the tagline (153)                                = ~862 of 1280
  *
- * What gave, all of it decoration rather than a destination: Help left the tab
- * row for a small `?` beside the gear; the tabs lose their 4px gaps on a phone;
- * the logo mark hides below `sm` (it paid for Today); the tab labels wait for
- * `md`; the wordmark goes screen-reader-only until `lg`; the tagline waits for
- * `xl`. An EIGHTH destination has no room left to take from — that one needs an
- * overflow menu, not another squeeze.
+ * Seven tabs plus `?` used to spend the whole row; folding into five plus More
+ * gave back ~90px on a phone. A NEW destination goes in a group's SubNav or in
+ * More, not in the tab row.
  */
 export function Layout({ children }: { children: ReactNode }) {
   useAppHeight();
@@ -116,45 +107,25 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
         <div className="ml-auto flex items-center gap-1">
           <nav className="flex items-center gap-0 sm:gap-1">
-            {/* First: the guided daily routine, and the landing page. */}
-            <Tab to="/today" icon={<CalendarCheck className="h-4 w-4" />} label="Today" />
-            <Tab to="/grind" icon={<Zap className="h-4 w-4" />} label="Grind" />
-            <Tab to="/manual" icon={<Code2 className="h-4 w-4" />} label="Manual" />
+            {/* First: today's next step and this week, the landing page. */}
+            <Tab to="/home" icon={<Home className="h-4 w-4" />} label="Home" alsoActiveOn={['/today']} />
+            <Tab
+              to="/practice"
+              icon={<Dumbbell className="h-4 w-4" />}
+              label="Practice"
+              alsoActiveOn={groupPaths(PRACTICE_SUBNAV)}
+            />
             {/* Mock interviews: a chat with an interviewer, graded at a level. */}
             <Tab to="/mock" icon={<MessagesSquare className="h-4 w-4" />} label="Mock" />
-            {/* Route stays /progress so old bookmarks keep working; the label is
-                what the page actually does now. */}
-            <Tab to="/progress" icon={<BarChart3 className="h-4 w-4" />} label="Reflect" />
-            {/* Pattern shapes live under Study (no room for an eighth tab, see above);
-                the Study header, Today and the solve screens all link to them. */}
-            <Tab to="/study" icon={<BookOpen className="h-4 w-4" />} label="Study" alsoActiveOn={['/patterns']} />
-            {/* Last, and the only tab that is not a place you practice: it is
-                where you change who writes the problems. */}
-            <Tab
-              to="/settings"
-              icon={<Settings className="h-4 w-4" />}
-              label="Settings"
-              labelClass="hidden lg:inline"
-            />
+            <Tab to="/study" icon={<BookOpen className="h-4 w-4" />} label="Learn" alsoActiveOn={groupPaths(LEARN_SUBNAV)} />
+            {/* Route stays /progress so old bookmarks keep working. */}
+            <Tab to="/progress" icon={<BarChart3 className="h-4 w-4" />} label="Progress" />
           </nav>
-          {/* The manual, as a small `?` beside the gear rather than a tab — it
-              is the one destination whose glyph is universal, and taking it out
-              of the tab row is what paid for Mock. Same /help route as before. */}
-          <NavLink
-            to={HELP_ROUTE}
-            aria-label="Help"
-            title="Help"
-            className={({ isActive }) =>
-              cn(
-                'inline-flex min-h-11 w-9 items-center justify-center rounded-full transition-colors min-[480px]:pointer-coarse:w-11 sm:pointer-fine:min-h-0 sm:pointer-fine:h-8 sm:pointer-fine:w-8 short:min-h-0 short:h-8 short:w-8',
-                isActive ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground',
-              )
-            }
-          >
-            <CircleQuestionMark className="h-4 w-4" />
-          </NavLink>
+          {/* Settings and Help: not places you practice, so one tap further. */}
+          <MoreMenu />
         </div>
       </header>
+      <SubNav />
       <main className="min-h-0 flex-1">{children}</main>
     </div>
   );

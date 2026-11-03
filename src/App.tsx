@@ -10,6 +10,7 @@ import { SettingsPage } from '@/client/pages/SettingsPage';
 import { HelpPage } from '@/client/pages/HelpPage';
 import { MockPage } from '@/client/pages/MockPage';
 import { HomePage } from '@/client/pages/HomePage';
+import { PracticePage } from '@/client/pages/PracticePage';
 import { RecognizePage } from '@/client/pages/RecognizePage';
 import { EnvelopePage } from '@/client/pages/EnvelopePage';
 import { ConceptPage, ConceptTrackPage, ConceptLessonPage } from '@/client/pages/ConceptPage';
@@ -77,10 +78,13 @@ function App() {
           <SetupWizard state={setup} onDone={() => setFinished(true)} />
         ) : (
           <Routes>
-            {/* Today — the guided daily routine — is the landing page. Grind
-                moved to /grind; the routine deep-links into it. */}
-            <Route path="/" element={<Navigate to="/today" replace />} />
+            {/* Home — today's next step and this week — is the landing page.
+                /today renders it too: today-flow returns there (?query, #debrief). */}
+            <Route path="/" element={<Navigate to="/home" replace />} />
+            <Route path="/home" element={<HomePage />} />
             <Route path="/today" element={<HomePage />} />
+            {/* Practice → Drills: Recognize, Envelope, Concept rep, Story forge. */}
+            <Route path="/practice" element={<PracticePage />} />
             <Route path="/grind" element={<GrindPage />} />
             <Route path="/recognize" element={<RecognizePage />} />
             <Route path="/envelope" element={<EnvelopePage />} />

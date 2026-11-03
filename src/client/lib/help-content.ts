@@ -138,7 +138,7 @@ export function helpHref(id: HelpSectionId): string {
 // -----------------------------------------------------------------------------
 
 export type HelpHintId =
-  // Reflect
+  // Progress (the page once called Reflect)
   | 'mastery'
   | 'tiers-cleared'
   | 'hint-free'
@@ -162,7 +162,7 @@ export interface HelpHint {
 }
 
 export const HELP_HINTS: Readonly<Record<HelpHintId, HelpHint>> = {
-  // --- Reflect ---------------------------------------------------------------
+  // --- Progress (once Reflect) ----------------------------------------------
   mastery: {
     title: 'Mastery',
     body: [

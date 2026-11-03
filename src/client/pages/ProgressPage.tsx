@@ -69,7 +69,7 @@ export function ProgressPage() {
         setAttempts(history?.attempts ?? []);
       } catch (err) {
         if (!alive) return;
-        setError(err instanceof Error ? err.message : 'Failed to load Reflect');
+        setError(err instanceof Error ? err.message : 'Failed to load Progress');
       } finally {
         if (alive) setLoading(false);
       }
@@ -128,7 +128,7 @@ export function ProgressPage() {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-5xl space-y-8 p-4 pb-24 sm:p-6">
         <header>
-          <h1 className="text-2xl font-bold">Reflect</h1>
+          <h1 className="text-2xl font-bold">Progress</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Where you are in the curriculum, what opens next, and whether the
             grind is actually working.
