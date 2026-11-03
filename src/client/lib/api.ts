@@ -730,6 +730,11 @@ export function getRecognizeSession(n: number): Promise<RecognizeSession> {
   return request<RecognizeSession>(`/api/recognize/session?n=${n}`);
 }
 
+/** GET /api/recognize/session?problem= — that one problem as a single card. Free. */
+export function getRecognizeCard(problemId: string): Promise<RecognizeSession> {
+  return request<RecognizeSession>(`/api/recognize/session?problem=${encodeURIComponent(problemId)}`);
+}
+
 /** POST /api/recognize/reveal — pattern, primer, cached note. Free; no code. */
 export function revealRecognize(problemId: string, picked: string | null): Promise<RecognizeReveal> {
   return request<RecognizeReveal>('/api/recognize/reveal', { method: 'POST', body: JSON.stringify({ problemId, picked }) });

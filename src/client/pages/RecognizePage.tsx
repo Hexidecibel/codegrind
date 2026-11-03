@@ -41,6 +41,7 @@ import {
 } from '@/shared/recognize';
 import {
   checkRecognize,
+  getRecognizeCard,
   getRecognizeSession,
   gradeRecognize,
   revealRecognize,
@@ -295,6 +296,8 @@ export function RecognizePage() {
     const n = Number(new URLSearchParams(location.search).get('n'));
     return (RECOGNIZE_SIZES as readonly number[]).includes(n) ? n : null;
   }, [location.search]);
+  // ?problem=<id>: just that problem (the phone's "Plan the approach" from /manual).
+  const presetProblem = useMemo(() => new URLSearchParams(location.search).get('problem'), [location.search]);
 
   const [size, setSize] = useState<number>(presetN ?? DEFAULT_RECOGNIZE_SIZE);
   const [cards, setCards] = useState<RecognizeCard[] | null>(null);
@@ -332,11 +335,11 @@ export function RecognizePage() {
   }, []);
 
   const start = useCallback(
-    async (n: number) => {
+    async (n: number, problemId?: string) => {
       setLoading(true);
       setError(null);
       try {
-        const s = await getRecognizeSession(n);
+        const s = problemId ? await getRecognizeCard(problemId) : await getRecognizeSession(n);
         setCards(s.cards);
         setDueLeft(s.dueLeft);
         setIdx(0);
@@ -353,8 +356,9 @@ export function RecognizePage() {
 
   // Opened from Today with ?n= → straight in.
   useEffect(() => {
-    if (presetN) void start(presetN);
-  }, [presetN, start]);
+    if (presetProblem) void start(1, presetProblem);
+    else if (presetN) void start(presetN);
+  }, [presetN, presetProblem, start]);
 
   const doReveal = useCallback(async () => {
     if (!card || reveal || revealing) return;

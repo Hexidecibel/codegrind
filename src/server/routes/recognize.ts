@@ -2,6 +2,7 @@
 // routes/recognize — the Recognize drill (pattern matching, no code)
 // =============================================================================
 //   GET  /api/recognize/session?n=5|10   the cards: statement + 4 choices   free
+//   GET  /api/recognize/session?problem=<id>   just that one card            free, no stocking
 //   POST /api/recognize/reveal           {problemId, picked}                 free*
 //   POST /api/recognize/code             {problemId}  full reference code    free, WRITES the reveal ledger
 //   POST /api/recognize/check            {problemId, picked, approach}       ONE small model call, on click
@@ -17,7 +18,7 @@
 // None of these is a solve: no attempts, skill_state, tier credit or review_queue.
 
 import { Hono, type Context } from 'hono';
-import { RecognizeError, check, grade, reveal, showCode, startSession, stats } from '../services/recognize.service.js';
+import { RecognizeError, check, grade, reveal, showCode, singleCard, startSession, stats } from '../services/recognize.service.js';
 import { errorBody } from '../services/explain.service.js';
 
 export const recognizeRoutes = new Hono();
@@ -31,6 +32,8 @@ const body = async (c: Context) => (await c.req.json().catch(() => ({}))) as Rec
 
 recognizeRoutes.get('/recognize/session', (c) => {
   try {
+    const problem = c.req.query('problem');
+    if (problem) return c.json(singleCard(problem));
     return c.json(startSession(c.req.query('n')));
   } catch (err) {
     return fail(c, 'recognize-session', err);

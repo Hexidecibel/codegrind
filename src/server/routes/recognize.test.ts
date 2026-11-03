@@ -96,6 +96,20 @@ describe('GET /api/recognize/session', () => {
     expect(new Set(s.cards.map((c: { problemId: string }) => c.problemId)).size).toBe(5);
   });
 
+  it('?problem= serves just that card, still without the answer', async () => {
+    const s = await (await app.request('/api/recognize/session?problem=p-arrays')).json();
+    expect(s.cards).toHaveLength(1);
+    expect(s.cards[0]).toMatchObject({ problemId: 'p-arrays', due: false });
+    expect(s.cards[0].choices).toHaveLength(4);
+    expect(s.cards[0].choices).toContain('arrays');
+    expect(JSON.stringify(s)).not.toContain('Title p-arrays');
+  });
+
+  it('?problem= of an unknown id is a 404', async () => {
+    const res = await app.request('/api/recognize/session?problem=nope');
+    expect(res.status).toBe(404);
+  });
+
   it('defaults an unknown size to 5', async () => {
     const s = await (await app.request('/api/recognize/session?n=37')).json();
     expect(s.cards).toHaveLength(5);

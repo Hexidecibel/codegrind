@@ -67,9 +67,19 @@ export function WorkspacePage() {
   // On a phone, "Read it" shows the problem with no editor or run bar: reading
   // the statement on the bus is useful, typing a solution on a phone is not.
   const [reading, setReading] = useState(false);
+  // A known problem (a cold review, "Practice this") can be planned instead:
+  // pick the pattern and say the approach, the part a phone is good at.
+  const problemId = new URLSearchParams(search).get('problem');
   if (gate.gated && !reading) {
     return (
-      <BestOnIpad action={{ label: 'Read it', onClick: () => setReading(true) }} onOpenAnyway={gate.openAnyway} />
+      <BestOnIpad
+        action={
+          problemId
+            ? { label: 'Plan the approach', to: `/recognize?problem=${encodeURIComponent(problemId)}` }
+            : { label: 'Read it', onClick: () => setReading(true) }
+        }
+        onOpenAnyway={gate.openAnyway}
+      />
     );
   }
   return <Workspace key={search} search={search} readOnly={gate.gated} />;

@@ -53,6 +53,13 @@ describe('coding places on a phone', () => {
     expect(html).toMatch(/<button[^>]*>Read it<\/button>/);
   });
 
+  it('/manual?problem= offers to plan that problem in Recognize', () => {
+    const html = at('/manual?problem=p-1', <WorkspacePage />);
+    expect(html).toContain('href="/recognize?problem=p-1"');
+    expect(html).toContain('Plan the approach');
+    expect(html).not.toContain('Read it');
+  });
+
   it('Open anyway is remembered for the session', () => {
     asDevice(true, { 'codegrind.openAnyway.grind': '1' });
     expect(at('/grind', <GrindPage />)).not.toContain('Code this on iPad.');

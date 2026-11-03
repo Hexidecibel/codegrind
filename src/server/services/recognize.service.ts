@@ -106,6 +106,28 @@ function sizeOf(n: unknown): number {
 /** The LOCAL day used to seed the choice shuffle, so a reload shows the same four. */
 const seedDay = (now: Date) => localDay(now.getTime(), todayTz());
 
+/** One card for one problem: the phone's "Plan the approach" from /manual. */
+export function singleCard(problemId: unknown, now = new Date()): RecognizeSession {
+  const p = requireProblem(problemId);
+  const r = store.candidates().find((c) => c.problemId === p.id);
+  const codeFree = !!r && (r.used || r.attempted || r.revealed);
+  return {
+    cards: [
+      {
+        problemId: p.id,
+        prompt: p.prompt,
+        examples: p.examples,
+        constraints: p.constraints,
+        difficulty: p.difficulty,
+        choices: pickChoices(p.topic as Topic, mulberry32(hashString(`${p.id}:${seedDay(now)}`)), p.pattern),
+        due: false,
+        codeFree,
+      },
+    ],
+    dueLeft: 0,
+  };
+}
+
 export function startSession(n: unknown, now = new Date(), quiet = false): RecognizeSession {
   const size = sizeOf(n);
   const language = getActiveLanguage();
