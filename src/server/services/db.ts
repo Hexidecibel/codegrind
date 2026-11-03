@@ -120,7 +120,8 @@ db.exec(`
     clearedAt  TEXT,                   -- set by a clean solve at the top rung
     createdAt  TEXT NOT NULL,
     rung       INTEGER NOT NULL DEFAULT 0, -- review-ladder.ts RUNG_DAYS index
-    lastMissAt TEXT                    -- the last miss; a same-day solve does not climb
+    lastMissAt TEXT,                   -- the last miss; a same-day solve does not clear
+    lastCreditAt TEXT                  -- the last same-day partial-credit climb (one per day)
   );
 
   CREATE INDEX IF NOT EXISTS idx_review_due ON review_queue(clearedAt, dueAt);
@@ -952,6 +953,8 @@ export interface SessionRow {
   plan: SessionPlan;
   served: number;
   lastTopic: Topic | null;
+  /** The `served` count at which this sitting's last review went out (null = none). */
+  lastReviewServed: number | null;
 }
 
 interface SessionDbRow {
@@ -961,6 +964,7 @@ interface SessionDbRow {
   plan: string;
   served: number;
   lastTopic: string | null;
+  lastReviewServed: number | null;
 }
 
 const insertSessionStmt = db.prepare(`
@@ -996,16 +1000,24 @@ export function getSession(id: string): SessionRow | null {
     plan,
     served: row.served,
     lastTopic: (row.lastTopic as Topic | null) ?? null,
+    lastReviewServed: row.lastReviewServed ?? null,
   };
 }
 
 const bumpSessionStmt = db.prepare(`
-  UPDATE sessions SET served = served + 1, lastTopic = ? WHERE id = ?
+  UPDATE sessions
+  SET served = served + 1, lastTopic = @lastTopic,
+      lastReviewServed = CASE WHEN @review THEN served + 1 ELSE lastReviewServed END
+  WHERE id = @id
 `);
 
-/** Record that a problem was served in this session (increments count, tracks last topic). */
-export function bumpSession(id: string, lastTopic: Topic): void {
-  bumpSessionStmt.run(lastTopic, id);
+/**
+ * Record that a problem was served in this session: increments the count,
+ * tracks the last topic, and (a review) where the last review went out — the
+ * scheduler's per-sitting review cap reads that back (reviewAllowed).
+ */
+export function bumpSession(id: string, lastTopic: Topic, review = false): void {
+  bumpSessionStmt.run({ lastTopic, review: review ? 1 : 0, id });
 }
 
 // -----------------------------------------------------------------------------
@@ -1123,22 +1135,23 @@ interface ReviewDbRow {
   createdAt: string;
   rung: number | null;
   lastMissAt: string | null;
+  lastCreditAt: string | null;
 }
 
 function ladderRow(r: ReviewDbRow): LadderRow {
   // Rows from before the ladder carry no lastMissAt: their miss was on an
   // earlier day by construction, which is what null means to the ladder.
-  return { rung: r.rung ?? 0, lastMissAt: r.lastMissAt, clearedAt: r.clearedAt, dueAt: r.dueAt };
+  return { rung: r.rung ?? 0, lastMissAt: r.lastMissAt, clearedAt: r.clearedAt, dueAt: r.dueAt, lastCreditAt: r.lastCreditAt ?? null };
 }
 
 const insertReviewStmt = db.prepare(`
-  INSERT INTO review_queue (problemId, reason, dueAt, attempts, clearedAt, createdAt, rung, lastMissAt)
-  VALUES (@problemId, @reason, @dueAt, 0, NULL, @createdAt, @rung, @lastMissAt)
+  INSERT INTO review_queue (problemId, reason, dueAt, attempts, clearedAt, createdAt, rung, lastMissAt, lastCreditAt)
+  VALUES (@problemId, @reason, @dueAt, 0, NULL, @createdAt, @rung, @lastMissAt, @lastCreditAt)
 `);
 const moveReviewStmt = db.prepare(`
   UPDATE review_queue
   SET reason = COALESCE(@reason, reason), attempts = attempts + @missed, dueAt = @dueAt,
-      clearedAt = @clearedAt, rung = @rung, lastMissAt = @lastMissAt
+      clearedAt = @clearedAt, rung = @rung, lastMissAt = @lastMissAt, lastCreditAt = @lastCreditAt
   WHERE problemId = @problemId
 `);
 
@@ -1150,7 +1163,7 @@ export function enqueueReview(problemId: string, reason: ReviewReason, nowMs = D
   const existing = getReviewStmt.get(problemId) as ReviewDbRow | undefined;
   const move = ladderOnMiss(existing ? ladderRow(existing) : null, nowMs, todayTz(), loopDeadlineMs(nowMs));
   if (!existing) {
-    insertReviewStmt.run({ problemId, reason, dueAt: move.dueAt, createdAt: new Date(nowMs).toISOString(), rung: move.rung, lastMissAt: move.lastMissAt });
+    insertReviewStmt.run({ problemId, reason, dueAt: move.dueAt, createdAt: new Date(nowMs).toISOString(), rung: move.rung, lastMissAt: move.lastMissAt, lastCreditAt: move.lastCreditAt });
     return;
   }
   moveReviewStmt.run({ problemId, reason, missed: 1, ...move });
@@ -1191,8 +1204,9 @@ export function snoozeReview(problemId: string): boolean {
 
 /**
  * A clean unaided solve of a queued problem: climb one rung (or clear at the
- * top). A solve on the same local day as the miss, or before the item was due,
- * changes nothing — see review-ladder.ts. No-op if not queued.
+ * top). The first solve on the same local day as the miss climbs one rung but
+ * never clears; later same-day solves, and a later-day solve before the item
+ * was due, change nothing — see review-ladder.ts. No-op if not queued.
  */
 export function clearReview(problemId: string, nowMs = Date.now()): void {
   const existing = getReviewStmt.get(problemId) as ReviewDbRow | undefined;

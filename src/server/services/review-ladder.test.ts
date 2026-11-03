@@ -25,9 +25,77 @@ describe('the review ladder (Phase H)', () => {
     expect(ladderOnCleanSolve(row, t, TZ)!.clearedAt).not.toBeNull();
   });
 
-  it('a solve the same local day as the miss does not climb or clear', () => {
-    const row: LadderRow = { ...ladderOnMiss(null, T0, TZ), dueAt: new Date(T0).toISOString() };
-    expect(ladderOnCleanSolve(row, T0 + 20 * 60_000, TZ)).toBeNull();
+  it('the first same-day solve after a miss climbs ONE rung (partial credit), at that rung\'s spacing', () => {
+    const row: LadderRow = ladderOnMiss(null, T0, TZ);
+    const t = T0 + 20 * 60_000;
+    const m = ladderOnCleanSolve(row, t, TZ)!;
+    expect(m.rung).toBe(1);
+    expect(m.clearedAt).toBeNull();
+    expect(days(t, m.dueAt)).toBe(RUNG_DAYS[1]);
+    expect(m.lastCreditAt).toBe(new Date(t).toISOString());
+    expect(m.lastMissAt).toBe(row.lastMissAt);
+  });
+
+  it('only one same-day climb per local day — further same-day solves change nothing', () => {
+    const credited = ladderOnCleanSolve(ladderOnMiss(null, T0, TZ), T0 + 10 * 60_000, TZ)!;
+    expect(ladderOnCleanSolve(credited, T0 + 30 * 60_000, TZ)).toBeNull();
+    expect(ladderOnCleanSolve(credited, T0 + 3 * 3_600_000, TZ)).toBeNull();
+  });
+
+  it('fail → fail → solve within minutes: one rung of credit, not zero, not a clear', () => {
+    let row: LadderRow = ladderOnMiss(null, T0, TZ);
+    row = ladderOnMiss(row, T0 + 2 * 60_000, TZ);
+    expect(row.rung).toBe(0);
+    const m = ladderOnCleanSolve(row, T0 + 5 * 60_000, TZ)!;
+    expect(m.rung).toBe(1);
+    expect(m.clearedAt).toBeNull();
+  });
+
+  it('same-day credit never clears: at the top rung it only reschedules at top spacing', () => {
+    // A lapse from the top lands on rung 2; the same-day credit takes it back to
+    // the top, and a second same-day climb is refused — still never cleared.
+    const top: LadderRow = { rung: 3, lastMissAt: new Date(T0 - 30 * DAY).toISOString(), clearedAt: null, dueAt: new Date(T0).toISOString() };
+    const lapsed = ladderOnMiss(top, T0, TZ);
+    expect(lapsed.rung).toBe(2);
+    const m = ladderOnCleanSolve(lapsed, T0 + 60_000, TZ)!;
+    expect(m.rung).toBe(3);
+    expect(m.clearedAt).toBeNull();
+    expect(days(T0 + 60_000, m.dueAt)).toBe(RUNG_DAYS[3]);
+    // A row already at the top with a same-day miss and no credit yet.
+    const atTop: LadderRow = { rung: 3, lastMissAt: new Date(T0).toISOString(), clearedAt: null, dueAt: new Date(T0 + DAY).toISOString() };
+    const r = ladderOnCleanSolve(atTop, T0 + 60_000, TZ)!;
+    expect(r.rung).toBe(3);
+    expect(r.clearedAt).toBeNull();
+    expect(days(T0 + 60_000, r.dueAt)).toBe(RUNG_DAYS[3]);
+  });
+
+  it('same-day credit respects the loop deadline', () => {
+    const m = ladderOnCleanSolve(ladderOnMiss(null, T0, TZ), T0 + 60_000, TZ, T0 + 2 * DAY)!;
+    expect(m.rung).toBe(1); // 3 days, capped to 2
+    expect(Date.parse(m.dueAt)).toBe(T0 + 2 * DAY);
+  });
+
+  it('a miss after the day\'s credit takes the credit back, and the credit is not re-earned that day', () => {
+    const credited = ladderOnCleanSolve(ladderOnMiss(null, T0, TZ), T0 + 60_000, TZ)!;
+    expect(credited.rung).toBe(1);
+    const missed = ladderOnMiss(credited, T0 + 2 * 60_000, TZ);
+    expect(missed.rung).toBe(0);
+    expect(missed.lastCreditAt).toBe(credited.lastCreditAt);
+    expect(ladderOnCleanSolve(missed, T0 + 3 * 60_000, TZ)).toBeNull();
+  });
+
+  it('credit from an earlier day does not block today\'s, and a later-day solve still climbs/clears normally', () => {
+    const credited = ladderOnCleanSolve(ladderOnMiss(null, T0, TZ), T0 + 60_000, TZ)!; // rung 1, due +3d
+    // Later day, due: the normal climb, lastCreditAt carried through.
+    const t = Date.parse(credited.dueAt);
+    const climbed = ladderOnCleanSolve(credited, t, TZ)!;
+    expect(climbed.rung).toBe(2);
+    expect(climbed.lastCreditAt).toBe(credited.lastCreditAt);
+    // Missed again on a later day: lapse one rung, then today's credit is available.
+    const t2 = t + 2 * DAY;
+    const lapsed = ladderOnMiss(climbed, t2, TZ);
+    expect(lapsed.rung).toBe(1);
+    expect(ladderOnCleanSolve(lapsed, t2 + 60_000, TZ)!.rung).toBe(2);
   });
 
   it('a solve before the item is due does not climb', () => {

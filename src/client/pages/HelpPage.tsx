@@ -37,6 +37,7 @@ import {
   MAX_HINT_LEVEL,
   MIN_HIDDEN_TESTS,
   MIN_SAMPLE_TESTS,
+  REVIEW_CAP_WINDOW,
   REVIEW_LADDER_DAYS,
   REVIEW_SKIP_MIN_DAYS,
   SANDBOX_CPUS,
@@ -298,9 +299,12 @@ export function HelpPage() {
             })}
           </Terms>
           <KeyIdea>
-            A due review outranks everything. Before any of the other five
-            reasons is even scored, the scheduler checks the review queue — if
-            something is waiting there, that is what you get. The one way past
+            A due review outranks the other five reasons. Before any of them
+            is even scored, the scheduler checks the review queue — if
+            something is waiting there, that is what you get, but at most one
+            review per {REVIEW_CAP_WINDOW} problems in a sitting, so a long
+            queue cannot turn a whole sitting into reviews. A review held back
+            by that cap just waits its turn; it is not pushed out. The one way past
             it without solving it is <strong>Skip for now</strong>: that sets the
             review aside for at least {REVIEW_SKIP_MIN_DAYS} day{REVIEW_SKIP_MIN_DAYS === 1 ? '' : 's'}, and whatever is
             next in line is served instead.
@@ -487,9 +491,11 @@ export function HelpPage() {
             different question. It comes back on a spaced ladder —{' '}
             {reviewLadderPhrase()} — climbing one rung each time you solve it
             clean on a later day, and leaving the queue only after a clean solve
-            at the top. A solve the same day you missed it does not count:
-            that is the last ten minutes talking, not recall. Miss it again and
-            it drops one rung. Skip it without submitting and it steps aside,
+            at the top. A solve the same day you missed it is the last ten
+            minutes talking, not recall, so it only earns partial credit: the
+            first one that day climbs one rung, but it can never clear the
+            problem, and a miss later that day takes the credit back. Miss it
+            again on a later day and it drops one rung. Skip it without submitting and it steps aside,
             for at least {REVIEW_SKIP_MIN_DAYS} day{REVIEW_SKIP_MIN_DAYS === 1 ? '' : 's'}, but a skip is not a miss: it
             does not move the problem on the ladder.
           </p>
@@ -783,7 +789,7 @@ export function HelpPage() {
 
 const INTENT_EXPLANATION: Record<(typeof SCHEDULER_INTENT_KINDS)[number], string> = {
   review:
-    'A problem you missed or took help on, served cold. This one jumps the queue ahead of everything else.',
+    'A problem you missed or took help on, served cold. This one jumps the queue ahead of the others, up to one review every few problems.',
   'warm-up':
     'A topic you are solid on, one difficulty below where you are working. Something to get moving on.',
   reinforce:

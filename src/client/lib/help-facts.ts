@@ -76,7 +76,9 @@ export const UNLOCK_TIER: Difficulty = 'easy';
 /**
  * The per-PROBLEM review ladder, in days until due: a miss puts the problem on
  * the first rung, each clean solve on a LATER day climbs one, a clean solve on
- * the top rung clears it, a lapse drops one rung. `review-ladder.RUNG_DAYS`.
+ * the top rung clears it, a lapse drops one rung. The first clean solve on the
+ * SAME day as the miss earns one rung of partial credit but never clears.
+ * `review-ladder.RUNG_DAYS`.
  */
 export const REVIEW_LADDER_DAYS: readonly number[] = [1, 3, 7, 14];
 
@@ -89,6 +91,12 @@ export const REVIEW_SKIP_MIN_RUNG = 0;
 
 /** How long a skipped review stays away at minimum, in days. */
 export const REVIEW_SKIP_MIN_DAYS = REVIEW_LADDER_DAYS[REVIEW_SKIP_MIN_RUNG];
+
+/**
+ * Grind's per-sitting review cap: at most one review per this many problems
+ * served. `scheduler.service.REVIEW_CAP_WINDOW`.
+ */
+export const REVIEW_CAP_WINDOW = 3;
 
 /**
  * The per-TOPIC spaced-repetition boxes, in hours. A clean solve pushes the

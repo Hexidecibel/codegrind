@@ -24,6 +24,7 @@ import {
   MIN_HIDDEN_TESTS,
   TIER_REQUIREMENT,
   UNLOCK_TIER,
+  REVIEW_CAP_WINDOW,
   reviewLadderPhrase,
 } from '@/client/lib/help-facts';
 
@@ -187,8 +188,8 @@ export const HELP_HINTS: Readonly<Record<HelpHintId, HelpHint>> = {
   'review-due': {
     title: 'Review due',
     body: [
-      'Problems you missed, or leaned on, waiting to come back. A due review is served ahead of everything else the scheduler might have picked.',
-      `It comes back on a ${reviewLadderPhrase()} ladder: each clean, unaided solve on a later day climbs a rung, a miss drops one, and a clean solve at the top clears it.`,
+      `Problems you missed, or leaned on, waiting to come back. A due review is served ahead of anything else the scheduler might have picked, up to one review per ${REVIEW_CAP_WINDOW} problems in a sitting.`,
+      `It comes back on a ${reviewLadderPhrase()} ladder: each clean, unaided solve on a later day climbs a rung, a miss drops one, and a clean solve at the top clears it. The first clean solve on the same day as a miss climbs one rung but never clears it.`,
     ],
     section: 'numbers',
   },

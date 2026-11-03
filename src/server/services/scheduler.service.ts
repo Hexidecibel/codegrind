@@ -84,6 +84,31 @@ export interface NextIntentOpts {
    * todayMissTopics). A smaller lean — see today.compute.MISS_FOCUS_BIAS.
    */
   missFocus?: readonly string[];
+  /**
+   * Whether a due review may be served on this pick (grind's per-sitting cap,
+   * see reviewAllowed). Omitted = true: only grind sittings carry the cap.
+   */
+  allowReview?: boolean;
+}
+
+/**
+ * Grind's review cap: at most ONE review per this many problems served in a
+ * sitting. A due review used to outrank everything, so a sitting with a long
+ * queue was nothing but reviews — the same handful of problems, every day.
+ */
+export const REVIEW_CAP_WINDOW = 3;
+
+/**
+ * May the next pick in a sitting be a due review? `served` is how many problems
+ * the sitting has served so far; `lastReviewServed` is the `served` count at
+ * which its last review went out (null = none yet). Allowed when no review has
+ * been served, or when at least REVIEW_CAP_WINDOW - 1 non-review problems have
+ * gone out since the last one: R, x, x, R, x, x, …  A review that has to wait
+ * is not snoozed — it stays due and comes up once the window opens.
+ */
+export function reviewAllowed(served: number, lastReviewServed: number | null): boolean {
+  if (lastReviewServed === null) return true;
+  return served - lastReviewServed >= REVIEW_CAP_WINDOW - 1;
 }
 
 // -----------------------------------------------------------------------------
@@ -386,10 +411,11 @@ function toIntent(language: Language, c: Candidate): SchedulerIntent {
 export function nextIntent(opts: NextIntentOpts): SchedulerIntent {
   const { language } = opts;
 
-  // Retrieval loop: a due review item outranks EVERYTHING — re-serve it cold.
-  // (A review the player skipped is no longer due: the /next route snoozes it
-  // before calling this, which is what lets the pick move on.)
-  const due = getDueReview(language);
+  // Retrieval loop: a due review item outranks normal scheduling — re-serve it
+  // cold — unless the sitting's review cap says this slot is not a review's
+  // (reviewAllowed). (A review the player skipped is no longer due: the /next
+  // route snoozes it before calling this, which is what lets the pick move on.)
+  const due = opts.allowReview === false ? null : getDueReview(language);
   if (due) {
     const p = getProblem(due.problemId);
     if (p) {
@@ -461,8 +487,9 @@ export function breadthIntent(language: Language, avoidTopic?: string | null): S
  * Does not commit — reuses candidate logic against current state.
  */
 export function peekUpNext(opts: NextIntentOpts): string {
-  // A due review takes priority in the real pick, so surface it in the peek too.
-  if (getReviewDueCount(opts.language) > 0) {
+  // A due review takes priority in the real pick, so surface it in the peek too
+  // — under the same cap, or the peek promises a review /next will not serve.
+  if (opts.allowReview !== false && getReviewDueCount(opts.language) > 0) {
     return 'a review problem to solve cold';
   }
   const views = buildViews(opts.language);

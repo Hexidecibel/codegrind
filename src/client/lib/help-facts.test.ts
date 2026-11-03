@@ -275,9 +275,15 @@ describe('the scheduler Help describes is still free', () => {
     expect(SCHED).not.toMatch(/from '\.\/llm\./);
   });
 
-  it('serves a due review ahead of everything else', () => {
+  it('serves a due review ahead of normal scheduling, under the per-sitting cap', () => {
     const SCHED = source('src/server/services/scheduler.service.ts');
-    expect(SCHED).toContain('a due review item outranks EVERYTHING');
+    expect(SCHED).toContain('a due review item outranks normal scheduling');
+    const match = /export const REVIEW_CAP_WINDOW = (\d+);/.exec(SCHED);
+    expect(match, 'no REVIEW_CAP_WINDOW in scheduler.service.ts').not.toBeNull();
+    expect(Number(match![1])).toBe(facts.REVIEW_CAP_WINDOW);
+    // The route actually applies it, to the pick AND the peek.
+    const ROUTE = source('src/server/routes/session.ts');
+    expect(ROUTE.match(/allowReview: reviewAllowed\(/g)?.length).toBeGreaterThanOrEqual(3);
   });
 
   it('snoozes a skipped review before that pick, not after', () => {

@@ -21,7 +21,7 @@ import {
 import type { Language } from '../../shared/languages.js';
 import { TIER_REQUIREMENT, WEAK_SCORE, tierProgress } from '../services/curriculum.js';
 import { planSession, type SessionSnapshotTopic } from '../services/llm.service.js';
-import { breadthIntent, nextIntent, peekUpNext, type SchedulerIntent } from '../services/scheduler.service.js';
+import { breadthIntent, nextIntent, peekUpNext, reviewAllowed, type SchedulerIntent } from '../services/scheduler.service.js';
 import { getAdaptiveProblem } from '../services/bank.service.js';
 import { errorBody } from '../services/explain.service.js';
 import { breadthSlot, dailyFocus, todayMissTopics } from '../services/today.service.js';
@@ -98,20 +98,29 @@ sessionRoutes.post('/session/start', async (c) => {
     const misses = todayMissTopics();
     // Phase H2: the day's Problem 2 is the breadth floor's pick.
     const slot = breadthSlot();
+    // The first problem of a sitting may always be a review (reviewAllowed).
     const intent =
       (slot ? breadthIntent(language, slot.avoidTopic) : null) ??
-      nextIntent({ language, plan, dailyFocus: focus, missFocus: misses });
+      nextIntent({ language, plan, dailyFocus: focus, missFocus: misses, allowReview: true });
     const record = await getAdaptiveProblem(intent);
 
     createSession(language, sessionId, plan);
-    bumpSession(sessionId, intent.topic);
+    const isReview = intent.kind === 'review';
+    bumpSession(sessionId, intent.topic, isReview);
 
     const payload: SessionStartResponse = {
       sessionId,
       plan,
       problem: toPlayerProblem(record),
       why: intentToWhy(intent),
-      upNext: peekUpNext({ language, plan, avoidTopic: intent.topic, dailyFocus: focus, missFocus: misses }),
+      upNext: peekUpNext({
+        language,
+        plan,
+        avoidTopic: intent.topic,
+        dailyFocus: focus,
+        missFocus: misses,
+        allowReview: reviewAllowed(1, isReview ? 1 : null),
+      }),
     };
     return c.json(payload);
   } catch (err) {
@@ -152,9 +161,15 @@ sessionRoutes.post('/session/:id/next', async (c) => {
       avoidTopic: session.lastTopic ?? undefined,
       dailyFocus: focus,
       missFocus: misses,
+      // Grind's per-sitting review cap: R, x, x, R, … (scheduler.reviewAllowed).
+      allowReview: reviewAllowed(session.served, session.lastReviewServed),
     });
     const record = await getAdaptiveProblem(intent);
-    bumpSession(id, intent.topic);
+    const isReview = intent.kind === 'review';
+    bumpSession(id, intent.topic, isReview);
+    // The counters as they stand AFTER this serve — what the next /next sees.
+    const servedNow = session.served + 1;
+    const lastReviewNow = isReview ? servedNow : session.lastReviewServed;
 
     const payload: GrindProblem = {
       sessionId: id,
@@ -166,6 +181,7 @@ sessionRoutes.post('/session/:id/next', async (c) => {
         avoidTopic: intent.topic,
         dailyFocus: focus,
         missFocus: misses,
+        allowReview: reviewAllowed(servedNow, lastReviewNow),
       }),
     };
     return c.json(payload);

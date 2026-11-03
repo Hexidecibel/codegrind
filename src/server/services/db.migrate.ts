@@ -438,6 +438,14 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
       if (tableExists(db, 'review_queue')) {
         addColumnIfMissing(db, 'review_queue', 'rung', 'INTEGER NOT NULL DEFAULT 0');
         addColumnIfMissing(db, 'review_queue', 'lastMissAt', 'TEXT');
+        // Same-day partial credit: the day's one same-day climb (review-ladder.ts).
+        addColumnIfMissing(db, 'review_queue', 'lastCreditAt', 'TEXT');
+      }
+      // Grind's per-sitting review cap (scheduler.reviewAllowed): the `served`
+      // count at which the sitting's last review went out. NULL = none yet,
+      // which is also exactly right for every sitting that predates it.
+      if (tableExists(db, 'sessions')) {
+        addColumnIfMissing(db, 'sessions', 'lastReviewServed', 'INTEGER');
       }
       db.exec(`
         CREATE TABLE IF NOT EXISTS recognize_checks (

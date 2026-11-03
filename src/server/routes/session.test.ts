@@ -47,6 +47,8 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 
 const { sessionRoutes } = await import('./session.js');
 const db = await import('../services/db.js');
+const scheduler = await import('../services/scheduler.service.js');
+const llm = await import('../services/llm.service.js');
 
 const app = new Hono();
 app.route('/api', sessionRoutes);
@@ -201,16 +203,23 @@ suite('POST /api/session/:id/next — skipping a due review', () => {
     expect(json.upNext).not.toBe('a review problem to solve cold');
   });
 
-  it('does not stop skipping at one: three clicks walk three reviews', async () => {
+  it('does not stop skipping at one: skipped reviews walk on, under the per-sitting cap', async () => {
     // The reported symptom, end to end — each click names what is on screen.
+    // A skipped review still counts as served for the cap (R, x, x, R), so B
+    // waits two problems rather than coming straight back.
     setReview(A, ago(26 * DAY), 1);
     setReview(B, ago(3 * DAY), 1);
     const first = await next();
     expect(first.json.problem.id).toBe(A);
     const second = await next({ skipProblemId: first.json.problem.id });
-    expect(second.json.problem.id).toBe(B);
-    const third = await next({ skipProblemId: second.json.problem.id });
+    expect(second.json.why.kind).not.toBe('review');
+    expect(daysFromNow(row(A).dueAt)).toBeGreaterThan(0.99);
+    const third = await next();
     expect(third.json.why.kind).not.toBe('review');
+    const fourth = await next();
+    expect(fourth.json.problem.id).toBe(B);
+    const fifth = await next({ skipProblemId: fourth.json.problem.id });
+    expect(fifth.json.why.kind).not.toBe('review');
   });
 
   it('with no body, serves the earliest due review exactly as before', async () => {
@@ -222,7 +231,9 @@ suite('POST /api/session/:id/next — skipping a due review', () => {
     expect(status).toBe(200);
     expect(json.problem.id).toBe(A);
     expect(json.why.kind).toBe('review');
-    expect(json.upNext).toBe('a review problem to solve cold');
+    // B is due too, but the sitting just served a review: the cap holds the
+    // next slot, and the peek has to agree with that.
+    expect(json.upNext).not.toBe('a review problem to solve cold');
     expect([row(A), row(B)]).toEqual(before);
   });
 
@@ -245,6 +256,9 @@ suite('POST /api/session/:id/next — skipping a due review', () => {
       () => next({ skipProblemId: 'p-does-not-exist' }),
       () => next([A]),
     ]) {
+      // A fresh sitting each time: the per-sitting review cap is not under test.
+      db.db.prepare('DELETE FROM sessions').run();
+      db.createSession('javascript', SESSION, PLAN);
       const { status, json } = await attempt();
       expect(status).toBe(200);
       expect(json.problem.id).toBe(A);
@@ -283,5 +297,96 @@ suite('POST /api/session/:id/next — skipping a due review', () => {
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'session not found' });
     expect(row(A)).toEqual(before);
+  });
+});
+
+// =============================================================================
+// Grind's per-sitting review cap — at most one review per REVIEW_CAP_WINDOW
+// problems. A due review used to outrank everything, so a long queue made a
+// whole sitting of reviews: the same few problems, every day.
+// =============================================================================
+const C = 'p-review-c';
+const D = 'p-review-d';
+
+suite('reviewAllowed — the cap rule', () => {
+  it('is R, x, x, R: allowed first, then only after REVIEW_CAP_WINDOW - 1 non-reviews', () => {
+    expect(scheduler.REVIEW_CAP_WINDOW).toBe(3);
+    expect(scheduler.reviewAllowed(0, null)).toBe(true);
+    expect(scheduler.reviewAllowed(5, null)).toBe(true);
+    // A review went out as problem 1.
+    expect(scheduler.reviewAllowed(1, 1)).toBe(false);
+    expect(scheduler.reviewAllowed(2, 1)).toBe(false);
+    expect(scheduler.reviewAllowed(3, 1)).toBe(true);
+    expect(scheduler.reviewAllowed(4, 4)).toBe(false);
+    expect(scheduler.reviewAllowed(6, 4)).toBe(true);
+  });
+});
+
+suite('nextIntent / peekUpNext — allowReview', () => {
+  it('serves (and peeks) the due review when allowed, which is also the default', () => {
+    setReview(A, ago(DAY), 0);
+    expect(scheduler.nextIntent({ language: 'javascript' }).reviewProblemId).toBe(A);
+    expect(scheduler.nextIntent({ language: 'javascript', allowReview: true }).kind).toBe('review');
+    expect(scheduler.peekUpNext({ language: 'javascript' })).toBe('a review problem to solve cold');
+    expect(scheduler.peekUpNext({ language: 'javascript', allowReview: true })).toBe('a review problem to solve cold');
+  });
+
+  it('skips the review branch when not allowed, and leaves the review due', () => {
+    const due = ago(DAY);
+    setReview(A, due, 0);
+    const before = row(A);
+    expect(scheduler.nextIntent({ language: 'javascript', allowReview: false }).kind).not.toBe('review');
+    expect(scheduler.peekUpNext({ language: 'javascript', allowReview: false })).not.toBe('a review problem to solve cold');
+    expect(row(A)).toEqual(before);
+    expect(db.getDueReview('javascript')?.problemId).toBe(A);
+  });
+});
+
+suite('POST /api/session — a sitting with many due reviews', () => {
+  beforeEach(() => {
+    bankProblem(C);
+    bankProblem(D, 'hashing');
+    setReview(A, ago(4 * DAY), 3);
+    setReview(B, ago(3 * DAY), 2);
+    setReview(C, ago(2 * DAY), 1);
+    setReview(D, ago(1 * DAY), 0);
+  });
+
+  it('serves R, fresh, fresh, R — and the peek agrees with every pick', async () => {
+    const served: Array<{ kind: string; id: string; upNext: string }> = [];
+    for (let i = 0; i < 6; i++) {
+      const { status, json } = await next();
+      expect(status).toBe(200);
+      served.push({ kind: json.why.kind, id: json.problem.id, upNext: json.upNext });
+    }
+    const isReview = served.map((s) => s.kind === 'review');
+    expect(isReview).toEqual([true, false, false, true, false, false]);
+    // Nothing was submitted, so A is still the earliest due review when the
+    // window reopens — the cap delays reviews, it does not reorder them.
+    expect(served[0].id).toBe(A);
+    expect(served[3].id).toBe(A);
+    expect(served[1].id).toBe(GENERATED_ID);
+    // upNext after pick i must describe pick i+1's review-ness.
+    for (let i = 0; i < 5; i++) {
+      expect(served[i].upNext === 'a review problem to solve cold').toBe(isReview[i + 1]);
+    }
+    // Waiting is not snoozing: C and D are still due, untouched.
+    expect(db.getReviewDueCount('javascript')).toBe(4); // nothing was submitted
+    expect(db.getSession(SESSION)).toMatchObject({ served: 6, lastReviewServed: 4 });
+  });
+
+  it('/session/start may serve a review first; the next pick is fresh', async () => {
+    vi.mocked(llm.planSession).mockResolvedValue(PLAN);
+    const res = await app.request('/api/session/start', { method: 'POST' });
+    expect(res.status).toBe(200);
+    const start = (await res.json()) as any;
+    expect(start.why.kind).toBe('review');
+    expect(start.problem.id).toBe(A);
+    expect(start.upNext).not.toBe('a review problem to solve cold');
+    expect(db.getSession(start.sessionId)).toMatchObject({ served: 1, lastReviewServed: 1 });
+
+    const after = await app.request(`/api/session/${start.sessionId}/next`, { method: 'POST' });
+    const json = (await after.json()) as any;
+    expect(json.why.kind).not.toBe('review');
   });
 });

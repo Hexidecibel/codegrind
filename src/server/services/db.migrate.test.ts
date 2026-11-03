@@ -1283,3 +1283,21 @@ describe('Phase F: the ai_usage ledger', () => {
     db.close();
   });
 });
+
+describe('grind review cap + same-day partial credit — two additive columns', () => {
+  it('adds sessions.lastReviewServed and review_queue.lastCreditAt, NULL on existing rows', () => {
+    const db = oldDb();
+    db.prepare(`INSERT INTO sessions (id, createdAt, plan, served) VALUES ('s1', 't', '{}', 4)`).run();
+    db.prepare(
+      `INSERT INTO review_queue (problemId, reason, dueAt, attempts, createdAt) VALUES ('p1', 'failed', 't', 2, 't')`
+    ).run();
+    migrate(db);
+    expect(columnsOf(db, 'sessions')).toContain('lastReviewServed');
+    expect(columnsOf(db, 'review_queue')).toContain('lastCreditAt');
+    expect(db.prepare(`SELECT lastReviewServed FROM sessions WHERE id = 's1'`).get()).toEqual({ lastReviewServed: null });
+    expect(db.prepare(`SELECT lastCreditAt FROM review_queue WHERE problemId = 'p1'`).get()).toEqual({ lastCreditAt: null });
+    // Always-run and idempotent: a second boot adds nothing.
+    expect(() => migrate(db)).not.toThrow();
+    db.close();
+  });
+});

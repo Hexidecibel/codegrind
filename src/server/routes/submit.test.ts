@@ -398,7 +398,7 @@ suite('POST /api/submit — recording, exactly once', () => {
     expect(db.isReviewQueued(PROBLEM_ID)).toBe(true);
   });
 
-  it('climbs the review ladder on clean solves on LATER days, never the same day (Phase H)', async () => {
+  it('climbs the review ladder on clean solves on LATER days; a same-day solve earns one rung, never a clear', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       const DAY = 86_400_000;
@@ -409,14 +409,20 @@ suite('POST /api/submit — recording, exactly once', () => {
       await submit();
       expect(db.getReviewRow(PROBLEM_ID)).toMatchObject({ rung: 0, clearedAt: null });
 
-      // Minutes later, solved clean: the same day, so nothing moves.
+      // Minutes later, solved clean: the same day, so partial credit — one
+      // rung (due in 3 days), persisted with the day's credit marker.
       vi.setSystemTime(t0 + 10 * 60_000);
       mocks.runTests.mockResolvedValue(sandboxResult('accepted'));
       await submit();
       expect(db.isReviewQueued(PROBLEM_ID)).toBe(true);
-      expect(db.getReviewRow(PROBLEM_ID)!.rung).toBe(0);
+      expect(db.getReviewRow(PROBLEM_ID)).toMatchObject({ rung: 1, clearedAt: null, lastCreditAt: new Date(t0 + 10 * 60_000).toISOString() });
+      // A second same-day solve: the day's one climb is spent, nothing moves.
+      vi.setSystemTime(t0 + 20 * 60_000);
+      await submit();
+      expect(db.getReviewRow(PROBLEM_ID)!.rung).toBe(1);
 
-      // Each later-day clean solve climbs a rung: 1 → 3 → 7 → 14 days.
+      // Each later-day clean solve climbs a rung once due: 1 → 3 → 7 → 14 days.
+      // (Day +1 is before the credited rung's due date, so it holds at 1.)
       let t = t0;
       for (const [wait, rung] of [[1, 1], [3, 2], [7, 3]] as const) {
         t += wait * DAY;
