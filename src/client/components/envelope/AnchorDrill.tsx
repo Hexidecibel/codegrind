@@ -10,6 +10,7 @@ import type { AnchorCheckResponse, AnchorPrompt } from '@/shared/envelope-learn'
 import { checkEnvelopeAnchor, getEnvelopeAnchors } from '@/client/lib/api';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
+import { ANSWER_INPUT } from './AnswerChips';
 
 export function AnchorDrill() {
   const [cards, setCards] = useState<AnchorPrompt[] | null>(null);
@@ -125,21 +126,35 @@ export function AnchorDrill() {
           />
         </div>
       )}
-      <input
-        ref={inputRef}
-        value={text}
-        disabled={!!result || busy}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            void submit();
-          }
-        }}
-        placeholder="type it, then Enter"
-        autoComplete="off"
-        className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-base outline-none focus:border-primary"
-      />
+      {/* A phone has no Enter worth reaching for mid-drill: a real Check button
+          sits beside the box there (and only there). */}
+      <div className="flex gap-2">
+        <input
+          ref={inputRef}
+          value={text}
+          disabled={!!result || busy}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              void submit();
+            }
+          }}
+          placeholder="type it, then Enter"
+          {...ANSWER_INPUT}
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-base outline-none focus:border-primary"
+        />
+        <Button
+          type="button"
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => void submit()}
+          disabled={!!result || busy || !text.trim()}
+          aria-label="Check"
+          className="hidden h-11 w-14 shrink-0 phone:inline-flex"
+        >
+          <Check className="h-5 w-5" />
+        </Button>
+      </div>
       {result && (
         <div
           className={cn(

@@ -53,6 +53,7 @@ import { patternForTopic, patternHref } from '@/shared/pattern-shapes';
 import { TodayNextBar } from '@/client/components/TodayNextBar';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
+import { ANSWER_TEXTAREA } from '@/client/components/envelope/AnswerChips';
 
 interface Done {
   problemId: string;
@@ -211,7 +212,7 @@ function RevealPanel({
       <div className="space-y-2">
         <Button variant="outline" size="sm" onClick={onCode} disabled={codeBusy} className="gap-1.5">
           {codeBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Code2 className="h-4 w-4" />}
-          {codeOpen ? 'Hide code' : 'Show code'} <kbd className="ml-1 text-[10px] text-muted-foreground">c</kbd>
+          {codeOpen ? 'Hide code' : 'Show code'} <kbd className="ml-1 text-[10px] text-muted-foreground pointer-coarse:hidden">c</kbd>
         </Button>
         {codeOpen && code && (
           <pre className="max-h-[50vh] overflow-auto rounded-lg border border-border bg-muted/30 p-3 text-[12.5px] leading-relaxed">
@@ -572,7 +573,7 @@ export function RecognizePage() {
                         reveal && isPicked && !isAnswer && 'border-rose-500/60 bg-rose-500/10',
                       )}
                     >
-                      <kbd className="rounded border border-border px-1.5 text-[11px] text-muted-foreground">{i + 1}</kbd>
+                      <kbd className="rounded border border-border px-1.5 text-[11px] text-muted-foreground pointer-coarse:hidden">{i + 1}</kbd>
                       {humanize(t)}
                     </button>
                   );
@@ -584,12 +585,13 @@ export function RecognizePage() {
                 onChange={(e) => setApproach(e.target.value)}
                 readOnly={!!reveal}
                 rows={3}
+                {...ANSWER_TEXTAREA}
                 placeholder="Approach in 1–3 sentences, plus time/space (e.g. 'Sort, then two pointers from both ends… O(n log n) / O(1)')"
                 className="w-full resize-y rounded-lg border border-border bg-background p-3 text-sm outline-none focus:border-primary"
               />
               {!reveal && (
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs text-muted-foreground">1–4 pick · Ctrl/⌘+Enter reveal</span>
+                  <span className="text-xs text-muted-foreground pointer-coarse:hidden">1–4 pick · Ctrl/⌘+Enter reveal</span>
                   <Button onClick={doReveal} disabled={revealing} className="ml-auto gap-1.5">
                     {revealing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
                     Reveal
@@ -655,7 +657,7 @@ export function RecognizePage() {
                         )}
                       >
                         {check?.suggested === g ? 'Confirm: ' : ''}
-                        {GRADE_META[g].label} <kbd className="ml-1 text-[10px] opacity-70">{GRADE_META[g].key}</kbd>
+                        {GRADE_META[g].label} <kbd className="ml-1 text-[10px] opacity-70 pointer-coarse:hidden">{GRADE_META[g].key}</kbd>
                       </button>
                     ))}
                   </div>

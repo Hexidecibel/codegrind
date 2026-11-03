@@ -30,7 +30,9 @@ import {
 } from '@/shared/envelope';
 import { skillById } from '@/shared/envelope-learn';
 import { checkEnvelope, getEnvelopeSession, noteEnvelope } from '@/client/lib/api';
+import { useIsPhone } from '@/client/hooks/useMediaQuery';
 import { GuidedRunner } from '@/client/components/envelope/GuidedRunner';
+import { ANSWER_INPUT, AnswerChips, chipsFor } from '@/client/components/envelope/AnswerChips';
 import { AnchorDrill } from '@/client/components/envelope/AnchorDrill';
 import { SpeedRound } from '@/client/components/envelope/SpeedRound';
 import { todayStepFrom } from '@/client/lib/today-flow';
@@ -83,6 +85,7 @@ interface Done {
 }
 
 export function EnvelopePage() {
+  const isPhone = useIsPhone();
   const location = useLocation();
   const todayStep = todayStepFrom(location.search);
   const qs = new URLSearchParams(location.search);
@@ -265,7 +268,8 @@ export function EnvelopePage() {
         {/* The anchors sheet is the method's reference for practice. Not on the
             Anchor cards or Speed round tabs: there it would be the answers. */}
         {tab === 'practice' && (
-          <details className="rounded-lg border border-border bg-card px-3 py-2 text-sm" open={!items}>
+          // On a phone the sheet starts closed: it is a screen of text before the first question.
+          <details className="rounded-lg border border-border bg-card px-3 py-2 text-sm" open={!items && !isPhone}>
             <summary className="cursor-pointer text-muted-foreground">
               The method: small × 10ⁿ, add exponents to multiply, subtract to divide, then back with commas
             </summary>
@@ -295,8 +299,9 @@ export function EnvelopePage() {
         )}
 
         {tab === 'practice' && !items && (
-          <section className="space-y-4 rounded-xl border border-border bg-card p-4 sm:p-5">
-            <p className="text-sm leading-relaxed text-muted-foreground">
+          // flex + gap renders as space-y did; it lets a phone move the intro below Start.
+          <section className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4 sm:p-5">
+            <p className="text-sm leading-relaxed text-muted-foreground phone:order-last">
               Interview-style estimation questions, plus quick one-idea drills. Estimates count within 30%; quick drills
               must be exact. Free; misses come back on a spaced schedule.
             </p>
@@ -355,7 +360,7 @@ export function EnvelopePage() {
             <p className="text-lg leading-relaxed">{item.question}</p>
 
             {guidedHere ? (
-              <GuidedRunner key={`${item.key}:${idx}`} itemKey={item.key} onDone={onResult} />
+              <GuidedRunner key={`${item.key}:${idx}`} itemKey={item.key} unitHint={item.unitHint} onDone={onResult} />
             ) : guidedItem ? null : (
               <div className="space-y-2">
                 <label className="block text-sm text-muted-foreground" htmlFor="env-answer">
@@ -374,9 +379,12 @@ export function EnvelopePage() {
                     }
                   }}
                   placeholder={item.placeholder ?? 'your answer, with its unit'}
-                  autoComplete="off"
+                  {...ANSWER_INPUT}
                   className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-base outline-none focus:border-primary"
                 />
+                {!result && !quickKinds.includes(item.kind) && (
+                  <AnswerChips chips={chipsFor(null, item.unitHint)} inputRef={answerRef} value={answer} onChange={setAnswer} />
+                )}
                 {!quickKinds.includes(item.kind) && (
                   <textarea
                     value={working}

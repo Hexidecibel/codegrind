@@ -19,13 +19,23 @@ import type { GuidedStepPrompt, StepCheckResponse } from '@/shared/envelope-lear
 import { checkEnvelope, checkEnvelopeStep, getEnvelopeGuided } from '@/client/lib/api';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
+import { ANSWER_INPUT, AnswerChips, chipsFor, inputModeFor } from './AnswerChips';
 
 interface Done {
   answer: string;
   r: StepCheckResponse | null;
 }
 
-export function GuidedRunner({ itemKey, onDone }: { itemKey: string; onDone: (r: EnvelopeCheckResponse) => void }) {
+export function GuidedRunner({
+  itemKey,
+  unitHint,
+  onDone,
+}: {
+  itemKey: string;
+  /** The item's unit label, offered as a chip on a phone. */
+  unitHint?: string | null;
+  onDone: (r: EnvelopeCheckResponse) => void;
+}) {
   const [steps, setSteps] = useState<GuidedStepPrompt[] | null>(null);
   const [at, setAt] = useState(0);
   const [done, setDone] = useState<Record<number, Done>>({});
@@ -61,6 +71,7 @@ export function GuidedRunner({ itemKey, onDone }: { itemKey: string; onDone: (r:
   const step = steps?.[at] ?? null;
   const checked = done[at]?.r ?? null;
   const isFinal = step?.type === 'unit';
+  const isDirection = step?.type === 'direction';
   const allFaded = !!steps && steps.every((s) => s.auto || s.type === 'unit');
 
   useEffect(() => {
@@ -77,16 +88,17 @@ export function GuidedRunner({ itemKey, onDone }: { itemKey: string; onDone: (r:
     setHintLevel(0);
   }, [at, steps]);
 
-  const submit = useCallback(async () => {
-    if (!step || !text.trim() || busy) return;
+  const submit = useCallback(async (typed?: string) => {
+    const answer = typed ?? text;
+    if (!step || !answer.trim() || busy) return;
     setBusy(true);
     setError(null);
     try {
       if (isFinal) {
-        onDone(await checkEnvelope(itemKey, text, working, 'guided'));
+        onDone(await checkEnvelope(itemKey, answer, working, 'guided'));
       } else {
-        const r = await checkEnvelopeStep(itemKey, step.index, text);
-        setDone((d) => ({ ...d, [at]: { answer: text, r } }));
+        const r = await checkEnvelopeStep(itemKey, step.index, answer);
+        setDone((d) => ({ ...d, [at]: { answer, r } }));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -132,6 +144,17 @@ export function GuidedRunner({ itemKey, onDone }: { itemKey: string; onDone: (r:
           {allFaded ? step.label : `Step ${at + 1} of ${steps.length} · ${step.label}`}
         </p>
         <p className="text-base">{step.prompt}</p>
+        {isDirection && !checked && (
+          // On a phone the direction is two big buttons, sending the same
+          // words the checker reads; elsewhere it stays a typed answer.
+          <div className="hidden grid-cols-2 gap-2 phone:grid">
+            {(['divide', 'multiply'] as const).map((d) => (
+              <Button key={d} variant="outline" disabled={busy} onClick={() => void submit(d)} className="h-14 text-base capitalize">
+                {d === 'divide' ? '÷' : '×'} {d}
+              </Button>
+            ))}
+          </div>
+        )}
         <input
           ref={inputRef}
           value={checked ? (done[at]?.answer ?? text) : text}
@@ -144,9 +167,16 @@ export function GuidedRunner({ itemKey, onDone }: { itemKey: string; onDone: (r:
             }
           }}
           placeholder={step.placeholder || 'your answer'}
-          autoComplete="off"
-          className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-base outline-none focus:border-primary"
+          {...ANSWER_INPUT}
+          inputMode={inputModeFor(step.type)}
+          className={cn(
+            'w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-base outline-none focus:border-primary',
+            isDirection && !checked && 'phone:hidden',
+          )}
         />
+        {!checked && (
+          <AnswerChips chips={chipsFor(step.type, unitHint)} inputRef={inputRef} value={text} onChange={setText} disabled={busy} />
+        )}
         {allFaded && (
           <textarea
             value={working}
@@ -159,7 +189,11 @@ export function GuidedRunner({ itemKey, onDone }: { itemKey: string; onDone: (r:
         )}
         {!checked && (
           <div className="flex flex-wrap items-center gap-2">
-            <Button onClick={() => void submit()} disabled={busy || !text.trim()} className="gap-1.5">
+            <Button
+              onClick={() => void submit()}
+              disabled={busy || !text.trim()}
+              className={cn('gap-1.5', isDirection && 'phone:hidden')}
+            >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} {isFinal ? 'Check answer' : 'Check step'}
             </Button>
             {step.hint && hintLevel === 0 && (

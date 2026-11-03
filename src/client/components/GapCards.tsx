@@ -22,6 +22,7 @@ import {
 import { anyConceptLabel } from '@/shared/mock-kinds';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
+import { ANSWER_TEXTAREA } from '@/client/components/envelope/AnswerChips';
 
 export const GAP_TYPE_META = {
   fact: { label: 'Cheap fix', hint: 'a fact — one card closes it', className: 'border-sky-500/40 text-sky-300' },
@@ -104,6 +105,7 @@ export function CardFace({
               }
             }}
             rows={aiReviews ? 5 : 3}
+            {...ANSWER_TEXTAREA}
             placeholder={
               aiReviews
                 ? 'Type or dictate your answer, then Check — the AI grades it against the card back. Blank or "I don\'t know" counts as missed.'
@@ -121,7 +123,7 @@ export function CardFace({
             <Button onClick={onReveal} variant="outline" size="sm" disabled={checking}>
               <Eye /> {aiReviews ? 'Just reveal' : 'Reveal'}
             </Button>
-            {aiReviews && <span className="text-xs text-muted-foreground">Ctrl/⌘+Enter checks</span>}
+            {aiReviews && <span className="text-xs text-muted-foreground pointer-coarse:hidden">Ctrl/⌘+Enter checks</span>}
           </div>
         </>
       ) : (

@@ -7,12 +7,13 @@
 // miss: guess and move on.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, Timer, Trophy } from 'lucide-react';
+import { Check, Loader2, Timer, Trophy } from 'lucide-react';
 import { checkAnswer, formHint } from '@/shared/envelope';
 import type { SpeedRoundResult, SpeedRoundStart } from '@/shared/envelope-learn';
 import { finishEnvelopeSpeed, getEnvelopeSpeed } from '@/client/lib/api';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
+import { ANSWER_INPUT } from './AnswerChips';
 
 interface Given {
   key: string;
@@ -151,20 +152,34 @@ export function SpeedRound() {
         <div className="h-full bg-primary" style={{ width: `${(left / round.ms) * 100}%` }} />
       </div>
       {item && <p className="text-lg">{item.question}</p>}
-      <input
-        ref={inputRef}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            submit();
-          }
-        }}
-        placeholder="answer, then Enter"
-        autoComplete="off"
-        className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-base outline-none focus:border-primary"
-      />
+      {/* A phone has no Enter worth reaching for mid-drill: a real Check button
+          sits beside the box there (and only there). */}
+      <div className="flex gap-2">
+        <input
+          ref={inputRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          placeholder="answer, then Enter"
+          {...ANSWER_INPUT}
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-base outline-none focus:border-primary"
+        />
+        <Button
+          type="button"
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => submit()}
+          disabled={!text.trim()}
+          aria-label="Check"
+          className="hidden h-11 w-14 shrink-0 phone:inline-flex"
+        >
+          <Check className="h-5 w-5" />
+        </Button>
+      </div>
       {hint && <p className="text-sm text-amber-300">{hint}</p>}
       {flash && <p className={cn('text-sm', flash.ok ? 'text-emerald-400' : 'text-rose-300')}>{flash.text}</p>}
     </div>

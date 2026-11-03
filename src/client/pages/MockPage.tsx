@@ -726,6 +726,8 @@ function Interview({
   /** Coding: every message carries the editor (the server shows it only when it changed). */
   editor?: EditorLink;
 }) {
+  // A placeholder can't take a CSS variant: a phone has no Ctrl to press.
+  const keys = useIsPhone() ? '' : '  (Ctrl+Enter sends)';
   const [text, setText] = useState('');
   const [sending, setSending] = useState<MockAction | 'end' | null>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -896,8 +898,8 @@ function Interview({
                 placeholder={
                   canTalk
                     ? editor
-                      ? 'Think out loud — type or dictate as much as you like; your editor goes with every message (Ctrl+Enter sends)'
-                      : 'Answer, ask a question, or say "wait, explain …"  (Ctrl+Enter sends)'
+                      ? `Think out loud — type or dictate as much as you like; your editor goes with every message${keys ? ' (Ctrl+Enter sends)' : ''}`
+                      : `Answer, ask a question, or say "wait, explain …"${keys}`
                     : ''
                 }
                 className="min-h-[4.5rem] flex-1 resize-y rounded-md border border-input bg-background px-3 py-2 text-sm"
