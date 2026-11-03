@@ -3,7 +3,9 @@
 // =============================================================================
 // Each step is checked as you go (free, deterministic) and the feedback names
 // the exact slip. After a step, the right answer is shown so you carry the
-// right number forward. Fading is OPTIONAL (Settings, off by default): when on,
+// right number forward. Help comes in two taps, neither with this question's
+// numbers: Hint shows a nudge (the move to make), then Show an example works
+// the same move on other numbers. Fading is OPTIONAL (Settings, off by default): when on,
 // steps you have got right 3 times in a row are not asked and show no numbers,
 // so you do them in your head, and a miss brings them back as questions. When every step has faded it is the question and an
 // answer box, as in plain mode. The last step is the answer itself, graded the
@@ -29,7 +31,8 @@ export function GuidedRunner({ itemKey, onDone }: { itemKey: string; onDone: (r:
   const [done, setDone] = useState<Record<number, Done>>({});
   const [text, setText] = useState('');
   const [working, setWorking] = useState('');
-  const [showHint, setShowHint] = useState(false);
+  /** 0 = no help shown, 1 = the nudge, 2 = the nudge and a worked example. */
+  const [hintLevel, setHintLevel] = useState<0 | 1 | 2>(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -71,7 +74,7 @@ export function GuidedRunner({ itemKey, onDone }: { itemKey: string; onDone: (r:
     while (i < steps.length - 1 && steps[i].auto) i++;
     setAt(i);
     setText('');
-    setShowHint(false);
+    setHintLevel(0);
   }, [at, steps]);
 
   const submit = useCallback(async () => {
@@ -140,7 +143,7 @@ export function GuidedRunner({ itemKey, onDone }: { itemKey: string; onDone: (r:
               void submit();
             }
           }}
-          placeholder={placeholderFor(step.type)}
+          placeholder={step.placeholder || 'your answer'}
           autoComplete="off"
           className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-base outline-none focus:border-primary"
         />
@@ -159,14 +162,22 @@ export function GuidedRunner({ itemKey, onDone }: { itemKey: string; onDone: (r:
             <Button onClick={() => void submit()} disabled={busy || !text.trim()} className="gap-1.5">
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} {isFinal ? 'Check answer' : 'Check step'}
             </Button>
-            {!showHint && (
-              <Button variant="ghost" size="sm" onClick={() => setShowHint(true)} className="gap-1 text-muted-foreground">
+            {step.hint && hintLevel === 0 && (
+              <Button variant="ghost" size="sm" onClick={() => setHintLevel(1)} className="gap-1 text-muted-foreground">
                 <Lightbulb className="h-3.5 w-3.5" /> Hint
+              </Button>
+            )}
+            {step.hint?.example && hintLevel === 1 && (
+              <Button variant="ghost" size="sm" onClick={() => setHintLevel(2)} className="gap-1 text-muted-foreground">
+                <Lightbulb className="h-3.5 w-3.5" /> Show an example
               </Button>
             )}
           </div>
         )}
-        {showHint && !checked && <p className="text-sm text-muted-foreground">{step.hint}</p>}
+        {step.hint && hintLevel >= 1 && !checked && <p className="text-sm text-muted-foreground">{step.hint.nudge}</p>}
+        {step.hint && hintLevel >= 2 && !checked && (
+<p className="text-sm text-muted-foreground">{step.hint.example}</p>
+        )}
         {error && <p className="text-sm text-destructive-foreground">{error}</p>}
         {checked && (
           <div
@@ -190,21 +201,4 @@ export function GuidedRunner({ itemKey, onDone }: { itemKey: string; onDone: (r:
       </div>
     </div>
   );
-}
-
-function placeholderFor(type: GuidedStepPrompt['type']): string {
-  switch (type) {
-    case 'direction':
-      return 'divide or multiply';
-    case 'split':
-      return 'e.g. 5 x 10^8';
-    case 'small':
-      return 'e.g. 0.8';
-    case 'exponent':
-      return 'the little number, e.g. 3';
-    case 'back':
-      return 'e.g. 500 or 8 TB';
-    case 'unit':
-      return 'e.g. 500 per second, 8 TB, 4 Gbps';
-  }
 }

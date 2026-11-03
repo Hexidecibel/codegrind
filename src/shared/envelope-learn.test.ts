@@ -44,7 +44,7 @@ import {
   type GuidedStep,
   type StepType,
 } from './envelope-learn.js';
-import { rng } from './envelope.js';
+import { answerPlaceholder, fmt, fmtSci, pow10, rng, toPrompt } from './envelope.js';
 
 const plan = (item: EnvelopeItem) => guidedPlan(item)!;
 const stepOf = (item: EnvelopeItem, type: StepType, nth = 0): GuidedStep => plan(item).filter((s) => s.type === type)[nth];
@@ -198,13 +198,15 @@ describe('faded scaffolding', () => {
         const served = servedSteps(p, faded);
         for (const s of served) {
           expect(s).not.toHaveProperty('answer');
-          if (s.auto) expect([s.prompt, s.hint]).toEqual(['', '']);
+          if (s.auto) expect([s.prompt, s.hint, s.placeholder]).toEqual(['', null, '']);
         }
         if (faded.has('back')) expect(JSON.stringify(served), item.key).not.toContain(back.prompt);
       }
       const allFaded = servedSteps(p, new Set(FADES));
       expect(allFaded.filter((s) => !s.auto).map((s) => s.type)).toEqual(['unit']);
-      for (const s of allFaded) expect(`${s.prompt} ${s.hint}`, item.key).not.toMatch(/\d/);
+      // The one step still asked (the answer) has no number in its prompt; its
+      // hint and placeholder use other numbers (checked in 'hints' below).
+      for (const s of allFaded) expect(s.prompt, item.key).not.toMatch(/\d/);
     }
   });
 
@@ -383,5 +385,134 @@ describe('endless practice weights', () => {
 describe('seed cards still plan', () => {
   it('the diagnostic cards have guided steps', () => {
     for (const item of seedItems()) expect(guidedPlan(item), item.key).not.toBeNull();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Help shown BEFORE answering never gives this question away
+// -----------------------------------------------------------------------------
+// The user is learning and must do every step. So a hint's nudge and its
+// worked example, a step's placeholder, the plain answer box's placeholder and
+// the "wrong form" message may not write any number this question uses: a
+// factor, the final answer, or a step's answer, in any of the forms the app
+// prints (fmt, commas, small × 10ⁿ, typed "x 10^n" / "e").
+describe('hints never give this question away', () => {
+  // Allowed: "1" and "10" are the method itself ("10ⁿ", "keep the front number
+  // between 1 and 10"), so method text may say them even when a factor is 1 or 10.
+  const ALLOWED = new Set(['1', '10']);
+  const SUPS = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+  const sup = (e: string) => e.replace(/-/g, '⁻').replace(/\d/g, (d) => SUPS[Number(d)]);
+  /** "7 x 10^4", "7e4" → "7 × 10⁴", so typed forms compare with printed ones. */
+  const norm = (t: string) =>
+    t
+      .replace(/(\d)\s*[x*]\s*10\s*\^\s*(-?\d+)/gi, (_, d, e) => `${d} × 10${sup(e)}`)
+      .replace(/\b10\s*\^\s*(-?\d+)/g, (_, e) => `10${sup(e)}`)
+      .replace(/(\d(?:\.\d+)?)e([+-]?\d+)\b/gi, (_, d, e) => `${d} × 10${sup(e)}`);
+  const numbersIn = (t: string) =>
+    norm(t).match(/(?:\d+(?:,\d{3})*(?:\.\d+)?\s*×\s*)?10[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]+|\d+(?:,\d{3})*(?:\.\d+)?/g) ?? [];
+  const forms = (v: number) => [fmt(v), fmtSci(v), ...(v >= 1 ? [Math.round(v).toLocaleString('en-US')] : [])];
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  /** Number-aware: "30" is not in "300", "0.30" or "1,300". */
+  const says = (text: string, n: string) =>
+    !ALLOWED.has(n) && new RegExp(`(?<![\\d.,⁰¹²³⁴⁵⁶⁷⁸⁹⁻])${esc(n)}(?![\\d⁰¹²³⁴⁵⁶⁷⁸⁹]|[.,]\\d)`).test(norm(text));
+
+  function questionNumbers(item: EnvelopeItem, steps: readonly GuidedStep[] = []): string[] {
+    const out = new Set<string>();
+    const add = (t: string) => numbersIn(t).forEach((n) => out.add(n.replace(/\s+/g, ' ')));
+    for (const f of item.factors ?? []) [...forms(f.value), f.label, f.ask ?? ''].forEach(add);
+    [...forms(item.expected.value), ...forms(item.approx), item.answerText].forEach(add);
+    for (const s of steps) if (s.type !== 'direction' && s.type !== 'exponent') add(s.answer);
+    const exp = steps.find((s) => s.type === 'exponent');
+    if (exp) add(pow10(Number(exp.answer)));
+    return [...out];
+  }
+  const leaks = (text: string, nums: readonly string[]) => nums.filter((n) => says(text, n));
+
+  const items = [
+    ...seedItems(),
+    ...ALL_KINDS.flatMap((k) => Array.from({ length: 40 }, (_, i) => generateItem(k, i * 7919 + 1))),
+    PER_DAY_500M,
+    PER_DAY_50M,
+    PER_MONTH_2B,
+    PHOTOS,
+    NIC,
+    REPL,
+    BW,
+  ];
+
+  it('every guided step: a nudge and an example, neither with the step answer or any of the question numbers', () => {
+    let checked = 0;
+    for (const item of items) {
+      const p = guidedPlan(item);
+      if (!p) continue;
+      const nums = questionNumbers(item, p);
+      for (const s of p) {
+        const where = `${item.key} ${s.type}: ${s.prompt}`;
+        const { nudge, example } = s.hint;
+        expect(nudge, where).not.toBe('');
+        expect(example, where).toMatch(/^Example: /);
+        // The direction placeholder names both choices ("divide or multiply"), so it
+        // cannot tip which one; every other text may not contain the step answer.
+        const pl = s.type === 'direction' ? '' : s.placeholder;
+        if (s.type === 'direction') expect(s.placeholder).toBe('divide or multiply');
+        for (const text of [nudge, example, pl]) {
+          if (s.type === 'direction') expect(text.toLowerCase(), where).not.toContain(s.answer.toLowerCase());
+          else expect(leaks(text, [...numbersIn(s.answer), ...(s.type === 'exponent' ? [s.answer] : [])]), `${where} → ${text}`).toEqual([]);
+          expect(leaks(text, nums), `${where} → ${text}`).toEqual([]);
+        }
+        // The nudge names the move: no numbers at all beyond the method's 1 and 10.
+        expect(numbersIn(nudge).filter((n) => !ALLOWED.has(n) && !/^10[⁰¹²³⁴⁵⁶⁷⁸⁹ⁿ]/.test(n)), where).toEqual([]);
+        // The direction example never spells the word asked for.
+        if (s.type === 'direction') expect(example, where).not.toMatch(/divide|multiply/i);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(500);
+  });
+
+  it('the old giveaways are gone (the user\'s own fixtures)', () => {
+    const split = stepOf(PER_DAY_500M, 'split');
+    expect(JSON.stringify(split.hint)).not.toMatch(/\b500\b|5 × 10²|10⁸/);
+    expect(split.hint.nudge).toMatch(/million/);
+    const dir = stepOf(PER_DAY_50M, 'direction');
+    expect(JSON.stringify(dir.hint)).not.toMatch(/per day|per second|divide/i);
+    const bits = stepOf(NIC, 'direction');
+    expect(JSON.stringify(bits.hint)).not.toMatch(/× 8|÷ 8|bytes = /);
+    const back = stepOf(PER_DAY_50M, 'back');
+    expect(JSON.stringify(back.hint)).not.toMatch(/10²|2 zeros|\b500\b/);
+    const small = stepOf(PER_MONTH_2B, 'small');
+    expect(JSON.stringify(small.hint)).not.toMatch(/2 ÷ 2\.5|0\.8/);
+  });
+
+  it('the example is chosen by the item, not by its answer: direction examples go both ways', () => {
+    const divides = items.filter((i) => i.move?.op === 'divide' && guidedPlan(i));
+    const shown = new Set(divides.map((i) => stepOf(i, 'direction').hint.example.match(/[×÷]/)![0]));
+    expect([...shown].sort()).toEqual(['×', '÷']);
+  });
+
+  it('faded steps carry no hint; asked steps carry both levels', () => {
+    const p = plan(PER_DAY_50M);
+    const served = servedSteps(p, new Set<StepType>(['split']));
+    for (const s of served) {
+      if (s.auto) expect([s.hint, s.placeholder]).toEqual([null, '']);
+      else expect(s.hint).toEqual(p[s.index].hint);
+    }
+  });
+
+  it('the plain answer box placeholder and the wrong-form message use other numbers', () => {
+    for (const item of items) {
+      const nums = questionNumbers(item);
+      const ph = answerPlaceholder(item);
+      expect(toPrompt(item, false).placeholder).toBe(ph);
+      expect(leaks(ph, nums), `${item.key} placeholder ${ph}`).toEqual([]);
+      if (item.kind === 'words-to-sci') {
+        const h = formHint(item, '123456789')!;
+        expect(h, item.key).toMatch(/small × 10ⁿ/);
+        expect(leaks(h, nums), `${item.key} formHint ${h}`).toEqual([]);
+      }
+    }
+    // The user's "500 million": the old message said "like 5 × 10^8", its exact answer.
+    const fiveHundred = generateItem('words-to-sci', 0);
+    expect(formHint(fiveHundred, '500000000')).not.toContain(fmtSci(fiveHundred.expected.value).replace('×', 'x'));
   });
 });

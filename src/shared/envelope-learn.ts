@@ -20,6 +20,10 @@ import {
   CONVERSION_KINDS,
   checkAnswer,
   fmt,
+  itemNumberTokens,
+  keySeed,
+  numberTokens,
+  pickSafe,
   parseAnswer,
   pow10,
   roundSig,
@@ -90,12 +94,25 @@ export type StepExpect =
     }
   | { kind: 'unit' };
 
+/**
+ * Help shown on request, BEFORE answering, in two levels. Neither ever
+ * carries this question's numbers or the step's answer: the nudge is a
+ * question or rule with no numbers from the item, the example is the same
+ * move worked on different numbers.
+ */
+export interface StepHint {
+  nudge: string;
+  example: string;
+}
+
 export interface GuidedStep {
   type: StepType;
   /** One short question. */
   prompt: string;
-  /** One short nudge, shown on request. */
-  hint: string;
+  /** Nudge first, then a worked example on other numbers. */
+  hint: StepHint;
+  /** The answer box's placeholder: the format, on numbers this item does not use. */
+  placeholder: string;
   /** The right answer, shown only after the step is tried. Never served for a faded step. */
   answer: string;
   expect: StepExpect;
@@ -156,9 +173,8 @@ export function guidedPlan(item: EnvelopeItem): GuidedStep[] | null {
   steps.push({
     type: 'direction',
     prompt: `${mv.from} → ${mv.to}. Will the number get bigger or smaller? Type divide or multiply.`,
-    hint: bits
-      ? 'Bits are tiny pieces, 8 per byte. To bits = more = × 8. To bytes = fewer = ÷ 8.'
-      : 'Spreading out (per day → per second) makes each piece smaller: divide. Piling up makes it bigger: multiply.',
+    hint: NO_HINT,
+    placeholder: '',
     answer: mv.op,
     expect: { kind: 'direction', op: mv.op, from: mv.from, to: mv.to, bits },
   });
@@ -171,9 +187,8 @@ export function guidedPlan(item: EnvelopeItem): GuidedStep[] | null {
     steps.push({
       type: 'split',
       prompt: `Write ${ask} as small × 10ⁿ.`,
-      hint: lead && lead.zeros > 0
-        ? `Split the front number first: ${fmt(lead.n)} = ${fmt(sci(lead.n).m)} × ${pow10(lead.zeros)}. Then ${lead.word} = ${pow10(lead.wordExp)}. Add the little numbers.`
-        : '10ⁿ means 1 followed by n zeros, in total. Keep the front number between 1 and 10.',
+      hint: NO_HINT,
+      placeholder: '',
       answer: e === 0 ? fmt(m) : m === 1 ? pow10(e) : `${fmt(m)} × ${pow10(e)}`,
       expect: { kind: 'split', value: f.value, m, e, lead: lead && lead.zeros > 0 ? lead : null, anchor },
     });
@@ -200,16 +215,16 @@ export function guidedPlan(item: EnvelopeItem): GuidedStep[] | null {
     steps.push({
       type: 'small',
       prompt: `Small numbers only: ${text} = ?`,
-      hint: pairs.some((p) => p.op === '÷' && p.a < p.b)
-        ? 'When the top number is smaller than the bottom one, the answer is under 1 (like 2 ÷ 2.5 = 0.8).'
-        : 'Ignore the 10ⁿ parts. Just the front numbers.',
+      hint: NO_HINT,
+      placeholder: '',
       answer: fmt(small),
       expect: { kind: 'small', value: small, pairs },
     });
     steps.push({
       type: 'exponent',
       prompt: `Exponents: ${zText} = 10 to the what? (type the little number)`,
-      hint: 'Multiply → add the little numbers. Divide → subtract them.',
+      hint: NO_HINT,
+      placeholder: '',
       answer: String(exp),
       expect: { kind: 'exponent', value: exp, terms },
     });
@@ -229,10 +244,8 @@ export function guidedPlan(item: EnvelopeItem): GuidedStep[] | null {
         : inUnit
           ? `Write ${fmt(small)} × ${pow10(exp)} as a normal number. That is how many ${item.unit.label}.`
           : `Write ${fmt(small)} × ${pow10(exp)}${base} in ${item.unit.label}.`,
-    hint:
-      dim === 'count'
-        ? `${pow10(exp)} = 1 followed by ${exp} zeros. Write it out with commas: each comma is one word up (thousand → million → billion).`
-        : `Write it out with commas, then knock them off: each comma = one unit up (${dim === 'bits' ? 'bits → Kb → Mb → Gb' : 'bytes → KB → MB → GB → TB'}).`,
+    hint: NO_HINT,
+    placeholder: '',
     answer: dim === 'count' ? commaNumber(valueInUnit) : `${fmt(valueInUnit, 3)} ${item.unit.label}`,
     expect: { kind: 'back', value: valueInUnit, small, exp, unitLabel: item.unit.label, unitExp, dim, inUnit },
   });
@@ -240,11 +253,233 @@ export function guidedPlan(item: EnvelopeItem): GuidedStep[] | null {
   steps.push({
     type: 'unit',
     prompt: `Final answer, ${wantText(item)}. Write the unit too.`,
-    hint: 'Write the target unit first, then put the number in front of it.',
+    hint: NO_HINT,
+    placeholder: '',
     answer: item.answerText.replace(/^≈ /, ''),
     expect: { kind: 'unit' },
   });
-  return steps;
+  return withHints(item, steps);
+}
+
+// -----------------------------------------------------------------------------
+// Hints: a nudge, then a worked example on OTHER numbers
+// -----------------------------------------------------------------------------
+// The user is learning: a hint that does the step for them teaches nothing.
+// The nudge names the move with no numbers from the item; the example works
+// the same move on numbers picked (from a small bank) to differ from every
+// number this item uses: its factors, its final answer and every step's answer.
+
+const NO_HINT: StepHint = { nudge: '', example: '' };
+
+/** Rates: hours, minutes, weeks and money, never the seconds/days/months/years the questions use. */
+const RATE_EXAMPLES = [
+  'Example: 3 km a minute → per hour. An hour piles up 60 minutes, so bigger: × 60.',
+  'Example: $36k a year → per month. Spread over 12 months, so smaller: ÷ 12.',
+  'Example: 5 km a day → per week. A week piles up 7 days, so bigger: × 7.',
+  'Example: 120 km an hour → per minute. Spread over 60 minutes, so smaller: ÷ 60.',
+  'Example: $70 a week → per day. Spread over 7 days, so smaller: ÷ 7.',
+  'Example: 4 litres a minute → per hour. The minutes pile up, so bigger: × 60.',
+];
+/** Sizes: centimetres and dozens, never bits or bytes. */
+const SIZE_EXAMPLES = [
+  'Example: 300 cm → metres. A metre is a bigger box, so fewer of them: ÷ 100.',
+  'Example: 4 metres → cm. A cm is a smaller box, so more of them: × 100.',
+  'Example: 5 dozen eggs → eggs. An egg is a smaller box, so more of them: × 12.',
+  'Example: 36 eggs → dozens. A dozen is a bigger box, so fewer of them: ÷ 12.',
+];
+const SPLIT_WORD_EXAMPLES = [
+  'Example: 300 thousand. 300 = 3 × 10², thousand = 10³, so 3 × 10⁵.',
+  'Example: 40 billion. 40 = 4 × 10¹, billion = 10⁹, so 4 × 10¹⁰.',
+  'Example: 700 million. 700 = 7 × 10², million = 10⁶, so 7 × 10⁸.',
+  'Example: 90 thousand. 90 = 9 × 10¹, thousand = 10³, so 9 × 10⁴.',
+  'Example: 600 KB. 600 = 6 × 10², KB = 10³ bytes, so 6 × 10⁵ bytes.',
+  'Example: 30 TB. 30 = 3 × 10¹, TB = 10¹² bytes, so 3 × 10¹³ bytes.',
+  'Example: 80 million. 80 = 8 × 10¹, million = 10⁶, so 8 × 10⁷.',
+  'Example: 70 GB. 70 = 7 × 10¹, GB = 10⁹ bytes, so 7 × 10¹⁰ bytes.',
+  'Example: 900 MB. 900 = 9 × 10², MB = 10⁶ bytes, so 9 × 10⁸ bytes.',
+  'Example: 7 billion. 7 is already small, billion = 10⁹, so 7 × 10⁹.',
+  'Example: 4.5 million. 4.5 is already small, million = 10⁶, so 4.5 × 10⁶.',
+];
+const SPLIT_PLAIN_EXAMPLES = [
+  'Example: 70,000 = 7 × 10⁴ (four zeros after the 7).',
+  'Example: 3,000 = 3 × 10³ (three zeros after the 3).',
+  'Example: 900 = 9 × 10² (two zeros after the 9).',
+  'Example: 4,000,000 = 4 × 10⁶ (six zeros after the 4).',
+  'Example: 45,000 = 4.5 × 10⁴ (four places after the 4).',
+  'Example: 7.5 is already between 1 and 10, so it stays 7.5.',
+];
+const SPLIT_ANCHOR_EXAMPLES = [
+  'Example: seconds in an hour = 3,600 ≈ 4 × 10³ (round it to keep the math easy).',
+  'Example: inches in a foot = 12 = 1.2 × 10¹.',
+  'Example: days in a week = 7, already between 1 and 10, so just 7.',
+  'Example: minutes in a day = 1,440 ≈ 1.5 × 10³ (round it).',
+];
+const SMALL_TIMES_EXAMPLES = [
+  'Example: 3 × 4 = 12.',
+  'Example: 1.5 × 6 = 9.',
+  'Example: 7 × 3 = 21.',
+  'Example: 6 × 7 = 42.',
+  'Example: 4.5 × 3 = 13.5.',
+  'Example: 7 × 9 = 63.',
+  'Example: 9 × 9 = 81.',
+  'Example: 7 × 7 × 1.5 = 49 × 1.5 = 73.5.',
+];
+const SMALL_DIVIDE_EXAMPLES = [
+  'Example: 9 ÷ 3 = 3.',
+  'Example: 3 ÷ 4 = 0.75 (the top is smaller, so under 1).',
+  'Example: 6 ÷ 1.5 = 4.',
+  'Example: 1.5 ÷ 6 = 0.25 (the top is smaller, so under 1).',
+  'Example: 7 × 3 ÷ 7 = 21 ÷ 7 = 3.',
+  'Example: 9 ÷ 4.5 = 2.',
+];
+// Superscripts only: the worked sums never spell the step's answer in plain digits.
+const EXP_TIMES_EXAMPLES = [
+  'Example: 10⁴ × 10³ = 10⁴⁺³ = 10⁷.',
+  'Example: 10⁶ × 10² = 10⁶⁺² = 10⁸.',
+  'Example: 10³ × 10⁹ = 10³⁺⁹ = 10¹².',
+  'Example: 10² × 10³ = 10²⁺³ = 10⁵.',
+  'Example: 10⁷ × 10⁴ = 10⁷⁺⁴ = 10¹¹.',
+  'Example: 10⁸ × 10⁹ = 10⁸⁺⁹ = 10¹⁷.',
+  'Example: 10¹¹ × 10² = 10¹¹⁺² = 10¹³.',
+  'Example: 10⁹ × 10⁷ = 10⁹⁺⁷ = 10¹⁶.',
+];
+const EXP_DIVIDE_EXAMPLES = [
+  'Example: 10⁹ ÷ 10⁴ = 10⁹⁻⁴ = 10⁵.',
+  'Example: 10⁸ ÷ 10³ = 10⁸⁻³ = 10⁵.',
+  'Example: 10³ ÷ 10⁶ = 10³⁻⁶ = 10⁻³.',
+  'Example: 10¹² ÷ 10⁴ = 10¹²⁻⁴ = 10⁸.',
+  'Example: 10⁶ × 10³ ÷ 10⁴ = 10⁶⁺³⁻⁴ = 10⁵.',
+  'Example: 10¹¹ ÷ 10⁷ = 10¹¹⁻⁷ = 10⁴.',
+  'Example: 10⁹ ÷ 10² = 10⁹⁻² = 10⁷.',
+  'Example: 10¹¹ ÷ 10⁹ = 10¹¹⁻⁹ = 10².',
+  'Example: 10¹³ ÷ 10⁷ = 10¹³⁻⁷ = 10⁶.',
+  'Example: 10² ÷ 10⁷ = 10²⁻⁷ = 10⁻⁵.',
+  'Example: 10¹⁰ × 10² ÷ 10⁷ = 10¹⁰⁺²⁻⁷ = 10⁵.',
+  'Example: 10¹⁴ ÷ 10¹¹ = 10¹⁴⁻¹¹ = 10³.',
+];
+const BACK_COUNT_EXAMPLES = [
+  'Example: 7 × 10⁴ = 70,000.',
+  'Example: 3.5 × 10³ = 3,500.',
+  'Example: 4 × 10⁶ = 4,000,000 (4 million).',
+  'Example: 9 × 10² = 900.',
+  'Example: 0.3 × 10⁴ = 3,000.',
+  'Example: 4.5 × 10⁻³ = 0.0045 (minus: move left).',
+];
+const BACK_BYTE_EXAMPLES = [
+  'Example: 7 × 10⁶ bytes = 7,000,000 bytes. Two commas off: 7 MB.',
+  'Example: 3 × 10⁹ bytes = 3,000,000,000 bytes. Three commas off: 3 GB.',
+  'Example: 6 × 10⁵ bytes = 600,000 bytes. One comma off: 600 KB.',
+  'Example: 4 × 10¹² bytes = 4,000,000,000,000 bytes. Four commas off: 4 TB.',
+  'Example: 9 × 10¹⁰ bytes = 90,000,000,000 bytes. Three commas off: 90 GB.',
+];
+const BACK_BIT_EXAMPLES = [
+  'Example: 7 × 10⁶ bits = 7,000,000 bits. Two commas off: 7 Mb.',
+  'Example: 3 × 10⁹ bits = 3,000,000,000 bits. Three commas off: 3 Gb.',
+  'Example: 5 × 10⁴ bits = 50,000 bits. One comma off: 50 Kb.',
+  'Example: 6 × 10¹¹ bits = 600,000,000,000 bits. Three commas off: 600 Gb.',
+];
+const UNIT_COUNT_EXAMPLES = [
+  'Example: asked for a count per second → "300 per second" (no bytes on a count).',
+  'Example: asked for a count per day → "7 million a day".',
+  'Example: asked for a plain count → "4,000" (no unit to add).',
+];
+const UNIT_BYTE_EXAMPLES = [
+  'Example: asked in TB → "30 TB".',
+  'Example: asked in MB per second → "70 MB per second".',
+  'Example: asked in GB → "900 GB".',
+  'Example: asked in PB → "7 PB".',
+];
+const UNIT_BIT_EXAMPLES = ['Example: asked in Gbps → "6 Gbps" (bits, not GB/s).', 'Example: asked in Mbps → "300 Mbps" (bits, not MB/s).'];
+
+const STEP_PLACEHOLDERS: Readonly<Record<StepType, readonly string[]>> = {
+  direction: ['divide or multiply'],
+  split: ['e.g. 7 x 10^4', 'e.g. 3 x 10^6', 'e.g. 9 x 10^2', 'e.g. 4 x 10^11', 'e.g. 7 x 10^13'],
+  small: ['e.g. 0.75', 'e.g. 4.5', 'e.g. 13.5', 'e.g. 0.25', 'e.g. 7.5'],
+  exponent: ['the little number, e.g. 4', 'the little number, e.g. 7', 'the little number, e.g. 11', 'the little number, e.g. 6'],
+  back: ['e.g. 70,000 or 3 TB', 'e.g. 4,000 or 6 GB', 'e.g. 900 or 7 MB', 'e.g. 60,000 or 9 TB'],
+  unit: ['e.g. 300 per second, 7 TB, 9 Gbps', 'e.g. 40 per second, 3 TB, 6 Gbps', 'e.g. 900 a day, 5 GB, 7 Gbps', 'e.g. 70 per second, 9 TB, 4 Gbps'],
+};
+/** When every bank entry collides: the format in words, no numbers at all. */
+const PLACEHOLDER_WORDS: Readonly<Record<StepType, string>> = {
+  direction: 'divide or multiply',
+  split: 'small x 10^n',
+  small: 'a number',
+  exponent: 'the little number',
+  back: 'a normal number (a unit if asked)',
+  unit: 'a number, then its unit',
+};
+
+const SIZE_UNIT = /\b(bits?|bytes?|[KMGTP]B|[KMGT]b)\b/;
+
+/** The scale word a split's number is written with ("2 billion page views" → "billion"), if any. */
+function scaleWord(s: GuidedStep): string | null {
+  return leadOf(s.prompt.replace(/^Write /, ''))?.word ?? null;
+}
+
+function nudgeFor(s: GuidedStep): string {
+  const x = s.expect;
+  switch (x.kind) {
+    case 'direction':
+      if (x.bits) return 'Which piece is smaller, a bit or a byte? Smaller pieces → more of them. Bigger or smaller tells you which.';
+      if (SIZE_UNIT.test(`${x.from} ${x.to}`)) return 'Is the unit you end in a bigger box or a smaller box? Bigger boxes → fewer of them.';
+      return 'Are you spreading a total over more slices (each gets less), or piling slices up (more)? Bigger or smaller tells you which.';
+    case 'split':
+      if (x.anchor) return 'This is an anchor fact (see Anchor cards). Recall it, round it, then write it as small × 10ⁿ.';
+      if (x.lead) return `Which part is the "${x.lead.word}"? Write the front number as small × 10ⁿ first, then add the little numbers.`;
+      if (scaleWord(s)) return `Which part is the "${scaleWord(s)}"? Turn it into 10ⁿ, then put the front number in front.`;
+      return 'Count all the zeros. Keep the front number between 1 and 10.';
+    case 'small':
+      return 'Just the front numbers, left to right; leave the 10ⁿ parts for the next step. Dividing by a bigger number gives under 1.';
+    case 'exponent':
+      return 'Look at each sign: × means add the little numbers, ÷ means subtract them.';
+    case 'back':
+      if (x.dim === 'count' || x.inUnit) return 'Move the decimal point right by the little number (left if it is minus), filling with zeros. Then add commas.';
+      return `First write it out in plain ${x.dim}. Then knock off commas: each comma = one unit up (${x.dim === 'bits' ? 'bits → Kb → Mb → Gb' : 'bytes → KB → MB → GB → TB'}).`;
+    case 'unit':
+      return 'Read what the question asks for: per second? bytes or bits? a plain count? Number first, then that unit.';
+  }
+}
+
+function exampleBank(s: GuidedStep): readonly string[] {
+  const x = s.expect;
+  switch (x.kind) {
+    case 'direction':
+      return x.bits || SIZE_UNIT.test(`${x.from} ${x.to}`) ? SIZE_EXAMPLES : RATE_EXAMPLES;
+    case 'split':
+      return x.anchor ? SPLIT_ANCHOR_EXAMPLES : x.lead || scaleWord(s) ? SPLIT_WORD_EXAMPLES : SPLIT_PLAIN_EXAMPLES;
+    case 'small':
+      return x.pairs.some((p) => p.op === '÷') ? SMALL_DIVIDE_EXAMPLES : SMALL_TIMES_EXAMPLES;
+    case 'exponent':
+      return x.terms.some((t) => t.op === '÷') ? EXP_DIVIDE_EXAMPLES : EXP_TIMES_EXAMPLES;
+    case 'back':
+      return x.dim === 'count' || x.inUnit ? BACK_COUNT_EXAMPLES : x.dim === 'bits' ? BACK_BIT_EXAMPLES : BACK_BYTE_EXAMPLES;
+    case 'unit': {
+      const dim = s.answer.match(/\b[KMGT]bps\b/) ? 'bits' : null;
+      return dim === 'bits' ? UNIT_BIT_EXAMPLES : /\b(bytes?|[KMGTP]B)\b/.test(s.answer) ? UNIT_BYTE_EXAMPLES : UNIT_COUNT_EXAMPLES;
+    }
+  }
+}
+
+/**
+ * Fill each step's hint and placeholder, avoiding every number the item and
+ * its steps use. The direction step's answer is a word and the exponent's a
+ * bare little number; those are avoided in their own step's help only.
+ */
+function withHints(item: EnvelopeItem, steps: GuidedStep[]): GuidedStep[] {
+  const shared = itemNumberTokens(
+    item,
+    steps.filter((s) => s.type !== 'direction' && s.type !== 'exponent').map((s) => s.answer)
+  );
+  const exp = steps.find((s) => s.expect.kind === 'exponent')?.expect;
+  if (exp?.kind === 'exponent') shared.push(...numberTokens(pow10(exp.value)));
+  const seed = keySeed(item.key);
+  return steps.map((s, i) => {
+    const own = s.type === 'exponent' ? [...shared, ...numberTokens(s.answer)] : shared;
+    const ok = (t: string) => (s.type === 'direction' ? !t.toLowerCase().includes(s.answer) : true);
+    const example = pickSafe(exampleBank(s).filter(ok), own, seed + i);
+    const placeholder = pickSafe(STEP_PLACEHOLDERS[s.type], own, seed + i) || PLACEHOLDER_WORDS[s.type];
+    return { ...s, hint: { nudge: nudgeFor(s), example }, placeholder };
+  });
 }
 
 /** 500 → "500"; 2.5e7 → "25,000,000 (25 million)". */
@@ -599,14 +834,22 @@ export function unfadeOnMiss(cause: EnvelopeCause | null, faded: ReadonlySet<Ste
 
 /**
  * The steps as served. Fading removes the help, not the work: a faded step
- * carries no answer, prompt or hint (the `back` prompt alone is the final answer
+ * carries no answer, prompt, hint or placeholder (the `back` prompt alone is the final answer
  * in small × 10ⁿ form), only that it exists. A prompt still asked may show
  * values from faded steps; `back` is then all that stands before the answer.
  */
 export function servedSteps(plan: readonly GuidedStep[], faded: ReadonlySet<StepType>): GuidedStepPrompt[] {
   return plan.map((s, index) => {
     const auto = faded.has(s.type);
-    return { index, type: s.type, label: STEP_LABEL[s.type], prompt: auto ? '' : s.prompt, hint: auto ? '' : s.hint, auto };
+    return {
+      index,
+      type: s.type,
+      label: STEP_LABEL[s.type],
+      prompt: auto ? '' : s.prompt,
+      hint: auto ? null : s.hint,
+      placeholder: auto ? '' : s.placeholder,
+      auto,
+    };
   });
 }
 
@@ -798,8 +1041,10 @@ export interface GuidedStepPrompt {
   type: StepType;
   label: string;
   prompt: string;
-  hint: string;
-  /** Faded: not asked and not shown (prompt and hint are empty); done in your head. */
+  /** Nudge, then a worked example on other numbers; null for a faded step. */
+  hint: StepHint | null;
+  placeholder: string;
+  /** Faded: not asked and not shown (prompt empty, no hint); done in your head. */
   auto: boolean;
 }
 

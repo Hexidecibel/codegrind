@@ -25,7 +25,6 @@ import {
   KIND_LABEL,
   QUICK_KINDS,
   type EnvelopeCheckResponse,
-  type EnvelopeKind,
   type EnvelopeNote,
   type EnvelopePrompt,
 } from '@/shared/envelope';
@@ -55,13 +54,6 @@ function guidedPref(): boolean {
   } catch {
     return true;
   }
-}
-
-function placeholderFor(kind: EnvelopeKind | undefined): string {
-  if (kind === 'direction') return 'divide or multiply';
-  if (kind === 'words-to-sci') return 'e.g. 5 x 10^8';
-  if (kind === 'sci-to-number') return 'e.g. 500, or 8 TB';
-  return 'e.g. 500, 30M, 3e7, 8 TB, 125 MB/s';
 }
 
 const ANCHORS: readonly [string, string][] = [
@@ -270,19 +262,23 @@ export function EnvelopePage() {
           </div>
         )}
 
-        <details className="rounded-lg border border-border bg-card px-3 py-2 text-sm" open={!items && tab === 'practice'}>
-          <summary className="cursor-pointer text-muted-foreground">
-            The method: small × 10ⁿ, add exponents to multiply, subtract to divide, then back with commas
-          </summary>
-          <dl className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
-            {ANCHORS.map(([k, v]) => (
-              <div key={k} className="flex gap-2">
-                <dt className="w-36 shrink-0 text-muted-foreground">{k}</dt>
-                <dd className="tabular-nums">{v}</dd>
-              </div>
-            ))}
-          </dl>
-        </details>
+        {/* The anchors sheet is the method's reference for practice. Not on the
+            Anchor cards or Speed round tabs: there it would be the answers. */}
+        {tab === 'practice' && (
+          <details className="rounded-lg border border-border bg-card px-3 py-2 text-sm" open={!items}>
+            <summary className="cursor-pointer text-muted-foreground">
+              The method: small × 10ⁿ, add exponents to multiply, subtract to divide, then back with commas
+            </summary>
+            <dl className="mt-2 grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
+              {ANCHORS.map(([k, v]) => (
+                <div key={k} className="flex gap-2">
+                  <dt className="w-36 shrink-0 text-muted-foreground">{k}</dt>
+                  <dd className="tabular-nums">{v}</dd>
+                </div>
+              ))}
+            </dl>
+          </details>
+        )}
 
         {error && <p className="text-sm text-destructive-foreground">{error}</p>}
 
@@ -377,7 +373,7 @@ export function EnvelopePage() {
                       void submit();
                     }
                   }}
-                  placeholder={placeholderFor(item.kind)}
+                  placeholder={item.placeholder ?? 'your answer, with its unit'}
                   autoComplete="off"
                   className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-base outline-none focus:border-primary"
                 />

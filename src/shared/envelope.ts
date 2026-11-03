@@ -1127,15 +1127,99 @@ export function parseDirection(text: string): 'divide' | 'multiply' | null {
   return null;
 }
 
+// -----------------------------------------------------------------------------
+// Text shown BEFORE answering never carries this question's numbers
+// -----------------------------------------------------------------------------
+// Hints, examples and placeholders are picked from small fixed banks; a bank
+// entry that mentions any number this item uses (a factor, the final answer,
+// a step's answer) is skipped. "Mentions" is number-aware: 30 is not in 300.
+
+/**
+ * "1" and "10" are the method itself ("10ⁿ", "keep the front number between
+ * 1 and 10"), so method text may say them even when a factor is 1 or 10.
+ */
+export const TRIVIAL_NUMBERS: ReadonlySet<string> = new Set(['1', '10']);
+
+const NUM_TOKEN = /(?:\d+(?:,\d{3})*(?:\.\d+)?\s*×\s*)?10[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]+|\d+(?:,\d{3})*(?:\.\d+)?/g;
+
+/** Every number written in `texts`: "≈ 600 per second (exactly 694)" → ["600", "694"]. */
+export function numberTokens(...texts: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const t of texts) for (const m of normalizeSciText(t).matchAll(NUM_TOKEN)) out.add(m[0].replace(/\s+/g, ' '));
+  return [...out].filter((t) => !TRIVIAL_NUMBERS.has(t));
+}
+
+/** Every way this item's numbers can be written: each factor and the final answer, as fmt, commas and small × 10ⁿ. */
+export function itemNumberTokens(item: Partial<Pick<EnvelopeItem, 'factors' | 'expected' | 'approx' | 'answerText' | 'question'>>, extra: readonly string[] = []): string[] {
+  const forms = (v: number) => (Number.isFinite(v) ? [fmt(v), fmtSci(v), ...(Math.abs(v) >= 1 ? [commas(v)] : [])] : []);
+  const texts: string[] = [...extra];
+  for (const f of item.factors ?? []) texts.push(...forms(f.value), f.label, f.ask ?? '');
+  if (item.expected) texts.push(...forms(item.expected.value));
+  if (item.approx !== undefined) texts.push(...forms(item.approx));
+  if (item.answerText) texts.push(item.answerText);
+  return numberTokens(...texts);
+}
+
+/** "7 x 10^4" → "7 × 10⁴", so typed-style text compares with the formatted forms. */
+function normalizeSciText(t: string): string {
+  return t
+    .replace(/(\d)\s*[x*]\s*10\s*\^\s*(-?\d+)/gi, (_, d: string, e: string) => `${d} × ${pow10(Number(e))}`)
+    .replace(/\b10\s*\^\s*(-?\d+)/g, (_, e: string) => pow10(Number(e)))
+    .replace(/(\d(?:\.\d+)?)e([+-]?\d+)\b/gi, (_, d: string, e: string) => `${d} × ${pow10(Number(e))}`);
+}
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Does `text` write any of these numbers? Number-aware: "30" is not in "300" or "0.30". */
+export function mentionsAny(text: string, tokens: readonly string[]): boolean {
+  const t = normalizeSciText(text);
+  return tokens.some((tok) => new RegExp(`(?<![\\d.,⁰¹²³⁴⁵⁶⁷⁸⁹⁻])${escapeRe(tok)}(?![\\d⁰¹²³⁴⁵⁶⁷⁸⁹]|[.,]\\d)`).test(t));
+}
+
+/** A stable small number from a key, to rotate through a bank. */
+export function keySeed(key: string): number {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+/** The first bank entry (starting at `seed`, wrapping) that mentions none of `tokens`; '' when none fits. */
+export function pickSafe(bank: readonly string[], tokens: readonly string[], seed = 0): string {
+  for (let i = 0; i < bank.length; i++) {
+    const s = bank[(seed + i) % bank.length];
+    if (!mentionsAny(s, tokens)) return s;
+  }
+  return '';
+}
+
+const SCI_FORM_EXAMPLES = ['7 × 10^4', '3 × 10^6', '9 × 10^2', '4 × 10^11', '6 × 10^5'];
+
 /**
  * Why an answer is not in the form a quick item asks for (null when it is).
  * The service answers 400 with this instead of grading: "500000000" for
- * "write it as small × 10ⁿ" is not wrong, it is the wrong exercise.
+ * "write it as small × 10ⁿ" is not wrong, it is the wrong exercise. The
+ * example form never uses this item's numbers.
  */
-export function formHint(item: Pick<EnvelopeItem, 'kind' | 'answerForm'>, text: string): string | null {
+export function formHint(item: Pick<EnvelopeItem, 'kind' | 'answerForm'> & Partial<EnvelopeItem>, text: string): string | null {
   if (item.answerForm === 'direction') return parseDirection(text) ? null : 'Type one word: divide or multiply.';
-  if (item.kind === 'words-to-sci' && !/(10\s*\^|10[⁰¹²³⁴⁵⁶⁷⁸⁹]|\de\s*\d)/i.test(text)) return 'Write it as small × 10ⁿ, like 5 × 10^8.';
+  if (item.kind === 'words-to-sci' && !/(10\s*\^|10[⁰¹²³⁴⁵⁶⁷⁸⁹]|\de\s*\d)/i.test(text)) {
+    const like = pickSafe(SCI_FORM_EXAMPLES, itemNumberTokens(item), keySeed(item.key ?? ''));
+    return like ? `Write it as small × 10ⁿ, like ${like}.` : 'Write it as small × 10ⁿ (type x and ^).';
+  }
   return null;
+}
+
+const PLACEHOLDERS: Partial<Record<EnvelopeKind, readonly string[]>> = {
+  direction: ['divide or multiply'],
+  'words-to-sci': ['e.g. 7 x 10^4', 'e.g. 3 x 10^6', 'e.g. 9 x 10^2', 'e.g. 4 x 10^11'],
+  'sci-to-number': ['e.g. 70,000, or 3 TB', 'e.g. 4,000, or 6 GB', 'e.g. 900, or 7 MB'],
+};
+const PLACEHOLDER_ANY = ['e.g. 700, 40M, 3e9, 6 TB, 90 MB/s', 'e.g. 300, 70M, 4e8, 9 GB, 60 MB/s', 'e.g. 900, 20M, 7e6, 3 TB, 40 MB/s'];
+
+/** The answer box's placeholder: the format, on numbers this item does not use. */
+export function answerPlaceholder(item: EnvelopeItem): string {
+  const bank = PLACEHOLDERS[item.kind] ?? PLACEHOLDER_ANY;
+  return pickSafe(bank, itemNumberTokens(item), keySeed(item.key)) || 'your answer, with its unit';
 }
 
 function checkDirection(item: EnvelopeItem, text: string): EnvelopeVerdict | null {
@@ -1296,6 +1380,8 @@ export interface EnvelopePrompt {
   card: boolean;
   /** Guided mode can walk this one step by step (Phase I). */
   guided?: boolean;
+  /** The answer box's placeholder, on numbers this item does not use. */
+  placeholder?: string;
 }
 
 export interface EnvelopeSession {
@@ -1382,5 +1468,6 @@ export function toPrompt(item: EnvelopeItem, card: boolean): EnvelopePrompt {
     question: item.question,
     unitHint: item.unit.label,
     card,
+    placeholder: answerPlaceholder(item),
   };
 }

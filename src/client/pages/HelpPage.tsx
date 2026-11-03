@@ -781,7 +781,9 @@ export function HelpPage() {
           <p>
             New to this kind of math? Turn on <strong>Guided</strong>: it asks one small thing at a time (divide or
             multiply? each number as small × 10ⁿ, the small math, the exponents, back to a normal number by knocking
-            off commas, then the unit) and says exactly what slipped. Guided asks every step, every time. When the
+            off commas, then the unit) and says exactly what slipped. Stuck on a step? <strong>Hint</strong> gives a
+            nudge, then <strong>Show an example</strong> works the same move on other numbers, never this question&apos;s
+            answer. Guided asks every step, every time. When the
             whole chain starts to feel automatic, switch Guided off and use plain mode. (Optional: in Settings you can
             let a step fade after 3 right in a row; a miss brings it back.) You can also pick one drill type, go Endless (it leans toward what you
             miss), flip the anchor cards (about 10 seconds each), or race a 60-second speed round. While you are still

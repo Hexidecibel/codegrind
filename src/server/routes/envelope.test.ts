@@ -266,7 +266,7 @@ describe('guided mode over HTTP', () => {
       if (i === 2) expect(r.fadesNow).toBe(true);
     }
     let g = await (await app.request(`/api/envelope/guided?key=${KEY}`)).json();
-    expect(g.steps[3]).toEqual({ index: 3, type: 'small', label: expect.any(String), prompt: '', hint: '', auto: true });
+    expect(g.steps[3]).toEqual({ index: 3, type: 'small', label: expect.any(String), prompt: '', hint: null, placeholder: '', auto: true });
     expect(g.steps[0].auto).toBe(false);
 
     // 50 million a day → 579/s. "2000" is off by ~3.5×: an arithmetic slip → 'small' returns.
@@ -297,10 +297,12 @@ describe('guided mode with every step faded', () => {
     svc.seedEnvelopeCards(NOW);
     fadeAll();
     const g = await (await app.request(`/api/envelope/guided?key=${KEY}`)).json();
-    const steps = g.steps as { type: string; auto: boolean; prompt: string; hint: string }[];
+    const steps = g.steps as { type: string; auto: boolean; prompt: string; hint: unknown; placeholder: string }[];
     expect(steps.filter((s) => !s.auto).map((s) => s.type)).toEqual(['unit']);
-    expect(JSON.stringify(steps)).not.toMatch(/500|10²|\b5 ×/);
-    for (const s of steps) expect(`${s.prompt} ${s.hint}`).not.toMatch(/\d/);
+    // 50 million a day → 500/s: none of its numbers, in any form, anywhere (help uses other numbers).
+    expect(JSON.stringify(steps)).not.toMatch(/\b500\b|50,000,000|10²|10⁷|10⁵|\b5 ×|579/);
+    for (const s of steps) expect(s.prompt).not.toMatch(/\d/);
+    for (const s of steps.filter((x) => x.auto)) expect([s.hint, s.placeholder]).toEqual([null, '']);
   });
 
   it('a right final answer counts, keeps guided bookkeeping and keeps the working', async () => {
