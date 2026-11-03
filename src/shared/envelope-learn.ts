@@ -96,7 +96,7 @@ export interface GuidedStep {
   prompt: string;
   /** One short nudge, shown on request. */
   hint: string;
-  /** The right answer, as shown after the step (and when the step is auto-filled). */
+  /** The right answer, shown only after the step is tried. Never served for a faded step. */
   answer: string;
   expect: StepExpect;
 }
@@ -554,7 +554,7 @@ export const SLIP_CAUSE: Readonly<Record<StepSlip, EnvelopeCause>> = {
 // -----------------------------------------------------------------------------
 // Faded scaffolding
 // -----------------------------------------------------------------------------
-/** A step type is auto-filled after this many right in a row; a miss brings it back. */
+/** A step type fades (you do it in your head) after this many right in a row; a miss brings it back. */
 export const FADE_AFTER = 3;
 
 /** Step types that can fade. The final answer is always asked. */
@@ -595,6 +595,31 @@ const CAUSE_STEPS: Readonly<Record<EnvelopeCause, StepType[]>> = {
 export function unfadeOnMiss(cause: EnvelopeCause | null, faded: ReadonlySet<StepType>): StepType[] {
   if (!cause) return [];
   return CAUSE_STEPS[cause].filter((t) => faded.has(t));
+}
+
+/**
+ * The steps as served. Fading removes the help, not the work: a faded step
+ * carries no answer, prompt or hint (the `back` prompt alone is the final answer
+ * in small × 10ⁿ form), only that it exists. A prompt still asked may show
+ * values from faded steps; `back` is then all that stands before the answer.
+ */
+export function servedSteps(plan: readonly GuidedStep[], faded: ReadonlySet<StepType>): GuidedStepPrompt[] {
+  return plan.map((s, index) => {
+    const auto = faded.has(s.type);
+    return { index, type: s.type, label: STEP_LABEL[s.type], prompt: auto ? '' : s.prompt, hint: auto ? '' : s.hint, auto };
+  });
+}
+
+/**
+ * Does this step's right answer, revealed after a miss, hand over the final
+ * number? `back` always does; `small` does when the exponent lands exactly on
+ * the unit (2 × 8 = 16 → 16 Gbps).
+ */
+export function revealsFinal(step: GuidedStep, plan: readonly GuidedStep[]): boolean {
+  if (step.expect.kind === 'back') return true;
+  if (step.expect.kind !== 'small') return false;
+  const back = plan.find((s) => s.expect.kind === 'back')?.expect;
+  return back?.kind === 'back' && close(step.expect.value, back.value, 0.04);
 }
 
 // -----------------------------------------------------------------------------
@@ -767,22 +792,21 @@ export function pickWeighted<K extends string>(weights: Readonly<Record<K, numbe
 // -----------------------------------------------------------------------------
 // Wire types
 // -----------------------------------------------------------------------------
-/** A guided step as served: no answer unless the step is auto-filled. */
+/** A guided step as served: never its answer. */
 export interface GuidedStepPrompt {
   index: number;
   type: StepType;
   label: string;
   prompt: string;
   hint: string;
-  /** Faded: shown filled in, not asked. */
+  /** Faded: not asked and not shown (prompt and hint are empty); done in your head. */
   auto: boolean;
-  answer: string | null;
 }
 
 export interface GuidedPlanResponse {
   key: string;
   steps: GuidedStepPrompt[];
-  /** Right-in-a-row per step type, for the "auto-filled after 3" note. */
+  /** Right-in-a-row per step type, for the "fades after 3" note. */
   streaks: Record<StepType, number>;
 }
 
@@ -793,7 +817,7 @@ export interface StepCheckResponse {
   /** The right answer, to carry forward. */
   answer: string;
   streak: number;
-  /** This step type is now auto-filled. */
+  /** This step type has now faded. */
   fadesNow: boolean;
 }
 

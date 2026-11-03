@@ -33,6 +33,8 @@ import {
   fadedTypes,
   guidedForToday,
   guidedPlan,
+  revealsFinal,
+  servedSteps,
   parseSci,
   pickWeighted,
   practiceWeights,
@@ -184,6 +186,37 @@ describe('step checkers name the exact slip (the user’s 2026-10-21 slips)', ()
 });
 
 describe('faded scaffolding', () => {
+  const FADES: StepType[] = ['direction', 'split', 'small', 'exponent', 'back'];
+  const everyItem = () => [...seedItems(), ...ALL_KINDS.flatMap((k) => Array.from({ length: 8 }, (_, i) => generateItem(k, i * 7919 + 1)))].filter((i) => guidedPlan(i));
+
+  it('never serves an answer, and a faded back serves nothing of the final value, for any fade subset', () => {
+    for (const item of everyItem()) {
+      const p = plan(item);
+      const back = p.find((s) => s.type === 'back')!;
+      for (let mask = 0; mask < 32; mask++) {
+        const faded = new Set(FADES.filter((_, b) => mask & (1 << b)));
+        const served = servedSteps(p, faded);
+        for (const s of served) {
+          expect(s).not.toHaveProperty('answer');
+          if (s.auto) expect([s.prompt, s.hint]).toEqual(['', '']);
+        }
+        if (faded.has('back')) expect(JSON.stringify(served), item.key).not.toContain(back.prompt);
+      }
+      const allFaded = servedSteps(p, new Set(FADES));
+      expect(allFaded.filter((s) => !s.auto).map((s) => s.type)).toEqual(['unit']);
+      for (const s of allFaded) expect(`${s.prompt} ${s.hint}`, item.key).not.toMatch(/\d/);
+    }
+  });
+
+  it('revealsFinal: back always; small only when it equals the final number', () => {
+    expect(revealsFinal(stepOf(PER_DAY_50M, 'back'), plan(PER_DAY_50M))).toBe(true);
+    expect(revealsFinal(stepOf(PER_DAY_50M, 'small'), plan(PER_DAY_50M))).toBe(false);
+    expect(revealsFinal(stepOf(PER_DAY_50M, 'split'), plan(PER_DAY_50M))).toBe(false);
+    const gbps = generateItem('mbs-to-gbps', 63353);
+    expect(stepOf(gbps, 'small').answer).toBe('16');
+    expect(revealsFinal(stepOf(gbps, 'small'), plan(gbps))).toBe(true);
+  });
+
   const rows = (type: StepType, oks: boolean[]) => oks.map((ok) => ({ type, ok }));
   it(`a step type fades after ${FADE_AFTER} right in a row, and a miss resets it`, () => {
     let s = stepStreaks(rows('split', [true, true, true, false, true]));

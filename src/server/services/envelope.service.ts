@@ -58,7 +58,9 @@ import {
   guidedPlan,
   pickWeighted,
   practiceWeights,
+  revealsFinal,
   scoreSpeedRound,
+  servedSteps,
   skillById,
   stepStreaks,
   unfadeOnMiss,
@@ -194,15 +196,18 @@ export function check(body: unknown, now = new Date()): EnvelopeCheckResponse {
   const v = final?.verdict ?? checkAnswer(item, answer);
   if (!v) throw new EnvelopeError(`Couldn't read a number from "${answer}". Try "500", "30 million", "3e7" or "8 TB".`, 400);
   const cause = final ? (final.cause ?? null) : v.cause;
+  // Before the final step is recorded: was the answer on screen when it was typed?
+  const shown = guided && v.ok && finalShownAfterMiss(item, lastAt, now);
+  const ok = v.ok && !shown;
   const failedStep = guided ? guidedFailedStep(item, answer, lastAt, final!, now) : null;
 
-  const grade: GapCardGrade = v.ok ? 'got' : 'missed';
+  const grade: GapCardGrade = ok ? 'got' : 'missed';
   let schedule: string;
   if (card && !card.retiredAt) {
     const next = scheduleRecognizeCard(card, grade, now)!;
     store.updateSchedule(card.key, next);
     schedule = next.retiredAt ? 'retired — answered right at the top of the ladder' : describeEnvelopeOutcome(card, grade);
-  } else if (!v.ok) {
+  } else if (!ok) {
     const next = scheduleRecognizeCard(null, 'missed', now)!;
     store.insertCard({ key: item.key, item, source: 'miss' }, next, now);
     schedule = 'new review card — again tomorrow';
@@ -220,7 +225,7 @@ export function check(body: unknown, now = new Date()): EnvelopeCheckResponse {
       working,
       expected: item.expected.value,
       given: v.given,
-      ok: v.ok,
+      ok,
       orders: v.orders,
       cause,
       mode: guided ? 'guided' : 'plain',
@@ -231,10 +236,10 @@ export function check(body: unknown, now = new Date()): EnvelopeCheckResponse {
 
   return {
     attemptId,
-    ok: v.ok,
+    ok,
     read: v.read,
     orders: v.orders,
-    verdict: final && !final.ok ? final.feedback : v.verdict,
+    verdict: shown ? 'Right number, but the steps had just shown it to you, so this one comes back for a fresh try.' : final && !final.ok ? final.feedback : v.verdict,
     cause,
     causeText: cause ? ENVELOPE_CAUSE_TEXT[cause] : null,
     answerText: item.answerText,
@@ -243,6 +248,20 @@ export function check(body: unknown, now = new Date()): EnvelopeCheckResponse {
     noteAvailable: !v.ok && aiReviewsEnabled(),
     failedStep,
   };
+}
+
+/** Where this guided run's steps begin: the item's last attempt, or a few hours back. */
+function guidedRunSince(lastAt: string | null, now: Date): string {
+  return lastAt ?? new Date(now.getTime() - 6 * 3_600_000).toISOString();
+}
+
+/**
+ * A missed step shows its right answer, to carry forward. When that answer is
+ * the final number, retyping it earns no credit: it is graded as a miss.
+ */
+function finalShownAfterMiss(item: EnvelopeItem, lastAt: string | null, now: Date): boolean {
+  const plan = guidedPlan(item)!;
+  return store.itemStepsSince(item.key, guidedRunSince(lastAt, now)).some((s) => !s.ok && !!plan[s.stepIndex] && revealsFinal(plan[s.stepIndex], plan));
 }
 
 /**
@@ -269,8 +288,7 @@ function guidedFailedStep(
       store.insertStep({ itemKey: item.key, stepType: t, stepIndex: -1, prompt: '(brought back after a miss)', answer: '', ok: false, slip: null, feedback: '', counted: false }, now);
     }
   }
-  const since = lastAt ?? new Date(now.getTime() - 6 * 3_600_000).toISOString();
-  const broke = store.itemStepsSince(item.key, since).find((s) => !s.ok);
+  const broke = store.itemStepsSince(item.key, guidedRunSince(lastAt, now)).find((s) => !s.ok);
   if (!broke) return null;
   const label = STEP_LABEL[broke.stepType as keyof typeof STEP_LABEL] ?? broke.stepType;
   return `${label}: asked "${broke.prompt}", typed "${broke.answer}". ${broke.feedback}`.slice(0, 500);
@@ -279,21 +297,13 @@ function guidedFailedStep(
 // -----------------------------------------------------------------------------
 // Guided steps (Phase I)
 // -----------------------------------------------------------------------------
-/** GET /api/envelope/guided?key= — the item's steps; faded ones come filled in. */
+/** GET /api/envelope/guided?key= — the item's steps; faded ones carry no answer or prompt. */
 export function guidedSteps(key: unknown): GuidedPlanResponse {
   const { item } = resolveItem(key);
   const plan = guidedPlan(item);
   if (!plan) throw new EnvelopeError('This one has no guided steps; answer it directly.', 409);
   const streaks = stepStreaks(store.recentSteps());
-  const faded = fadedTypes(streaks);
-  return {
-    key: item.key,
-    streaks,
-    steps: plan.map((s, index) => {
-      const auto = faded.has(s.type);
-      return { index, type: s.type, label: STEP_LABEL[s.type], prompt: s.prompt, hint: s.hint, auto, answer: auto ? s.answer : null };
-    }),
-  };
+  return { key: item.key, streaks, steps: servedSteps(plan, fadedTypes(streaks)) };
 }
 
 /** POST /api/envelope/step — {key, index, answer}. One step, checked and recorded. Free. */

@@ -6,7 +6,7 @@
 //   POST /api/envelope/note          {attemptId}  ONE small call on a miss   gated by "AI reviews"
 //   GET  /api/envelope/stats         accuracy + mean |orders| over time      free
 //   Phase I (all free, all deterministic):
-//   GET  /api/envelope/guided?key=   the item's guided steps (faded ones filled in)
+//   GET  /api/envelope/guided?key=   the item's guided steps (faded ones carry no answer)
 //   POST /api/envelope/step          {key, index, answer} one step, checked + recorded
 //   GET  /api/envelope/anchors       due anchor flashcards
 //   POST /api/envelope/anchors/check {id, answer, ms}

@@ -763,7 +763,7 @@ export function checkEnvelope(key: string, answer: string, working: string, mode
   return request<EnvelopeCheckResponse>('/api/envelope/check', { method: 'POST', body: JSON.stringify({ key, answer, working, mode }) });
 }
 
-/** GET /api/envelope/guided — an item's guided steps (faded ones filled in). Free. */
+/** GET /api/envelope/guided — an item's guided steps (faded ones carry no answer). Free. */
 export function getEnvelopeGuided(key: string): Promise<GuidedPlanResponse> {
   return request<GuidedPlanResponse>(`/api/envelope/guided?key=${encodeURIComponent(key)}`);
 }

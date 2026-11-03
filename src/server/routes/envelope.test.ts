@@ -208,7 +208,8 @@ describe('guided mode over HTTP', () => {
     svc.seedEnvelopeCards(NOW);
     const g = await (await app.request(`/api/envelope/guided?key=${KEY}`)).json();
     expect(g.steps.map((s: { type: string }) => s.type)).toEqual(['direction', 'split', 'split', 'small', 'exponent', 'back', 'unit']);
-    expect(g.steps.every((s: { auto: boolean; answer: unknown }) => !s.auto && s.answer === null)).toBe(true);
+    expect(g.steps.every((s: { auto: boolean; prompt: string }) => !s.auto && s.prompt)).toBe(true);
+    expect(g.steps.some((s: object) => 'answer' in s)).toBe(false);
 
     let r = await step(0, 'multiply');
     expect(r).toMatchObject({ ok: false, slip: 'direction', answer: 'divide' });
@@ -242,7 +243,7 @@ describe('guided mode over HTTP', () => {
     expect(fake.runEnvelopeNote.mock.calls[0][0].step).toBeUndefined();
   });
 
-  it('a step type right 3 times in a row comes auto-filled; a final miss that points at it brings it back', async () => {
+  it('a step type right 3 times in a row fades with no answer; a final miss that points at it brings it back as a question', async () => {
     svc.seedEnvelopeCards(NOW);
     for (let i = 0; i < 3; i++) {
       vi.setSystemTime(new Date(NOW.getTime() + i * 60_000));
@@ -251,7 +252,7 @@ describe('guided mode over HTTP', () => {
       if (i === 2) expect(r.fadesNow).toBe(true);
     }
     let g = await (await app.request(`/api/envelope/guided?key=${KEY}`)).json();
-    expect(g.steps[3]).toMatchObject({ type: 'small', auto: true, answer: '5' });
+    expect(g.steps[3]).toEqual({ index: 3, type: 'small', label: expect.any(String), prompt: '', hint: '', auto: true });
     expect(g.steps[0].auto).toBe(false);
 
     // 50 million a day → 579/s. "2000" is off by ~3.5×: an arithmetic slip → 'small' returns.
@@ -259,10 +260,77 @@ describe('guided mode over HTTP', () => {
     const c = await (await post('/api/envelope/check', { key: KEY, answer: '2000', mode: 'guided' })).json();
     expect(c.cause).toBe('arithmetic');
     g = await (await app.request(`/api/envelope/guided?key=${KEY}`)).json();
-    expect(g.steps[3].auto).toBe(false);
+    expect(g.steps[3]).toMatchObject({ auto: false, prompt: 'Small numbers only: 5 ÷ 1 = ?' });
     // The reset is not an error: the error rate for 'small' is still 0 of 3.
     const stats = await (await app.request('/api/envelope/stats')).json();
     expect(stats.steps.find((s: { type: string }) => s.type === 'small')).toMatchObject({ n: 3, missed: 0 });
+  });
+});
+
+describe('guided mode with every step faded', () => {
+  const KEY = 'seed:50m-day-to-sec';
+  const fadeAll = () => {
+    for (const type of ['direction', 'split', 'small', 'exponent', 'back'])
+      for (let i = 0; i < 3; i++) {
+        db.prepare(
+          `INSERT INTO envelope_steps (itemKey, stepType, stepIndex, prompt, answer, ok, slip, feedback, counted, createdAt) VALUES ('other', ?, 0, '', '', 1, NULL, '', 1, ?)`
+        ).run(type, new Date(NOW.getTime() - 60_000).toISOString());
+      }
+  };
+
+  it('serves nothing that carries a number: only the final prompt, which has none', async () => {
+    svc.seedEnvelopeCards(NOW);
+    fadeAll();
+    const g = await (await app.request(`/api/envelope/guided?key=${KEY}`)).json();
+    const steps = g.steps as { type: string; auto: boolean; prompt: string; hint: string }[];
+    expect(steps.filter((s) => !s.auto).map((s) => s.type)).toEqual(['unit']);
+    expect(JSON.stringify(steps)).not.toMatch(/500|10²|\b5 ×/);
+    for (const s of steps) expect(`${s.prompt} ${s.hint}`).not.toMatch(/\d/);
+  });
+
+  it('a right final answer counts, keeps guided bookkeeping and keeps the working', async () => {
+    svc.seedEnvelopeCards(NOW);
+    fadeAll();
+    const c = await (await post('/api/envelope/check', { key: KEY, answer: '500 per second', working: '5e7 / 1e5', mode: 'guided' })).json();
+    expect(c).toMatchObject({ ok: true, schedule: 'again in 2 days', failedStep: null });
+    const a = db.prepare(`SELECT ok, mode, working FROM envelope_attempts`).get();
+    expect(a).toEqual({ ok: 1, mode: 'guided', working: '5e7 / 1e5' });
+  });
+
+  it('a final miss brings the steps it points at back as questions, the rest stay faded', async () => {
+    svc.seedEnvelopeCards(NOW);
+    fadeAll();
+    const c = await (await post('/api/envelope/check', { key: KEY, answer: '5000', mode: 'guided' })).json();
+    expect(c.cause).toBe('zeros');
+    const g = await (await app.request(`/api/envelope/guided?key=${KEY}`)).json();
+    const back = g.steps.filter((s: { auto: boolean; type: string }) => !s.auto).map((s: { type: string }) => s.type);
+    expect(back).toEqual(['split', 'split', 'exponent', 'back', 'unit']);
+    expect(g.steps.find((s: { type: string }) => s.type === 'back').prompt).toBe('Write 5 × 10² as a normal number.');
+    expect(g.steps[0]).toMatchObject({ type: 'direction', auto: true, prompt: '' });
+  });
+});
+
+describe('credit when a step showed the final number', () => {
+  const KEY = 'seed:50m-day-to-sec';
+  const BACK = 5;
+
+  it('a missed back step reveals the number, so retyping it is graded as a miss with no note', async () => {
+    svc.seedEnvelopeCards(NOW);
+    const r = await (await post('/api/envelope/step', { key: KEY, index: BACK, answer: '5000' })).json();
+    expect(r).toMatchObject({ ok: false, answer: '500' });
+    const c = await (await post('/api/envelope/check', { key: KEY, answer: '500 per second', mode: 'guided' })).json();
+    expect(c).toMatchObject({ ok: false, schedule: 'again tomorrow', noteAvailable: false });
+    expect(c.verdict).toMatch(/shown it to you/);
+    expect(c.failedStep).toMatch(/typed "5000"/);
+    expect(db.prepare(`SELECT ok FROM envelope_attempts`).get()).toEqual({ ok: 0 });
+  });
+
+  it('a back step you got right, or a miss on a step that does not reveal it, still earns credit', async () => {
+    svc.seedEnvelopeCards(NOW);
+    await post('/api/envelope/step', { key: KEY, index: 0, answer: 'multiply' });
+    await post('/api/envelope/step', { key: KEY, index: BACK, answer: '500' });
+    const c = await (await post('/api/envelope/check', { key: KEY, answer: '500 per second', mode: 'guided' })).json();
+    expect(c).toMatchObject({ ok: true, schedule: 'again in 2 days' });
   });
 });
 
