@@ -531,6 +531,7 @@ const NOVELTY_HINT: Partial<Record<SchedulerIntent['kind'], string>> = {
   'new-pattern':
     'Introduce this pattern gently: a clean, canonical easy example that teaches the core idea without extra twists.',
   'level-up': 'Step the challenge up a notch from a basic instance — add a realistic wrinkle that the technique still handles.',
+  sprinkle: 'A quick, friendly easy for a topic the player has barely seen: one clean instance of the core idea, no twists.',
 };
 
 /**

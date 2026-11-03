@@ -286,6 +286,19 @@ describe('the scheduler Help describes is still free', () => {
     expect(ROUTE.match(/allowReview: reviewAllowed\(/g)?.length).toBeGreaterThanOrEqual(3);
   });
 
+  it('sprinkles an unseen easy on the cadence Help states, behind a due review', () => {
+    const SCHED = source('src/server/services/scheduler.service.ts');
+    const match = /export const SPRINKLE_CADENCE = (\d+);/.exec(SCHED);
+    expect(match, 'no SPRINKLE_CADENCE in scheduler.service.ts').not.toBeNull();
+    expect(Number(match![1])).toBe(facts.SPRINKLE_CADENCE);
+    // The review branch comes before the sprinkle branch in the real pick…
+    const pick = SCHED.slice(SCHED.indexOf('export function nextIntent('));
+    expect(pick.indexOf('getDueReview(')).toBeLessThan(pick.indexOf('opts.allowSprinkle'));
+    // …and the route applies the cadence to the pick AND the peek.
+    const ROUTE = source('src/server/routes/session.ts');
+    expect(ROUTE.match(/allowSprinkle: sprinkleDue\(/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+
   it('snoozes a skipped review before that pick, not after', () => {
     // Help's "Skip for now ... whatever is next in line is served instead" only
     // holds if the snooze lands before nextIntent reads the queue.

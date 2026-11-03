@@ -27,6 +27,7 @@ import {
   REVIEW_CAP_WINDOW,
   reviewLadderPhrase,
 } from '@/client/lib/help-facts';
+import { NEAR_MISS_THRESHOLD } from '@/shared/closeness';
 
 // -----------------------------------------------------------------------------
 // Sections
@@ -143,6 +144,7 @@ export type HelpHintId =
   | 'hint-free'
   | 'review-due'
   | 'skill-tree'
+  | 'close-calls'
   // Grind
   | 'why-this-problem'
   | 'cold-review'
@@ -202,12 +204,21 @@ export const HELP_HINTS: Readonly<Record<HelpHintId, HelpHint>> = {
     section: 'numbers',
   },
 
+  'close-calls': {
+    title: 'Close calls',
+    body: [
+      `A close call is a failed submit that still passed at least ${Math.round(NEAR_MISS_THRESHOLD * 100)}% of the hidden tests: the approach was right and a small bug, an off-by-one or a misplaced bracket, got in the way.`,
+      'Fixed same day counts close calls you then solved yourself, without hints, on the same problem that day. Those do not count against your topic streak either.',
+    ],
+    section: 'numbers',
+  },
+
   // --- Grind -----------------------------------------------------------------
   'why-this-problem': {
     title: 'Why this problem',
     body: [
       'A scheduler picked it from your own history — what you have cleared, what you missed last time, what has gone stale, and what a completed tier just opened up.',
-      'It is arithmetic over your database, not a model deciding. The label says which of the six reasons applied.',
+      'It is arithmetic over your database, not a model deciding. The label says which of the seven reasons applied.',
     ],
     section: 'scheduler',
   },

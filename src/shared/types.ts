@@ -702,7 +702,8 @@ export type SchedulerIntentKind =
   | 'variation'
   | 'level-up'
   | 'new-pattern'
-  | 'review';
+  | 'review'
+  | 'sprinkle';
 
 /** The player-facing "why this problem" note attached to each served problem. */
 export interface SchedulerWhy {

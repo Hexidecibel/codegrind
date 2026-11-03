@@ -338,7 +338,13 @@ submitRoutes.post('/submit', async (c) => {
 
     // Update per-topic spaced-repetition / progression state (keyed on topic).
     // AFTER insertAttempt on purpose — the tier derivation counts this attempt.
-    updateSkillOnAttempt(problem.language, problem.topic, solved, assistedHints);
+    // The attempt details let a same-day fix of a near miss un-count it as a
+    // lapse (db.nearMissHold — the review queue below is unaffected).
+    updateSkillOnAttempt(problem.language, problem.topic, solved, assistedHints, {
+      problemId: problem.id,
+      testsPassed: result.passed,
+      testsTotal: result.total,
+    });
 
     // Retrieval loop (review-ladder.ts): a clean unaided solve climbs a queued
     // review one rung — never on the same day as its miss; a miss or an

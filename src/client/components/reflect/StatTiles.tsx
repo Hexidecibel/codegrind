@@ -30,7 +30,7 @@ import { HelpHint } from '@/client/components/HelpHint';
 import type { HelpHintId } from '@/client/lib/help-content';
 import { cn } from '@/lib/utils';
 
-function Tile({
+export function Tile({
   icon: Icon,
   value,
   label,

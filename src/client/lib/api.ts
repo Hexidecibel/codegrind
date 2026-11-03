@@ -3,6 +3,7 @@
 // (the server responds `{ error: string }` on failure).
 
 import type { PatternId, PatternsState } from '@/shared/pattern-shapes';
+import type { ClosenessStats } from '@/shared/closeness';
 import type {
   Problem,
   RunResult,
@@ -478,6 +479,11 @@ export function getProgress(): Promise<ProgressStats> {
 /** GET /api/history — recent attempts. */
 export function getHistory(): Promise<HistoryResponse> {
   return request<HistoryResponse>('/api/history');
+}
+
+/** GET /api/progress/closeness — near misses and same-day fixes, per week. Free. */
+export function getCloseness(): Promise<ClosenessStats> {
+  return request<ClosenessStats>('/api/progress/closeness');
 }
 
 // ---------------------------------------------------------------------------

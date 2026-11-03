@@ -34,6 +34,14 @@ vi.mock('../services/bank.service.js', async () => {
         const existing = dbMod.getProblem(intent.reviewProblemId);
         if (existing) return existing;
       }
+      // A sprinkle is served bank-first, like the real thing.
+      if (intent.kind === 'sprinkle') {
+        const banked = dbMod.findUnusedProblem(intent.language, intent.topic, 'easy');
+        if (banked) {
+          dbMod.markProblemUsed(banked.id);
+          return { ...banked, used: true };
+        }
+      }
       return { ...dbMod.getProblem('p-review-a')!, id: GENERATED_ID, topic: intent.topic };
     }),
   };
@@ -388,5 +396,69 @@ suite('POST /api/session — a sitting with many due reviews', () => {
     const after = await app.request(`/api/session/${start.sessionId}/next`, { method: 'POST' });
     const json = (await after.json()) as any;
     expect(json.why.kind).not.toBe('review');
+  });
+});
+
+// =============================================================================
+// Grind's sprinkle — an unseen easy every SPRINKLE_CADENCE problems, behind a
+// due review, never back to back, and the peek agrees with every pick.
+// =============================================================================
+suite('POST /api/session — a sitting with reviews due AND unseen easys banked', () => {
+  const E1 = 'p-easy-trie';
+  const E2 = 'p-easy-heap';
+  const E3 = 'p-easy-greedy';
+
+  function bankUnusedEasy(id: string, topic: 'trie' | 'heap' | 'greedy'): void {
+    bankProblem(id);
+    db.db.prepare(`UPDATE problems SET topic = ?, used = 0 WHERE id = ?`).run(topic, id);
+  }
+
+  beforeEach(() => {
+    bankProblem(C);
+    bankProblem(D, 'hashing');
+    setReview(A, ago(4 * DAY), 3);
+    setReview(B, ago(3 * DAY), 2);
+    setReview(C, ago(2 * DAY), 1);
+    setReview(D, ago(1 * DAY), 0);
+    bankUnusedEasy(E1, 'trie');
+    bankUnusedEasy(E2, 'heap');
+    bankUnusedEasy(E3, 'greedy');
+  });
+
+  it('serves R n n R S n R S n R n S — and the peek agrees with every pick', async () => {
+    const served: Array<{ kind: string; id: string; topic: string; upNext: string }> = [];
+    for (let i = 0; i < 12; i++) {
+      const { status, json } = await next();
+      expect(status).toBe(200);
+      served.push({ kind: json.why.kind, id: json.problem.id, topic: json.why.topic, upNext: json.upNext });
+    }
+    const code = served.map((s) => (s.kind === 'review' ? 'R' : s.kind === 'sprinkle' ? 'S' : 'n')).join(' ');
+    // Slot 4 is a review's (R wins ties), so that sprinkle slips to 5; slots 8
+    // and 12 are free. Reviews keep their every-third rhythm throughout.
+    expect(code).toBe('R n n R S n R S n R n S');
+
+    // Each sprinkle is a distinct, never-before-served banked easy — no generation.
+    const sprinkles = served.filter((s) => s.kind === 'sprinkle');
+    expect(new Set(sprinkles.map((s) => s.id))).toEqual(new Set([E1, E2, E3]));
+    for (const s of sprinkles) expect(s.id).not.toBe(GENERATED_ID);
+
+    // upNext after pick i must describe pick i+1's kind, review or sprinkle.
+    for (let i = 0; i < served.length - 1; i++) {
+      const nextKind = served[i + 1].kind;
+      if (nextKind === 'review') expect(served[i].upNext).toBe('a review problem to solve cold');
+      else if (nextKind === 'sprinkle') expect(served[i].upNext).toBe(`something new: a quick ${served[i + 1].topic} easy`);
+      else {
+        expect(served[i].upNext).not.toBe('a review problem to solve cold');
+        expect(served[i].upNext).not.toMatch(/^something new/);
+      }
+    }
+    expect(db.getSession(SESSION)).toMatchObject({ served: 12, lastReviewServed: 10, lastSprinkleServed: 12 });
+  });
+
+  it('with no reviews due, the sprinkle takes its own slot: n n n S n n n S', async () => {
+    db.db.prepare('DELETE FROM review_queue').run();
+    const kinds: string[] = [];
+    for (let i = 0; i < 8; i++) kinds.push((await next()).json.why.kind);
+    expect(kinds.map((k) => (k === 'sprinkle' ? 'S' : 'n')).join(' ')).toBe('n n n S n n n S');
   });
 });

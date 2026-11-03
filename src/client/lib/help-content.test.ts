@@ -106,6 +106,7 @@ describe('the hints', () => {
     expect(HELP_HINT_IDS.sort()).toEqual(
       [
         'assistance-level',
+        'close-calls',
         'cold-review',
         'hint-free',
         'mastery',

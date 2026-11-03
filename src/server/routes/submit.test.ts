@@ -149,7 +149,7 @@ async function submit(
 }
 
 beforeEach(() => {
-  for (const table of ['attempts', 'skill_state', 'review_queue', 'problems', 'revealed_solutions']) {
+  for (const table of ['attempts', 'skill_state', 'review_queue', 'problems', 'revealed_solutions', 'near_miss_holds']) {
     db.db.prepare(`DELETE FROM ${table}`).run();
   }
   mocks.runTests.mockReset();
@@ -390,6 +390,24 @@ suite('POST /api/submit — recording, exactly once', () => {
       predSpace: 'O(n)',
       confidence: 4,
     });
+  });
+
+  it('a near miss fixed the same day keeps the topic streak, and still queues the review', async () => {
+    // 3/4 hidden tests passing = a near miss (shared/closeness).
+    const nearMiss: RunResult = { ...sandboxResult('wrong_answer'), passed: 3, total: 4 };
+    mocks.runTests.mockResolvedValue(sandboxResult('accepted'));
+    await submit();
+    expect(db.getSkillForTopic('javascript', 'arrays')).toMatchObject({ streak: 1, box: 1 });
+    mocks.runTests.mockResolvedValue(nearMiss);
+    await submit();
+    expect(db.getSkillForTopic('javascript', 'arrays')).toMatchObject({ streak: 0, box: 0 });
+    expect(db.isReviewQueued(PROBLEM_ID)).toBe(true);
+    mocks.runTests.mockResolvedValue(sandboxResult('accepted'));
+    await submit();
+    // Not a lapse: the streak picks up where it was, plus this solve.
+    expect(db.getSkillForTopic('javascript', 'arrays')).toMatchObject({ streak: 2, box: 2, lastResult: 'solved' });
+    // The review entry is the ladder's business, untouched by the forgiveness.
+    expect(db.isReviewQueued(PROBLEM_ID)).toBe(true);
   });
 
   it('queues a review on a miss', async () => {

@@ -10,6 +10,7 @@ import {
   TrendingUp,
   Sparkles,
   Snowflake,
+  Sprout,
 } from 'lucide-react';
 import type {
   SessionPlan,
@@ -22,7 +23,7 @@ import { humanize } from '@/client/lib/format';
 import { cn } from '@/lib/utils';
 
 /**
- * Exported so the Help tab can enumerate the six reasons with the SAME label and
+ * Exported so the Help tab can enumerate the seven reasons with the SAME label and
  * glyph the banner draws. A second list over there would be a second thing to
  * keep in step, and the one it would drift from is the one people actually see.
  */
@@ -60,6 +61,11 @@ export const KIND_META: Record<
     className:
       'border-rose-500/40 bg-gradient-to-r from-rose-500/15 to-amber-500/10 text-rose-300',
     icon: Snowflake,
+  },
+  sprinkle: {
+    label: 'Something new',
+    className: 'border-teal-500/30 bg-teal-500/10 text-teal-400',
+    icon: Sprout,
   },
 };
 

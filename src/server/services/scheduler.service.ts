@@ -23,6 +23,7 @@ import {
   getProblem,
   getReviewDueCount,
   findUnusedProblem,
+  getEasyExposure,
   type SkillRow,
 } from './db.js';
 import { pickBreadth } from './breadth.compute.js';
@@ -89,6 +90,11 @@ export interface NextIntentOpts {
    * see reviewAllowed). Omitted = true: only grind sittings carry the cap.
    */
   allowReview?: boolean;
+  /**
+   * Whether this pick is a sprinkle slot (grind's sprinkle cadence, see
+   * sprinkleDue). Omitted = false: only grind sittings sprinkle.
+   */
+  allowSprinkle?: boolean;
 }
 
 /**
@@ -109,6 +115,37 @@ export const REVIEW_CAP_WINDOW = 3;
 export function reviewAllowed(served: number, lastReviewServed: number | null): boolean {
   if (lastReviewServed === null) return true;
   return served - lastReviewServed >= REVIEW_CAP_WINDOW - 1;
+}
+
+/**
+ * Grind's sprinkle cadence: one problem in every this-many served in a sitting
+ * is an EASY the player has never seen, from the least-practised topic that has
+ * one banked — variety and an easy win, outside the prerequisite gating.
+ */
+export const SPRINKLE_CADENCE = 4;
+
+/**
+ * Is the next pick in a sitting a sprinkle slot? Same counters as
+ * reviewAllowed: `served` problems so far, the last sprinkle at position
+ * `lastSprinkleServed` (1-based; null = none yet).
+ *
+ * The slots are FIXED: problems SPRINKLE_CADENCE, 2×, 3×, … of the sitting.
+ * A sprinkle that loses its slot goes out on the next pick instead, and the
+ * one after it still aims at the next fixed slot — so a slip does not push
+ * the whole cadence back, and it stays one per SPRINKLE_CADENCE problems
+ * even in a sitting full of reviews. Never two in a row, whatever slipped.
+ *
+ * The ORDER at a pick (routes/session.ts → nextIntent) is:
+ *   breadth slot  >  due review (under the cap)  >  sprinkle  >  normal.
+ * A review wins a tie, so the sprinkle cannot starve reviews; and since a
+ * review cannot go out twice in a row under REVIEW_CAP_WINDOW, a sprinkle
+ * slips by one problem at most (two if the day's breadth slot lands there too).
+ */
+export function sprinkleDue(served: number, lastSprinkleServed: number | null): boolean {
+  if (lastSprinkleServed === null) return served + 1 >= SPRINKLE_CADENCE;
+  if (served - lastSprinkleServed < 1) return false; // never back to back
+  const nextSlot = (Math.floor(lastSprinkleServed / SPRINKLE_CADENCE) + 1) * SPRINKLE_CADENCE;
+  return served + 1 >= nextSlot;
 }
 
 // -----------------------------------------------------------------------------
@@ -434,6 +471,9 @@ export function nextIntent(opts: NextIntentOpts): SchedulerIntent {
     // Problem vanished (deleted) — fall through to normal scheduling.
   }
 
+  // Grind's sprinkle slot (sprinkleDue): an unseen easy from a quiet topic.
+  if (opts.allowSprinkle) return sprinkleIntent(language, opts.avoidTopic);
+
   const views = buildViews(language);
   let candidates = buildCandidates(views, opts.plan, opts.dailyFocus, opts.missFocus);
 
@@ -482,6 +522,63 @@ export function breadthIntent(language: Language, avoidTopic?: string | null): S
   return toIntent(language, { kind, topic: pick.topic, difficulty: pick.difficulty, score: 1, rationale: pick.rationale });
 }
 
+// -----------------------------------------------------------------------------
+// Sprinkle — an unseen easy from the least-practised topic, for variety.
+// -----------------------------------------------------------------------------
+interface SprinklePick {
+  topic: Topic;
+  /** True when the bank has an unused easy for it; false = must generate. */
+  banked: boolean;
+}
+
+/**
+ * The sprinkle's topic. Among topics with an unused (servable) EASY banked in
+ * this language: fewest attempts first, then fewest easys already served (so
+ * a sprinkle that was skipped without a submit does not pin the same topic),
+ * then curriculum order. The topic just served is avoided unless it is the
+ * only one. Prerequisite gating is ignored on purpose: these are easys, for
+ * exposure. Only when NO topic has an unused easy does it fall back to the
+ * least-attempted topic overall, to be generated — the bank is free and
+ * instant, generation is neither.
+ */
+export function pickSprinkle(language: Language, avoidTopic?: string): SprinklePick {
+  const views = buildViews(language);
+  const exposure = getEasyExposure(language);
+  const rank = (pool: TopicView[]): TopicView[] =>
+    [...pool].sort(
+      (a, b) =>
+        a.attempts - b.attempts ||
+        (exposure.get(a.topic)?.served ?? 0) - (exposure.get(b.topic)?.served ?? 0) ||
+        TOPICS.indexOf(a.topic) - TOPICS.indexOf(b.topic)
+    );
+  const avoid = (pool: TopicView[]): TopicView[] => {
+    const kept = pool.filter((v) => v.topic !== avoidTopic);
+    return kept.length ? kept : pool;
+  };
+  const banked = views.filter((v) => (exposure.get(v.topic)?.unused ?? 0) > 0);
+  if (banked.length) return { topic: rank(avoid(banked))[0].topic, banked: true };
+  return { topic: rank(avoid(views))[0].topic, banked: false };
+}
+
+const topicWords = (t: Topic): string => t.replace(/-/g, ' ');
+
+/** The sprinkle as an intent. `getAdaptiveProblem` serves it bank-first. */
+export function sprinkleIntent(language: Language, avoidTopic?: string): SchedulerIntent {
+  const pick = pickSprinkle(language, avoidTopic);
+  const intent: SchedulerIntent = {
+    kind: 'sprinkle',
+    language,
+    topic: pick.topic,
+    difficulty: 'easy',
+    rationale: `Something new: a quick easy from ${topicWords(pick.topic)} to keep things fresh.`,
+  };
+  if (!pick.banked) {
+    const titles = getBankTitles(language, pick.topic);
+    if (titles.length) intent.avoidTitles = titles;
+  }
+  return intent;
+}
+
 /**
  * Best-effort short label for the LIKELY next problem, for a UI "up next" peek.
  * Does not commit — reuses candidate logic against current state.
@@ -491,6 +588,10 @@ export function peekUpNext(opts: NextIntentOpts): string {
   // — under the same cap, or the peek promises a review /next will not serve.
   if (opts.allowReview !== false && getReviewDueCount(opts.language) > 0) {
     return 'a review problem to solve cold';
+  }
+  // …then the sprinkle slot, exactly as nextIntent orders them.
+  if (opts.allowSprinkle) {
+    return `something new: a quick ${topicWords(pickSprinkle(opts.language, opts.avoidTopic).topic)} easy`;
   }
   const views = buildViews(opts.language);
   let candidates = buildCandidates(views, opts.plan, opts.dailyFocus, opts.missFocus);

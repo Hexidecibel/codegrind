@@ -34,6 +34,7 @@ import { FirstRun } from '@/client/components/reflect/FirstRun';
 import { HistoryRow } from '@/client/components/reflect/HistoryRow';
 import { RecognizeAccuracy } from '@/client/components/reflect/RecognizeAccuracy';
 import { EnvelopeAccuracy } from '@/client/components/reflect/EnvelopeAccuracy';
+import { CloseCalls } from '@/client/components/reflect/CloseCalls';
 import {
   DataTable,
   Section,
@@ -321,6 +322,9 @@ export function ProgressPage() {
             />
           </Card>
         </Section>
+
+        {/* How near the misses came — the progress a pass/fail verdict hides. */}
+        <CloseCalls />
 
         <Section
           title="Recurring mistakes"

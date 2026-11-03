@@ -13,6 +13,7 @@ import {
 import fs from 'node:fs';
 import path from 'node:path';
 import { TOPICS } from '../../shared/types.js';
+import { isNearMiss, type ClosenessAttempt } from '../../shared/closeness.js';
 import { DEFAULT_LANGUAGE, isLanguage, type Language } from '../../shared/languages.js';
 // The language the SHARED study corpus is authored in. Imported rather than
 // re-declared so there is exactly one answer to "which stored snippet is the
@@ -349,6 +350,25 @@ export function findUnusedProblem(
   return row ? rowToProblem(row) : null;
 }
 
+const easyExposureStmt = db.prepare(`
+  SELECT topic,
+         SUM(CASE WHEN used = 0 AND canonicalized = 1 THEN 1 ELSE 0 END) AS unused,
+         SUM(CASE WHEN used = 1 THEN 1 ELSE 0 END) AS served
+  FROM problems
+  WHERE language = ? AND difficulty = 'easy'
+  GROUP BY topic
+`);
+
+/**
+ * Per topic, for one language's EASY slot: how many problems are ready to
+ * serve (the same predicate as findUnusedStmt) and how many have already been
+ * served. The grind sprinkle (scheduler.sprinkleIntent) picks from this.
+ */
+export function getEasyExposure(language: Language): Map<Topic, { unused: number; served: number }> {
+  const rows = easyExposureStmt.all(language) as Array<{ topic: string; unused: number | null; served: number | null }>;
+  return new Map(rows.map((r) => [r.topic as Topic, { unused: r.unused ?? 0, served: r.served ?? 0 }]));
+}
+
 const countServableStmt = db.prepare(`
   SELECT COUNT(*) AS n FROM problems
   WHERE language = ? AND topic = ? AND difficulty = ? AND used = 0 AND canonicalized = 1
@@ -490,6 +510,29 @@ export function insertAttempt(a: AttemptInput): void {
     prediction: a.prediction ? JSON.stringify(a.prediction) : null,
     mistakeTags: a.mistakeTags && a.mistakeTags.length ? JSON.stringify(a.mistakeTags) : null,
   });
+}
+
+const closenessStmt = db.prepare(`
+  SELECT problemId, solved, testsPassed, testsTotal, hintsUsed, createdAt
+  FROM attempts
+  WHERE language = ? AND createdAt >= ?
+  ORDER BY createdAt ASC
+`);
+
+/**
+ * The attempt fields shared/closeness aggregates, for one language since an
+ * ISO instant. Oldest first; tests and code are not read.
+ */
+export function getClosenessAttempts(language: Language, sinceIso: string): ClosenessAttempt[] {
+  const rows = closenessStmt.all(language, sinceIso) as Array<{
+    problemId: string;
+    solved: number;
+    testsPassed: number;
+    testsTotal: number;
+    hintsUsed: number;
+    createdAt: string;
+  }>;
+  return rows.map((r) => ({ ...r, solved: !!r.solved }));
 }
 
 const historyStmt = db.prepare(`
@@ -783,11 +826,98 @@ const upsertSkillStmt = db.prepare(`
     dueAt             = @dueAt
 `);
 
+/** The bits of the attempt itself that near-miss forgiveness needs. */
+export interface SkillAttemptInfo {
+  problemId: string;
+  testsPassed: number;
+  testsTotal: number;
+}
+
+interface NearMissHoldRow {
+  problemId: string;
+  heldAt: string;
+  box: number;
+  ease: number;
+  streak: number;
+}
+
+const getHoldStmt = db.prepare(`SELECT * FROM near_miss_holds WHERE language = ? AND topic = ?`);
+const putHoldStmt = db.prepare(`
+  INSERT INTO near_miss_holds (language, topic, problemId, heldAt, box, ease, streak)
+  VALUES (@language, @topic, @problemId, @heldAt, @box, @ease, @streak)
+  ON CONFLICT(language, topic) DO UPDATE SET
+    problemId = @problemId, heldAt = @heldAt, box = @box, ease = @ease, streak = @streak
+`);
+const dropHoldStmt = db.prepare(`DELETE FROM near_miss_holds WHERE language = ? AND topic = ?`);
+
+/**
+ * NEAR-MISS FORGIVENESS, decided at SOLVE time.
+ *
+ * A failed submit resets the topic's box and streak and dings its ease — a
+ * lapse. But most real misses are near misses (shared/closeness: at least
+ * NEAR_MISS_THRESHOLD of the hidden tests passing): the idea was right and a
+ * `slice(l, r - l + 1)` sank it. When the player then finds and fixes that bug
+ * on the same problem the same day, calling it a lapse undersells them.
+ *
+ * Why at solve time rather than "make a near miss softer when recorded": at
+ * record time we do not yet know whether it gets fixed, and a near miss that is
+ * never fixed IS a lapse. So the miss is recorded exactly as before (box 0,
+ * streak 0, ease down — the topic still resurfaces), and the numbers from just
+ * BEFORE it are parked in `near_miss_holds`. Then:
+ *
+ *   * a later solve of the SAME problem on the SAME local day restores them,
+ *     and the solve is applied on top as usual (clean: +1; hinted: hold) — so
+ *     the near miss never happened as far as box, streak and ease go;
+ *   * further near misses on that problem that day keep the ORIGINAL hold;
+ *   * a real miss (below the threshold) on it drops the hold: that lapse stands;
+ *   * an attempt at any other problem in the topic, or any attempt on a later
+ *     day, drops it too: the near miss was not fixed in time and stays a lapse.
+ *
+ * The review queue is deliberately untouched here: the near miss still queues
+ * the problem, and review-ladder's same-day partial credit handles the climb.
+ * (There is no difficulty demotion to undo — the working difficulty is derived
+ * from distinct clean solves, which a failure never removes.)
+ *
+ * Returns the restored numbers when a solve cashes in a hold, else null.
+ */
+function nearMissHold(
+  language: Language,
+  topic: Topic,
+  attempt: SkillAttemptInfo,
+  solved: boolean,
+  nowMs: number,
+  current: { box: number; ease: number; streak: number }
+): { box: number; ease: number; streak: number } | null {
+  const tz = todayTz();
+  const row = getHoldStmt.get(language, topic) as NearMissHoldRow | undefined;
+  const live =
+    row && row.problemId === attempt.problemId && localDay(Date.parse(row.heldAt), tz) === localDay(nowMs, tz)
+      ? row
+      : null;
+  if (row && !live) dropHoldStmt.run(language, topic);
+
+  if (solved) {
+    if (!live) return null;
+    dropHoldStmt.run(language, topic);
+    return { box: live.box, ease: live.ease, streak: live.streak };
+  }
+  if (!isNearMiss({ solved, testsPassed: attempt.testsPassed, testsTotal: attempt.testsTotal })) {
+    if (live) dropHoldStmt.run(language, topic);
+    return null;
+  }
+  if (!live) {
+    putHoldStmt.run({ language, topic, problemId: attempt.problemId, heldAt: new Date(nowMs).toISOString(), ...current });
+  }
+  return null;
+}
+
 /**
  * Apply one attempt's outcome to a topic's spaced-repetition state.
  * - solved & no hints → box up, streak++, ease up, dueAt pushed out.
  * - solved with hints → hold (box unchanged, mild ease penalty), reschedule.
  * - failed → box reset to 0, dueAt now, streak 0, ease penalty.
+ * - …unless it was a near miss fixed the same day (pass `attempt`): see
+ *   `nearMissHold`, which restores the pre-miss numbers at solve time.
  *
  * `currentDifficulty` is NOT set from `box` any more. It is DERIVED from the
  * tier ladder — the difficulty above the highest completed tier — so it is a
@@ -805,7 +935,8 @@ export function updateSkillOnAttempt(
   language: Language,
   topic: Topic,
   solved: boolean,
-  hintsUsed: number
+  hintsUsed: number,
+  attempt?: SkillAttemptInfo
 ): void {
   const prev = getSkillForTopic(language, topic);
   const nowMs = Date.now();
@@ -817,6 +948,12 @@ export function updateSkillOnAttempt(
   let box = prev?.box ?? 0;
   let ease = prev?.ease ?? 2.5;
   let streak = prev?.streak ?? 0;
+
+  // Near-miss forgiveness — see `nearMissHold` above for the full rule.
+  if (attempt) {
+    const hold = nearMissHold(language, topic, attempt, solved, nowMs, { box, ease, streak });
+    if (hold) ({ box, ease, streak } = hold);
+  }
   const attempts = (prev?.attempts ?? 0) + 1;
   const solvedCount = (prev?.solved ?? 0) + (solved ? 1 : 0);
   const hintsSum = (prev?.hintsSum ?? 0) + hintsUsed;
@@ -955,6 +1092,8 @@ export interface SessionRow {
   lastTopic: Topic | null;
   /** The `served` count at which this sitting's last review went out (null = none). */
   lastReviewServed: number | null;
+  /** The `served` count at which this sitting's last sprinkle went out (null = none). */
+  lastSprinkleServed: number | null;
 }
 
 interface SessionDbRow {
@@ -965,6 +1104,7 @@ interface SessionDbRow {
   served: number;
   lastTopic: string | null;
   lastReviewServed: number | null;
+  lastSprinkleServed: number | null;
 }
 
 const insertSessionStmt = db.prepare(`
@@ -1001,23 +1141,26 @@ export function getSession(id: string): SessionRow | null {
     served: row.served,
     lastTopic: (row.lastTopic as Topic | null) ?? null,
     lastReviewServed: row.lastReviewServed ?? null,
+    lastSprinkleServed: row.lastSprinkleServed ?? null,
   };
 }
 
 const bumpSessionStmt = db.prepare(`
   UPDATE sessions
   SET served = served + 1, lastTopic = @lastTopic,
-      lastReviewServed = CASE WHEN @review THEN served + 1 ELSE lastReviewServed END
+      lastReviewServed = CASE WHEN @review THEN served + 1 ELSE lastReviewServed END,
+      lastSprinkleServed = CASE WHEN @sprinkle THEN served + 1 ELSE lastSprinkleServed END
   WHERE id = @id
 `);
 
 /**
  * Record that a problem was served in this session: increments the count,
- * tracks the last topic, and (a review) where the last review went out — the
- * scheduler's per-sitting review cap reads that back (reviewAllowed).
+ * tracks the last topic, and where the last review / sprinkle went out — the
+ * scheduler's per-sitting review cap (reviewAllowed) and sprinkle cadence
+ * (sprinkleDue) read those back.
  */
-export function bumpSession(id: string, lastTopic: Topic, review = false): void {
-  bumpSessionStmt.run({ lastTopic, review: review ? 1 : 0, id });
+export function bumpSession(id: string, lastTopic: Topic, review = false, sprinkle = false): void {
+  bumpSessionStmt.run({ lastTopic, review: review ? 1 : 0, sprinkle: sprinkle ? 1 : 0, id });
 }
 
 // -----------------------------------------------------------------------------

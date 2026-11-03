@@ -1301,3 +1301,17 @@ describe('grind review cap + same-day partial credit — two additive columns', 
     db.close();
   });
 });
+
+describe('grind sprinkle + near-miss forgiveness — one column, one table', () => {
+  it('adds sessions.lastSprinkleServed (NULL on existing rows) and near_miss_holds', () => {
+    const db = oldDb();
+    db.prepare(`INSERT INTO sessions (id, createdAt, plan, served) VALUES ('s1', 't', '{}', 4)`).run();
+    migrate(db);
+    expect(columnsOf(db, 'sessions')).toContain('lastSprinkleServed');
+    expect(db.prepare(`SELECT lastSprinkleServed FROM sessions WHERE id = 's1'`).get()).toEqual({ lastSprinkleServed: null });
+    expect(columnsOf(db, 'near_miss_holds')).toEqual(['language', 'topic', 'problemId', 'heldAt', 'box', 'ease', 'streak']);
+    // Always-run and idempotent: a second boot adds nothing.
+    expect(() => migrate(db)).not.toThrow();
+    db.close();
+  });
+});

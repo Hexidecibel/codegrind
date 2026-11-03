@@ -39,6 +39,7 @@ import {
   MIN_SAMPLE_TESTS,
   REVIEW_CAP_WINDOW,
   REVIEW_LADDER_DAYS,
+  SPRINKLE_CADENCE,
   REVIEW_SKIP_MIN_DAYS,
   SANDBOX_CPUS,
   SANDBOX_FLAGS,
@@ -299,7 +300,7 @@ export function HelpPage() {
             })}
           </Terms>
           <KeyIdea>
-            A due review outranks the other five reasons. Before any of them
+            A due review outranks the other reasons. Before any of them
             is even scored, the scheduler checks the review queue — if
             something is waiting there, that is what you get, but at most one
             review per {REVIEW_CAP_WINDOW} problems in a sitting, so a long
@@ -309,6 +310,15 @@ export function HelpPage() {
             review aside for at least {REVIEW_SKIP_MIN_DAYS} day{REVIEW_SKIP_MIN_DAYS === 1 ? '' : 's'}, and whatever is
             next in line is served instead.
           </KeyIdea>
+          <p>
+            Every {SPRINKLE_CADENCE}th problem in a sitting is a{' '}
+            <strong>Something new</strong>: an easy you have never been served,
+            from whichever topic you have practised least that has one waiting
+            in the bank — prerequisites or not. It is there for variety and a
+            quick win, not to test you. A due review still goes first if the
+            two land on the same problem; the something-new just comes one
+            problem later. Two never come back to back.
+          </p>
           <p>
             Otherwise it builds a candidate for every topic that qualifies,
             scores each one from your own state (how weak the topic is, whether
@@ -800,6 +810,8 @@ const INTENT_EXPLANATION: Record<(typeof SCHEDULER_INTENT_KINDS)[number], string
     'You just completed a tier on this topic, so the next difficulty starts here.',
   'new-pattern':
     'A topic you have never attempted, now that a prerequisite has completed its tier. Arrives with a primer.',
+  sprinkle:
+    'A quick easy you have never seen, from a topic you have barely practised, every few problems. For variety, and ignores prerequisites.',
 };
 
 const VERDICT_EXPLANATION: Record<(typeof VERDICTS)[number], string> = {

@@ -21,7 +21,14 @@ import {
 import type { Language } from '../../shared/languages.js';
 import { TIER_REQUIREMENT, WEAK_SCORE, tierProgress } from '../services/curriculum.js';
 import { planSession, type SessionSnapshotTopic } from '../services/llm.service.js';
-import { breadthIntent, nextIntent, peekUpNext, reviewAllowed, type SchedulerIntent } from '../services/scheduler.service.js';
+import {
+  breadthIntent,
+  nextIntent,
+  peekUpNext,
+  reviewAllowed,
+  sprinkleDue,
+  type SchedulerIntent,
+} from '../services/scheduler.service.js';
 import { getAdaptiveProblem } from '../services/bank.service.js';
 import { errorBody } from '../services/explain.service.js';
 import { breadthSlot, dailyFocus, todayMissTopics } from '../services/today.service.js';
@@ -101,12 +108,13 @@ sessionRoutes.post('/session/start', async (c) => {
     // The first problem of a sitting may always be a review (reviewAllowed).
     const intent =
       (slot ? breadthIntent(language, slot.avoidTopic) : null) ??
-      nextIntent({ language, plan, dailyFocus: focus, missFocus: misses, allowReview: true });
+      nextIntent({ language, plan, dailyFocus: focus, missFocus: misses, allowReview: true, allowSprinkle: sprinkleDue(0, null) });
     const record = await getAdaptiveProblem(intent);
 
     createSession(language, sessionId, plan);
     const isReview = intent.kind === 'review';
-    bumpSession(sessionId, intent.topic, isReview);
+    const isSprinkle = intent.kind === 'sprinkle';
+    bumpSession(sessionId, intent.topic, isReview, isSprinkle);
 
     const payload: SessionStartResponse = {
       sessionId,
@@ -120,6 +128,7 @@ sessionRoutes.post('/session/start', async (c) => {
         dailyFocus: focus,
         missFocus: misses,
         allowReview: reviewAllowed(1, isReview ? 1 : null),
+        allowSprinkle: sprinkleDue(1, isSprinkle ? 1 : null),
       }),
     };
     return c.json(payload);
@@ -163,13 +172,18 @@ sessionRoutes.post('/session/:id/next', async (c) => {
       missFocus: misses,
       // Grind's per-sitting review cap: R, x, x, R, … (scheduler.reviewAllowed).
       allowReview: reviewAllowed(session.served, session.lastReviewServed),
+      // …and its sprinkle cadence: an unseen easy every few problems
+      // (scheduler.sprinkleDue). A due review (if allowed) still wins the slot.
+      allowSprinkle: sprinkleDue(session.served, session.lastSprinkleServed),
     });
     const record = await getAdaptiveProblem(intent);
     const isReview = intent.kind === 'review';
-    bumpSession(id, intent.topic, isReview);
+    const isSprinkle = intent.kind === 'sprinkle';
+    bumpSession(id, intent.topic, isReview, isSprinkle);
     // The counters as they stand AFTER this serve — what the next /next sees.
     const servedNow = session.served + 1;
     const lastReviewNow = isReview ? servedNow : session.lastReviewServed;
+    const lastSprinkleNow = isSprinkle ? servedNow : session.lastSprinkleServed;
 
     const payload: GrindProblem = {
       sessionId: id,
@@ -182,6 +196,7 @@ sessionRoutes.post('/session/:id/next', async (c) => {
         dailyFocus: focus,
         missFocus: misses,
         allowReview: reviewAllowed(servedNow, lastReviewNow),
+        allowSprinkle: sprinkleDue(servedNow, lastSprinkleNow),
       }),
     };
     return c.json(payload);

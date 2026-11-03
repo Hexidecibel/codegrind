@@ -446,7 +446,29 @@ export function migrate(db: Database, opts: MigrateOptions = {}): void {
       // which is also exactly right for every sitting that predates it.
       if (tableExists(db, 'sessions')) {
         addColumnIfMissing(db, 'sessions', 'lastReviewServed', 'INTEGER');
+        // Grind's sprinkle cadence (scheduler.sprinkleDue): the `served` count
+        // at which the sitting's last unseen-easy sprinkle went out. NULL =
+        // none yet — an old sitting simply becomes eligible on its next pick.
+        addColumnIfMissing(db, 'sessions', 'lastSprinkleServed', 'INTEGER');
       }
+      // Near-miss forgiveness (db.updateSkillOnAttempt): the topic's skill
+      // numbers from just BEFORE a near miss reset them, held until we know
+      // whether the player fixed it the same day. A table of its own rather
+      // than columns on skill_state, because the versioned skill_state key
+      // rebuild below lists that table's columns by hand and would drop any
+      // column added here. At most one row per (language, topic).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS near_miss_holds (
+          language  TEXT NOT NULL,
+          topic     TEXT NOT NULL,
+          problemId TEXT NOT NULL,
+          heldAt    TEXT NOT NULL,
+          box       INTEGER NOT NULL,
+          ease      REAL NOT NULL,
+          streak    INTEGER NOT NULL,
+          PRIMARY KEY (language, topic)
+        );
+      `);
       db.exec(`
         CREATE TABLE IF NOT EXISTS recognize_checks (
           key        TEXT PRIMARY KEY,           -- sha256(problemId|pick|normalized answer)
