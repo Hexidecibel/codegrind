@@ -34,6 +34,7 @@ import { SolveSurface } from '@/client/components/SolveSurface';
 import { CoachBanner } from '@/client/components/CoachBanner';
 import { PatternPrimer } from '@/client/components/PatternPrimer';
 import { humanize } from '@/client/lib/format';
+import { BestOnIpad, useIpadGate } from '@/client/components/BestOnIpad';
 
 /** The Today routine's editor: Minimal (highlighting + line numbers), closest to CoderPad. */
 const TODAY_ASSISTANCE: AssistanceSettings = { level: 2, overrides: presetToOverrides(2) };
@@ -42,7 +43,24 @@ function uniqueTopics(topics: Topic[], next: Topic): Topic[] {
   return topics.includes(next) ? topics : [...topics, next];
 }
 
+/**
+ * On a phone, /grind opens on the BestOnIpad card: the day's coding belongs on
+ * the iPad, and Recognize ×5 is the phone-shaped thing to do instead.
+ */
 export function GrindPage() {
+  const gate = useIpadGate('grind');
+  if (gate.gated) {
+    return (
+      <BestOnIpad
+        action={{ label: 'Do Recognize ×5 instead', to: '/recognize?n=5' }}
+        onOpenAnyway={gate.openAnyway}
+      />
+    );
+  }
+  return <GrindScreen />;
+}
+
+function GrindScreen() {
   const [snapshot, setSnapshot] = useLocalStorage<GrindSnapshot | null>(
     'codegrind.grind',
     null,

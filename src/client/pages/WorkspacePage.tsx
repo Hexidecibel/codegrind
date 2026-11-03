@@ -13,6 +13,8 @@ import { Button } from '@/client/components/ui/button';
 import { TopicPicker } from '@/client/components/TopicPicker';
 import { LanguagePicker } from '@/client/components/LanguagePicker';
 import { SolveSurface } from '@/client/components/SolveSurface';
+import { ProblemPanel } from '@/client/components/ProblemPanel';
+import { BestOnIpad, useIpadGate } from '@/client/components/BestOnIpad';
 
 /**
  * Where /manual opens when the bank cannot suggest anything.
@@ -61,10 +63,19 @@ const TODAY_ASSISTANCE: AssistanceSettings = { level: 2, overrides: presetToOver
  */
 export function WorkspacePage() {
   const { search } = useLocation();
-  return <Workspace key={search} search={search} />;
+  const gate = useIpadGate('manual');
+  // On a phone, "Read it" shows the problem with no editor or run bar: reading
+  // the statement on the bus is useful, typing a solution on a phone is not.
+  const [reading, setReading] = useState(false);
+  if (gate.gated && !reading) {
+    return (
+      <BestOnIpad action={{ label: 'Read it', onClick: () => setReading(true) }} onOpenAnyway={gate.openAnyway} />
+    );
+  }
+  return <Workspace key={search} search={search} readOnly={gate.gated} />;
 }
 
-function Workspace({ search }: { search: string }) {
+function Workspace({ search, readOnly = false }: { search: string; readOnly?: boolean }) {
   const link = useMemo(() => {
     const q = new URLSearchParams(search);
     const topic = q.get('topic');
@@ -333,6 +344,10 @@ function Workspace({ search }: { search: string }) {
         )}
       </div>
     );
+  }
+
+  if (readOnly) {
+    return <ProblemPanel problem={problem} hidePattern={link.hide} />;
   }
 
   return (

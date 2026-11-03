@@ -32,6 +32,7 @@ import {
   HelpCircle,
   Loader2,
   MessagesSquare,
+  Mic,
   Send,
   SkipForward,
   X,
@@ -81,6 +82,7 @@ import { GapCards } from '@/client/components/GapCards';
 import { TodayNextBar } from '@/client/components/TodayNextBar';
 import { todayStepFrom } from '@/client/lib/today-flow';
 import { cn } from '@/lib/utils';
+import { useIsPhone } from '@/client/hooks/useMediaQuery';
 
 function ErrorBar({ error, onClose }: { error: ApiError | Error; onClose?: () => void }) {
   return (
@@ -317,7 +319,16 @@ function ProjectPicker({ value, onChange }: { value: DdProjectChoice; onChange: 
   );
 }
 
+/** The blurb's first clause: the phone's one-line intro. */
+export function oneLine(blurb: string): string {
+  return `${blurb.split(/[.:]/)[0].trim()}.`;
+}
+
+/** Coding mocks need the editor, so on a phone that kind is the iPad's. */
+export const phoneBlocksKind = (k: MockKind, isPhone: boolean) => isPhone && k === 'coding';
+
 function StartCard() {
+  const isPhone = useIsPhone();
   const navigate = useNavigate();
   const location = useLocation();
   // Opened from Today: today's kind preselected, the drill cards first on the
@@ -325,6 +336,10 @@ function StartCard() {
   const todayStep = todayStepFrom(location.search);
   const kindParam = new URLSearchParams(location.search).get('kind');
   const [kind, setKind] = useState<MockKind>(isMockKind(kindParam) ? kindParam : DEFAULT_MOCK_KIND);
+  // A phone that landed on Coding (a ?kind=coding link) moves to the default.
+  useEffect(() => {
+    if (phoneBlocksKind(kind, isPhone)) setKind(DEFAULT_MOCK_KIND);
+  }, [kind, isPhone]);
   const [cardsKey, setCardsKey] = useState(0);
   useEffect(() => {
     if (location.hash === '#cards') document.getElementById('cards')?.scrollIntoView();
@@ -417,7 +432,16 @@ function StartCard() {
         <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
           <MessagesSquare className="h-6 w-6" /> Mock interview
         </h1>
-        <p className="text-sm text-muted-foreground">{info.start.blurb}</p>
+        {isPhone ? (
+          <>
+            <p className="text-sm text-muted-foreground">{oneLine(info.start.blurb)}</p>
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Mic className="h-3.5 w-3.5" /> Tap the keyboard mic to talk.
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">{info.start.blurb}</p>
+        )}
       </div>
 
       {todayStep && <TodayNextBar here={todayStep} screenPath="/mock" refreshKey={cardsKey} />}
@@ -439,20 +463,31 @@ function StartCard() {
         <div className="space-y-1.5">
           <div className="text-sm font-medium">Interview</div>
           <div className="inline-flex flex-wrap rounded-md border border-border p-0.5" role="radiogroup" aria-label="Kind">
-            {MOCK_KINDS.map((k) => (
-              <button
-                key={k}
-                role="radio"
-                aria-checked={kind === k}
-                onClick={() => setKind(k)}
-                className={cn(
-                  'min-h-9 rounded px-3 text-sm pointer-coarse:min-h-11',
-                  kind === k ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {mockKindInfo(k).label}
-              </button>
-            ))}
+            {MOCK_KINDS.map((k) => {
+              const ipad = phoneBlocksKind(k, isPhone);
+              return (
+                <button
+                  key={k}
+                  role="radio"
+                  aria-checked={kind === k}
+                  disabled={ipad}
+                  onClick={() => setKind(k)}
+                  className={cn(
+                    'min-h-9 rounded px-3 text-sm pointer-coarse:min-h-11',
+                    ipad
+                      ? 'inline-flex cursor-not-allowed items-center gap-1.5 text-muted-foreground/50'
+                      : kind === k
+                        ? 'bg-secondary text-foreground'
+                        : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {mockKindInfo(k).label}
+                  {ipad && (
+                    <span className="rounded border border-border px-1 text-[10px] uppercase tracking-wide">iPad</span>
+                  )}
+                </button>
+              );
+            })}
             {UPCOMING_MOCK_KINDS.map((k) => (
               <button
                 key={k.id}
