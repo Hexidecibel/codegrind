@@ -4,6 +4,7 @@
 
 import type { PatternId, PatternsState } from '@/shared/pattern-shapes';
 import type { ClosenessStats } from '@/shared/closeness';
+import type { WeeklyResponse } from '@/shared/weekly';
 import type {
   Problem,
   RunResult,
@@ -637,6 +638,11 @@ export function abandonMock(id: string): Promise<MockView> {
 /** GET /api/today — the day, derived from real rows. Free. */
 export function getToday(): Promise<TodayState> {
   return request<TodayState>('/api/today');
+}
+
+/** GET /api/home/weekly — Home's "This week" (last `days` local days). Free. */
+export function getWeekly(days = 7): Promise<WeeklyResponse> {
+  return request<WeeklyResponse>(`/api/home/weekly?days=${days}`);
 }
 
 /** POST /api/today/skip — skip (or un-skip) a step. Free. */
