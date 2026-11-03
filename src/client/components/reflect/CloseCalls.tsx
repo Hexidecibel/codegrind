@@ -4,7 +4,8 @@
 // The verdict files 11/12 and 0/12 under the same word. This section separates
 // them: the mean share of hidden tests passing on FAILED submits, how many of
 // those were near misses (shared/closeness.NEAR_MISS_THRESHOLD), and how many
-// near misses you then fixed yourself the same day. Per week, plus one headline
+// near misses you then fixed the same day (hints or not), with the unaided
+// subset alongside. Per week, plus one headline
 // comparing the last four weeks with the four before.
 //
 // Fetches its own (free) numbers so a failure here never takes Reflect down,
@@ -26,6 +27,11 @@ export function thresholdAsTests(threshold: number, of = 12): string {
   return `${Math.round(threshold * of)}/${of}`;
 }
 
+/** "1 without a hint" / "3 without hints". */
+export function unaidedPhrase(n: number): string {
+  return `${n} without ${n === 1 ? 'a hint' : 'hints'}`;
+}
+
 /** One sentence comparing the two headline windows, never scolding. */
 export function closenessHeadline(recent: ClosenessWindow, prior: ClosenessWindow): string {
   const span = `${recent.weeks} week${recent.weeks === 1 ? '' : 's'}`;
@@ -43,10 +49,11 @@ export function closenessHeadline(recent: ClosenessWindow, prior: ClosenessWindo
           ? `, against ${pct(prior.avgCloseness)} the ${span} before`
           : `, level with the ${span} before`;
   }
-  const fixed =
-    recent.nearMisses > 0
-      ? ` ${recent.nearMisses} close call${recent.nearMisses === 1 ? '' : 's'}, ${recent.recovered} fixed the same day.`
-      : '';
+  let fixed = '';
+  if (recent.nearMisses > 0) {
+    fixed = ` ${recent.nearMisses} close call${recent.nearMisses === 1 ? '' : 's'}, ${recent.fixed} fixed the same day`;
+    fixed += recent.fixedUnaided > 0 ? ` (${unaidedPhrase(recent.fixedUnaided)}).` : '.';
+  }
   return `Last ${span}: your failed runs passed ${now} of tests on average${compare}.${fixed}`;
 }
 
@@ -90,14 +97,15 @@ export function CloseCalls() {
       }
       aside={<HelpHint id="close-calls" align="end" />}
       table={
-        <DataTable head={['Week of', 'Failed runs', 'Avg passing', 'Close calls', 'Fixed same day']}>
+        <DataTable head={['Week of', 'Failed runs', 'Avg passing', 'Close calls', 'Fixed same day', 'Without hints']}>
           {[...stats.weeks].reverse().map((w) => (
             <tr key={w.weekStart}>
               <td>{dayLabel(w.weekStart)}</td>
               <td>{w.failed}</td>
               <td>{w.avgCloseness === null ? '—' : pct(w.avgCloseness)}</td>
               <td>{w.nearMisses}</td>
-              <td>{w.recovered}</td>
+              <td>{w.fixed}</td>
+              <td>{w.fixedUnaided}</td>
             </tr>
           ))}
         </DataTable>
@@ -121,12 +129,16 @@ export function CloseCalls() {
         <Tile
           icon={Wrench}
           colour={RAMP[4]}
-          value={String(recent.recovered)}
+          value={String(recent.fixed)}
           label="Fixed same day"
           note={
-            recent.nearMisses > 0
-              ? `your own fix, of ${recent.nearMisses} close call${recent.nearMisses === 1 ? '' : 's'}`
-              : 'no close calls to fix yet'
+            recent.fixed > 0
+              ? recent.fixedUnaided > 0
+                ? unaidedPhrase(recent.fixedUnaided)
+                : 'with a nudge from a hint'
+              : recent.nearMisses > 0
+                ? `of ${recent.nearMisses} close call${recent.nearMisses === 1 ? '' : 's'}`
+                : 'no close calls to fix yet'
           }
         />
       </div>

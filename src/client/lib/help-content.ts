@@ -208,7 +208,7 @@ export const HELP_HINTS: Readonly<Record<HelpHintId, HelpHint>> = {
     title: 'Close calls',
     body: [
       `A close call is a failed submit that still passed at least ${Math.round(NEAR_MISS_THRESHOLD * 100)}% of the hidden tests: the approach was right and a small bug, an off-by-one or a misplaced bracket, got in the way.`,
-      'Fixed same day counts close calls you then solved yourself, without hints, on the same problem that day. Those do not count against your topic streak either.',
+      'Fixed same day counts close calls you went on to solve on the same problem that day, hints or not: asking for a nudge when you are nearly there is still finishing the job. The smaller number underneath is how many of those you solved without a hint. Neither kind counts against your topic streak.',
     ],
     section: 'numbers',
   },

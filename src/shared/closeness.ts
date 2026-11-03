@@ -7,9 +7,10 @@
 //
 //   closeness   = testsPassed / testsTotal, on a FAILED attempt
 //   near miss   = a failed attempt with closeness >= NEAR_MISS_THRESHOLD
-//   recovered   = a near miss followed, the same local day, by a clean
-//                 (hint-free) solve of the same problem: the player found and
-//                 fixed their own bug
+//   fixed       = a near miss followed, the same local day, by a solve of the
+//                 same problem, hints or not: asking for a hint at 80% done is
+//                 still finishing the job
+//   fixedUnaided = the subset of those where a solve that day used no hints
 //
 // Pure and dependency-free so the server (aggregation, scoring) and the
 // browser (copy) share one threshold. The scoring side lives in
@@ -52,9 +53,12 @@ export interface ClosenessWeek {
   nearMisses: number;
   /**
    * Near misses fixed the same day: distinct (problem, local day) pairs where a
-   * near miss was later followed by a hint-free solve of that problem.
+   * near miss was later followed by a solve of that problem, with or without
+   * hints.
    */
-  recovered: number;
+  fixed: number;
+  /** The subset of `fixed` where a solve after the near miss used no hints. */
+  fixedUnaided: number;
 }
 
 export interface ClosenessWindow {
@@ -62,7 +66,8 @@ export interface ClosenessWindow {
   failed: number;
   avgCloseness: number | null;
   nearMisses: number;
-  recovered: number;
+  fixed: number;
+  fixedUnaided: number;
 }
 
 export interface ClosenessStats {
@@ -105,20 +110,29 @@ function windowOf(weeks: ClosenessWeek[], sums: Map<string, number>): ClosenessW
   let failed = 0;
   let sum = 0;
   let nearMisses = 0;
-  let recovered = 0;
+  let fixed = 0;
+  let fixedUnaided = 0;
   for (const w of weeks) {
     failed += w.failed;
     sum += sums.get(w.weekStart) ?? 0;
     nearMisses += w.nearMisses;
-    recovered += w.recovered;
+    fixed += w.fixed;
+    fixedUnaided += w.fixedUnaided;
   }
-  return { weeks: weeks.length, failed, avgCloseness: failed > 0 ? sum / failed : null, nearMisses, recovered };
+  return {
+    weeks: weeks.length,
+    failed,
+    avgCloseness: failed > 0 ? sum / failed : null,
+    nearMisses,
+    fixed,
+    fixedUnaided,
+  };
 }
 
 /**
  * Bucket attempts into local weeks (Monday start) ending with the week holding
  * `nowMs`. Attempts outside the window are ignored; order does not matter.
- * A recovery is credited to the week of the near miss it recovered.
+ * A fix is credited to the week of the near miss it fixed.
  */
 export function aggregateCloseness(
   attempts: readonly ClosenessAttempt[],
@@ -136,18 +150,20 @@ export function aggregateCloseness(
     failed: 0,
     avgCloseness: null,
     nearMisses: 0,
-    recovered: 0,
+    fixed: 0,
+    fixedUnaided: 0,
   }));
   const sums = new Map<string, number>();
 
-  // Per (problem, local day): the time of the first near miss, and whether a
-  // clean solve came after it.
+  // Per (problem, local day): the week of the first near miss, whether any
+  // solve came after it, and whether a hint-free one did.
   const sorted = [...attempts]
     .map((a) => ({ a, t: Date.parse(a.createdAt) }))
     .filter((x) => Number.isFinite(x.t))
     .sort((x, y) => x.t - y.t);
   const pending = new Map<string, string>(); // key → week of the near miss
-  const recoveredKeys = new Set<string>();
+  const fixedKeys = new Set<string>();
+  const unaidedKeys = new Set<string>();
 
   for (const { a, t } of sorted) {
     const day = localDayOf(t, tz);
@@ -163,10 +179,18 @@ export function aggregateCloseness(
         if (c >= NEAR_MISS_THRESHOLD) weeks[i].nearMisses += 1;
       }
       if (c >= NEAR_MISS_THRESHOLD && !pending.has(key)) pending.set(key, week);
-    } else if (a.hintsUsed === 0 && pending.has(key) && !recoveredKeys.has(key)) {
-      recoveredKeys.add(key);
+    } else if (pending.has(key)) {
       const j = index.get(pending.get(key)!);
-      if (j !== undefined) weeks[j].recovered += 1;
+      if (!fixedKeys.has(key)) {
+        fixedKeys.add(key);
+        if (j !== undefined) weeks[j].fixed += 1;
+      }
+      // A hinted fix followed by a clean re-solve the same day still counts
+      // as unaided: the player did it once on their own.
+      if (a.hintsUsed === 0 && !unaidedKeys.has(key)) {
+        unaidedKeys.add(key);
+        if (j !== undefined) weeks[j].fixedUnaided += 1;
+      }
     }
   }
 

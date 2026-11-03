@@ -46,7 +46,7 @@ describe('aggregateCloseness', () => {
         att('2026-11-03T10:00:00Z', 'p1', 11, 12),
         att('2026-11-03T10:05:00Z', 'p1', 10, 12), // a second near miss, same problem-day
         att('2026-11-03T10:10:00Z', 'p1', 12, 12, true),
-        // …a near miss on p2 fixed only WITH a hint (not "your own fix")…
+        // …a near miss on p2 fixed WITH a hint: still fixed, not unaided…
         att('2026-11-03T11:00:00Z', 'p2', 9, 12),
         att('2026-11-03T11:10:00Z', 'p2', 12, 12, true, 1),
         // …and a real miss.
@@ -69,9 +69,10 @@ describe('aggregateCloseness', () => {
     expect(thisWeek.failed).toBe(4);
     expect(thisWeek.avgCloseness).toBeCloseTo((11 + 10 + 9 + 3) / 48);
     expect(thisWeek.nearMisses).toBe(3);
-    expect(thisWeek.recovered).toBe(1); // p1 only, counted once
+    expect(thisWeek.fixed).toBe(2); // p1 (counted once) and p2
+    expect(thisWeek.fixedUnaided).toBe(1); // p1 only
     const lastWeek = stats.weeks[10];
-    expect(lastWeek).toMatchObject({ failed: 1, nearMisses: 1, recovered: 0 });
+    expect(lastWeek).toMatchObject({ failed: 1, nearMisses: 1, fixed: 0, fixedUnaided: 0 });
     expect(stats.weeks[0]).toMatchObject({ failed: 0, avgCloseness: null });
   });
 
@@ -87,7 +88,7 @@ describe('aggregateCloseness', () => {
       NOW,
       TZ
     );
-    expect(stats.recent).toMatchObject({ weeks: 4, failed: 2, nearMisses: 1, recovered: 0 });
+    expect(stats.recent).toMatchObject({ weeks: 4, failed: 2, nearMisses: 1, fixed: 0, fixedUnaided: 0 });
     expect(stats.recent.avgCloseness).toBeCloseTo(0.625);
     expect(stats.prior).toMatchObject({ weeks: 4, failed: 2, nearMisses: 0 });
     expect(stats.prior.avgCloseness).toBeCloseTo(0.125);
@@ -102,8 +103,33 @@ describe('aggregateCloseness', () => {
       la
     );
     // Both instants fall on Sunday Nov 1 / Mon Nov 2 local: 23:30 and 00:30.
-    expect(stats.weeks[10]).toMatchObject({ weekStart: '2026-10-26', nearMisses: 1, recovered: 0 });
+    expect(stats.weeks[10]).toMatchObject({ weekStart: '2026-10-26', nearMisses: 1, fixed: 0, fixedUnaided: 0 });
     expect(stats.weeks[11].failed).toBe(0);
+  });
+
+  it('counts a hinted fix as fixed but not unaided; an unaided fix as both', () => {
+    const stats = aggregateCloseness(
+      [
+        // Hinted fix: near miss, then a solve that asked for a hint.
+        att('2026-11-03T10:00:00Z', 'hinted', 10, 12),
+        att('2026-11-03T10:20:00Z', 'hinted', 12, 12, true, 2),
+        // Unaided fix: near miss, then a clean solve.
+        att('2026-11-03T11:00:00Z', 'clean', 11, 12),
+        att('2026-11-03T11:15:00Z', 'clean', 12, 12, true, 0),
+        // Hinted first, clean re-solve later the same day: one fix, unaided.
+        att('2026-11-03T12:00:00Z', 'both', 9, 12),
+        att('2026-11-03T12:10:00Z', 'both', 12, 12, true, 1),
+        att('2026-11-03T12:40:00Z', 'both', 12, 12, true, 0),
+        // A solve BEFORE the near miss fixes nothing.
+        att('2026-11-03T13:00:00Z', 'early', 12, 12, true, 0),
+        att('2026-11-03T13:10:00Z', 'early', 10, 12),
+      ],
+      NOW,
+      TZ
+    );
+    expect(stats.weeks[11]).toMatchObject({ nearMisses: 4, fixed: 3, fixedUnaided: 2 });
+    expect(stats.recent).toMatchObject({ nearMisses: 4, fixed: 3, fixedUnaided: 2 });
+    expect(stats.prior).toMatchObject({ fixed: 0, fixedUnaided: 0 });
   });
 
   it('is empty, not broken, with no attempts', () => {

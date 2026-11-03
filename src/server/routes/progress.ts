@@ -31,8 +31,8 @@ progressRoutes.get('/history', (c) => {
 });
 
 // GET /api/progress/closeness — how close failed submits came, per local week:
-// mean closeness, near misses, and near misses fixed the same day
-// (shared/closeness). Free; the active language only.
+// mean closeness, near misses, near misses fixed the same day (hints or not)
+// and the unaided subset of those (shared/closeness). Free; the active language only.
 progressRoutes.get('/progress/closeness', (c) => {
   const now = Date.now();
   // One week of slack on the cut-off: the window starts on a local Monday, and
