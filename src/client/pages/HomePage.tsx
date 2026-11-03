@@ -173,7 +173,7 @@ function StepIcon({ step, index }: { step: TodayStep; index: number }) {
   const base = 'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold';
   if (step.status === 'done')
     return (
-      <div className={cn(base, 'bg-emerald-500/15 text-emerald-400')}>
+      <div className={cn(base, step.ok === false ? 'bg-rose-500/15 text-rose-400' : 'bg-emerald-500/15 text-emerald-400')}>
         <Check className="h-4 w-4" />
       </div>
     );
@@ -566,7 +566,7 @@ function DayDetails({
               key={s.id}
               className={cn(
                 'h-2 w-2 rounded-full',
-                s.status === 'done' && 'bg-emerald-400',
+                s.status === 'done' && (s.ok === false ? 'bg-rose-400' : 'bg-emerald-400'),
                 (s.status === 'current' || s.status === 'in-progress') && 'bg-primary',
                 (s.status === 'skipped' || s.status === 'locked' || s.status === 'todo') && 'bg-secondary',
               )}
