@@ -50,6 +50,23 @@ describe('CurrentStepCard', () => {
     expect(out).toContain('Skip step');
     expect(out).not.toContain('Label warmup');
   });
+  it('the warm-up: ONE primary Start; its piles are a checklist with one count wording', () => {
+    const s = state([step('warmup', 'current'), step('problem1', 'todo')], 'warmup');
+    Object.assign(s, {
+      envelope: { daily: 3, doneToday: 1, correctToday: 1, due: 2, remaining: 2, done: false, href: '/envelope?n=2' },
+      recognize: { recommended: false, reason: 'r', doneToday: 0, done: false, due: 0, href: '/recognize?n=5' },
+      warmupDue: { cards: 1, reviews: 0 },
+      patternRecallDue: 0,
+    });
+    const out = render(s);
+    expect(out.match(/>Start\b/g)).toHaveLength(1);
+    expect(out.match(/h-12/g)).toHaveLength(1);
+    expect(out).toContain('aria-label="In the warm-up"');
+    expect(out).toContain('2 of 3 left');
+    expect(out).toContain('Drill cards');
+    expect(out).toContain('Recognize ×5');
+    expect(out).not.toContain('Detail warmup');
+  });
   it('an in-progress step says Continue', () => {
     expect(render(state([step('mock', 'in-progress')], 'mock'))).toContain('Continue');
   });

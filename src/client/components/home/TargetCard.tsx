@@ -14,7 +14,7 @@ const BUTTON: Readonly<Record<WeeklyTarget['kind'], string>> = {
   refresh: 'Open the shape',
   review: 'Clear reviews',
   struggling: 'Practice it',
-  unseen: 'Start',
+  unseen: 'Try it',
   untouched: 'Try one',
   grind: 'Grind',
 };

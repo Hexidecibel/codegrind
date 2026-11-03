@@ -1456,6 +1456,16 @@ export interface TodayEnvelope {
   query?: string;
 }
 
+/**
+ * The warm-up's one envelope count, the same wording everywhere: "2 of 3 left",
+ * or "1 due" once today's reps are done and only due cards remain.
+ */
+export function envelopeLeftLabel(e: { remaining: number; doneToday: number; daily?: number }): string {
+  if (e.remaining === 0) return 'done';
+  if (e.daily !== undefined && e.doneToday >= e.daily) return `${e.remaining} due`;
+  return `${e.remaining} of ${e.doneToday + e.remaining} left`;
+}
+
 export function envelopeRemaining(daily: number, doneToday: number, due: number): number {
   return Math.max(due, Math.max(0, daily - doneToday));
 }

@@ -256,6 +256,8 @@ export interface TodayState {
   refresh: TodayRefresh;
   /** Pattern-shape recall cards due (from earlier "write it from memory" grades). */
   patternRecallDue: number;
+  /** The warm-up's other piles, for its checklist: drill cards and review problems due. */
+  warmupDue: { cards: number; reviews: number };
 }
 
 /** The finished things a step review can be written for. `recognize` is the add-on, not a step. */

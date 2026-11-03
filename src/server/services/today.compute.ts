@@ -23,6 +23,7 @@ import {
 import { computeDayStreak } from './reflect.compute.js';
 import { cutToolCallFraming } from './llm.types.js';
 import { clipAtBoundary } from '../../shared/clip.js';
+import { envelopeLeftLabel } from '../../shared/envelope.js';
 
 // -----------------------------------------------------------------------------
 // The local day
@@ -133,7 +134,7 @@ export interface DeriveInput {
    * Envelope ×N (Phase G): what is left of today's reps (due envelope cards
    * lead them) and how many were answered. Absent = no envelope part.
    */
-  envelope?: { remaining: number; doneToday: number; query?: string };
+  envelope?: { remaining: number; doneToday: number; daily?: number; query?: string };
   /**
    * Pattern-shape recall cards (the /patterns "write it from memory" SRS) due
    * now that existed before today, and how many were graded today.
@@ -282,7 +283,7 @@ export function warmupEntry(input: WarmupInput, skipped: ReadonlySet<TodayStepId
                   .filter(Boolean)
                   .join(' + ') + ' due'
               : null,
-            env.remaining ? `Envelope ×${env.remaining}` : null,
+            env.remaining ? `Envelope ${envelopeLeftLabel(env)}` : null,
             recall.due ? `${plural(recall.due, 'pattern shape')} to recall` : null,
           ]
             .filter(Boolean)

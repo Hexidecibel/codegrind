@@ -10,6 +10,9 @@ import { MockNudge } from './MockNudge';
 import { TargetCard } from './TargetCard';
 import { LeverLine, leverArea, leverHref } from './LeverLine';
 import { WeekPanel, weekdayOf } from './WeekPanel';
+import { RefreshBanner } from './RefreshBanner';
+import { WarmupChecklist, warmupItems } from './WarmupChecklist';
+import type { TodayState } from '@/shared/today';
 
 const html = (el: ReactElement) => renderToStaticMarkup(<MemoryRouter>{el}</MemoryRouter>);
 
@@ -64,6 +67,68 @@ describe('MockNudge', () => {
   });
 });
 
+describe('MockNudge during the Pattern Refresh', () => {
+  it('a quiet line with the refresh day, no button, even with no mock this week', () => {
+    const out = html(<MockNudge mocks={{ thisWeek: 0, lastAt: null }} refresh={{ day: 3, total: 9 }} />);
+    expect(out).toContain('Mocks pick back up after the refresh (day 3 of 9)');
+    expect(out).not.toContain('href=');
+    expect(out).not.toContain('<button');
+    expect(out).not.toContain('No mock this week');
+  });
+  it('refresh off (null): the normal nudge', () => {
+    expect(html(<MockNudge mocks={{ thisWeek: 0, lastAt: null }} refresh={null} />)).toContain('No mock this week');
+  });
+});
+
+const REFRESH = {
+  on: true, day: 3, total: 9, label: 'Sliding window', pattern: 'sliding-window', topic: 'sliding-window',
+  prevLabel: null, completedThrough: 2, dayComplete: false, finishedAt: null,
+} as unknown as TodayState['refresh'];
+
+describe('RefreshBanner', () => {
+  it('one row: the pattern links to its shape, the day and nine dots, a ⋯ menu', () => {
+    const out = html(<RefreshBanner r={REFRESH} busy={false} onTurnOff={() => undefined} />);
+    expect(out).toContain('Sliding window');
+    expect(out).toContain('href="/patterns#sliding-window"');
+    expect(out).toContain('Refresh day 3 of 9');
+    expect(out.match(/h-1\.5 w-1\.5 rounded-full/g)).toHaveLength(9);
+    expect(out).toContain('aria-label="Refresh options"');
+    expect(out).not.toContain('done · next pattern tomorrow');
+  });
+  it('the day settled: a done chip', () => {
+    expect(html(<RefreshBanner r={{ ...REFRESH, dayComplete: true, completedThrough: 3 }} busy={false} onTurnOff={() => undefined} />)).toContain(
+      'done · next pattern tomorrow',
+    );
+  });
+});
+
+describe('warmupItems / WarmupChecklist', () => {
+  const env = { daily: 3, doneToday: 1, correctToday: 1, due: 2, remaining: 2, done: false, href: '/envelope?n=2' };
+  const base = {
+    envelope: env,
+    recognize: null,
+    refresh: { on: false },
+    patternRecallDue: 0,
+    warmupDue: { cards: 1, reviews: 0 },
+  } as unknown as TodayState;
+  it('one count wording: "2 of 3 left", drill cards first', () => {
+    const items = warmupItems(base);
+    expect(items.map((i) => i.key)).toEqual(['cards', 'envelope']);
+    expect(items[1].count).toBe('2 of 3 left');
+    expect(items[0].count).toBe('1 due');
+  });
+  it('past the daily reps, only due cards: "1 due"', () => {
+    const items = warmupItems({ ...base, envelope: { ...env, doneToday: 7, due: 1, remaining: 1 } } as TodayState);
+    expect(items.find((i) => i.key === 'envelope')?.count).toBe('1 due');
+  });
+  it('rows are links with no buttons, so the step keeps the one Start', () => {
+    const out = html(<WarmupChecklist items={warmupItems(base)} />);
+    expect(out).toContain('href="/envelope?n=2"');
+    expect(out).not.toContain('<button');
+    expect(out).not.toContain('Start');
+  });
+});
+
 describe('TargetCard', () => {
   it('shows the reason and links to the target', () => {
     const out = html(<TargetCard target={WEEK.target} />);
@@ -88,7 +153,7 @@ describe('leverArea', () => {
 
 describe('LeverLine', () => {
   const areas = [area('algos', 'close'), area('system-design', 'not-yet')];
-  it('closed: the hint, a Start link and the dot row, no tiles', () => {
+  it('closed: the hint, one quiet link and the dot row, no tiles', () => {
     const out = html(<LeverLine areas={areas} />);
     expect(out).toContain('push system-design');
     expect(out).toContain('href="/mock?kind=system-design"');

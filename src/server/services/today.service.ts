@@ -192,6 +192,9 @@ export function getToday(now = new Date()): TodayState {
     new Date(dayStartMs(previousDay(previousDay(date)), todayTz())).toISOString(),
     now
   );
+  const cardsDue = store.cardsDueBefore(dayStart, now);
+  // A refresh day has no review problems in the warm-up; a 30-min day leaves them due.
+  const reviewsDue = rf.day !== null ? 0 : store.reviewsDue(language, dayStart, now);
   let derived: DerivedSteps;
   if (rf.day !== null) {
     const plan = planOf(rf.day);
@@ -201,10 +204,10 @@ export function getToday(now = new Date()): TodayState {
       since,
       dayStart,
       attempts,
-      cardsDue: store.cardsDueBefore(dayStart, now),
+      cardsDue,
       reviewsDue: 0,
       cardsReviewedToday: store.cardsReviewedSince(dayStart).length,
-      envelope: { remaining: envelope.remaining, doneToday: envelope.doneToday, query: envelope.query },
+      envelope: { remaining: envelope.remaining, doneToday: envelope.doneToday, daily: envelope.daily, query: envelope.query },
       patternRecall,
       finalReview: nextLoop?.isFinalReviewDay ? { company: nextLoop.company, daysLeft: nextLoop.daysLeft } : null,
       refreshAttempts: pstore.refreshAttemptsSince(since),
@@ -228,10 +231,10 @@ export function getToday(now = new Date()): TodayState {
       dayStart,
       attempts,
       mocks,
-      cardsDue: store.cardsDueBefore(dayStart, now),
-      reviewsDue: store.reviewsDue(language, dayStart, now),
+      cardsDue,
+      reviewsDue,
       cardsReviewedToday: store.cardsReviewedSince(dayStart).length,
-      envelope: { remaining: envelope.remaining, doneToday: envelope.doneToday, query: envelope.query },
+      envelope: { remaining: envelope.remaining, doneToday: envelope.doneToday, daily: envelope.daily, query: envelope.query },
       patternRecall,
       skips: row.skips,
       endedEarly: !!row.endedEarlyAt,
@@ -274,6 +277,7 @@ export function getToday(now = new Date()): TodayState {
     nextLoop,
     refresh: refreshInfo(rf),
     patternRecallDue: recallDue,
+    warmupDue: { cards: cardsDue, reviews: row.quick ? 0 : reviewsDue },
   };
 }
 

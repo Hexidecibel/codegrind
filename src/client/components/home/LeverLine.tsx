@@ -62,7 +62,7 @@ export function LeverLine({ areas, defaultOpen = false }: { areas: readonly Read
         {lever && (
           <Button asChild variant="secondary" className="gap-1.5">
             <Link to={leverHref(lever)}>
-              Start <ArrowRight className="h-4 w-4" />
+              Work on it <ArrowRight className="h-4 w-4" />
             </Link>
           </Button>
         )}

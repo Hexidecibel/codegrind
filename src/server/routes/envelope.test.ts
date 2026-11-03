@@ -161,7 +161,7 @@ describe("Today's warm-up includes Envelope ×5", () => {
     expect(t.envelope).toMatchObject({ daily: 3, doneToday: 0, due: 5, remaining: 5, done: false, guided: true });
     expect(t.envelope.skill).toEqual({ id: 'per-second', label: 'per day → per second' });
     expect(t.current).toBe('warmup');
-    expect(t.steps[0].detail).toBe('Envelope ×5');
+    expect(t.steps[0].detail).toBe('Envelope 5 of 5 left');
     expect(t.steps[0].href).toMatch(/^\/envelope\?from=today&step=warmup&n=5&guided=1&skill=per-second$/);
 
     const keys = ['seed:50m-day-to-sec', 'seed:2b-month-to-sec', 'seed:300-sec-to-day', 'seed:20gb-day-to-year', 'seed:500m-users-photos'];
