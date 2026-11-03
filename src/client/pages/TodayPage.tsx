@@ -32,9 +32,7 @@ import {
 } from 'lucide-react';
 import {
   QUICK_OFF_STEPS,
-  READINESS_VERDICT_LABEL,
   STEP_NOTE_IDS,
-  type ReadinessVerdict,
   type StepNote,
   type StepNoteId,
   type TodayState,
@@ -43,18 +41,12 @@ import {
 import { patternHref } from '@/shared/pattern-shapes';
 import { ROUND_LABEL, countdownPhrase } from '@/shared/loops';
 import { InterviewsPanel } from '@/client/components/InterviewsPanel';
+import { ReadinessTile } from '@/client/components/ReadinessTile';
 import { mockKindInfo } from '@/shared/mock-kinds';
 import { endTodayEarly, getToday, runTodayDebrief, setTodayQuick, setTodayRefresh, skipTodayStep, ApiError } from '@/client/lib/api';
 import { humanize } from '@/client/lib/format';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
-
-const VERDICT_TONE: Readonly<Record<ReadinessVerdict, string>> = {
-  ready: 'text-emerald-400',
-  close: 'text-amber-300',
-  'not-yet': 'text-rose-300',
-  'not-enough': 'text-muted-foreground',
-};
 
 function longDate(date: string): string {
   const [y, m, d] = date.split('-').map(Number);
@@ -123,21 +115,7 @@ function Header({ state }: { state: TodayState }) {
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {state.readiness.map((a) => (
-          <div
-            key={a.id}
-            className={cn('rounded-lg border border-border px-3 py-2', a.inLoop === false && 'opacity-60')}
-            title={[
-              ...a.signals.map((s) => `${s.label}: ${s.value}${s.n ? ` (n=${s.n})` : ''}`),
-              a.inLoop === false ? 'Not a round in your next interview.' : '',
-            ]
-              .filter(Boolean)
-              .join('\n')}
-          >
-            <div className="text-xs text-muted-foreground">{a.label}</div>
-            <div className={cn('text-sm font-semibold', VERDICT_TONE[a.verdict])}>{READINESS_VERDICT_LABEL[a.verdict]}</div>
-            <div className="truncate text-[11px] text-muted-foreground">{a.evidence}</div>
-            <div className="mt-1 line-clamp-3 text-[11px] text-foreground/80">{a.hint}</div>
-          </div>
+          <ReadinessTile key={a.id} area={a} />
         ))}
       </div>
     </section>
@@ -394,8 +372,8 @@ function RefreshPanel({ state, busy, onToggle }: { state: TodayState; busy: bool
             <Link to="/patterns">All pattern shapes</Link>
           </Button>
           <span className="ml-auto text-xs text-muted-foreground">
-            Extras (optional): <Link to="/concept" className="underline-offset-4 hover:underline">concept rep</Link> ·{' '}
-            <Link to="/stories" className="underline-offset-4 hover:underline">story forge</Link>
+            Extras (optional): <Link to="/concept" className="tap-link underline-offset-4 hover:underline">concept rep</Link> ·{' '}
+            <Link to="/stories" className="tap-link underline-offset-4 hover:underline">story forge</Link>
           </span>
           <Button
             size="sm"
@@ -649,11 +627,11 @@ export function TodayPage() {
 
         {/* Phase H4: the story forge is always one click away, not only on forge days. */}
         <div className="flex flex-wrap justify-end gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <Link to="/patterns" className="underline-offset-4 hover:underline">
+          <Link to="/patterns" className="tap-link underline-offset-4 hover:underline">
             Pattern shapes — the code shape of each pattern →
           </Link>
           {!state.refresh.on && (
-            <Link to="/stories" className="underline-offset-4 hover:underline">
+            <Link to="/stories" className="tap-link underline-offset-4 hover:underline">
               Story forge — draft a behavioral story by voice →
             </Link>
           )}

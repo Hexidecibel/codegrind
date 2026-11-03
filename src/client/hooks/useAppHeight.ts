@@ -1,43 +1,11 @@
-import { useEffect, useState } from 'react';
-import { useIsDesktop } from '@/client/hooks/useMediaQuery';
+import { useEffect, useRef } from 'react';
+import {
+  useIsDesktop,
+  useIsShort,
+  useVisualViewportHeight,
+} from '@/client/hooks/useMediaQuery';
 
-/** Visual viewport height, pinch-zoom normalised out, or null if unsupported. */
-function readHeight(): number | null {
-  const vv = window.visualViewport;
-  if (!vv) return null;
-  // `scale` normalises pinch-zoom, where the visual viewport shrinks even
-  // though the layout viewport hasn't moved.
-  const height = Math.round(vv.height * vv.scale);
-  // Mid-transition browsers occasionally report a nonsense height.
-  return height > 100 ? height : null;
-}
-
-/**
- * Subscribes to visual-viewport changes and returns the current height.
- * Re-renders on every soft-keyboard open/close, which is the signal callers use
- * to re-reveal the caret — the keyboard can otherwise cover it, and neither
- * editor scrolls on its own when it is merely resized.
- */
-export function useVisualViewportHeight(): number | null {
-  const [height, setHeight] = useState<number | null>(() =>
-    typeof window === 'undefined' ? null : readHeight(),
-  );
-
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-    const apply = () => setHeight(readHeight());
-    apply();
-    vv.addEventListener('resize', apply);
-    vv.addEventListener('scroll', apply);
-    return () => {
-      vv.removeEventListener('resize', apply);
-      vv.removeEventListener('scroll', apply);
-    };
-  }, []);
-
-  return height;
-}
+export { useVisualViewportHeight };
 
 /**
  * Publishes the *visual* viewport height as `--app-height` on <html> so the app
@@ -49,11 +17,15 @@ export function useVisualViewportHeight(): number | null {
  * of a `dvh`-sized app underneath the keyboard. visualViewport reports the truth
  * on both.
  *
- * Only active below `lg`; desktop keeps its plain `h-dvh` sizing untouched.
+ * Active on anything with a soft keyboard — which includes a landscape iPad, as
+ * wide as a laptop — and below `lg`; a mouse-driven desktop keeps plain `dvh`.
+ * Also publishes `data-short` for the `short:` CSS variant, which a media query
+ * alone cannot drive on iOS (see useIsShort).
  */
 export function useAppHeight(): void {
   const isDesktop = useIsDesktop();
   const height = useVisualViewportHeight();
+  const isShort = useIsShort();
 
   useEffect(() => {
     const root = document.documentElement;
@@ -66,4 +38,22 @@ export function useAppHeight(): void {
       root.style.removeProperty('--app-height');
     };
   }, [isDesktop, height]);
+
+  // The shell just shrank around a field that was on screen a moment ago, and
+  // nothing scrolls its pane to follow, so a field low on the page ends up behind
+  // the keyboard. Editors are excluded: they reveal their own caret.
+  const lastHeight = useRef(height);
+  useEffect(() => {
+    const shrank = height !== null && lastHeight.current !== null && height < lastHeight.current;
+    lastHeight.current = height;
+    if (isDesktop || !shrank) return;
+    const el = document.activeElement;
+    if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return;
+    const id = requestAnimationFrame(() => el.scrollIntoView({ block: 'center' }));
+    return () => cancelAnimationFrame(id);
+  }, [height, isDesktop]);
+
+  useEffect(() => {
+    document.documentElement.toggleAttribute('data-short', isShort);
+  }, [isShort]);
 }

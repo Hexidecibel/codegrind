@@ -65,7 +65,7 @@ export function EnvelopeAccuracy() {
       title="Envelope math"
       description={
         <>
-          From <Link to="/envelope" className="underline underline-offset-4">Envelope</Link>: answers within 30%, and
+          From <Link to="/envelope" className="tap-inline underline underline-offset-4">Envelope</Link>: answers within 30%, and
           how many powers of ten off on average (0 is spot on).
           {stats.recentAccuracy !== null && ` Last ${stats.recentN}: ${pct(stats.recentAccuracy)} right`}
           {stats.recentMeanAbsOrders !== null && `, ${stats.recentMeanAbsOrders.toFixed(2)} orders off on average.`}

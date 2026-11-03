@@ -388,7 +388,7 @@ export function MissedList({
                         // width is already a media query, and one more prop for
                         // a value CSS can read is a prop that will get passed
                         // wrong somewhere.
-                        className="h-11 w-full gap-1.5 text-sm lg:h-8 lg:text-xs"
+                        className="h-11 w-full gap-1.5 text-sm lg:pointer-fine:h-8 lg:pointer-fine:text-xs"
                         title={
                           answerVisible
                             ? 'The reference solution is already on screen, so this costs nothing more.'

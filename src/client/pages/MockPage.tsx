@@ -136,7 +136,7 @@ function CodingOptions({
               aria-checked={mode === m}
               onClick={() => onChange({ mode: m, topic, difficulty })}
               className={cn(
-                'min-h-9 rounded px-3 text-sm',
+                'min-h-9 rounded px-3 text-sm pointer-coarse:min-h-11',
                 mode === m ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground',
               )}
             >
@@ -446,7 +446,7 @@ function StartCard() {
                 aria-checked={kind === k}
                 onClick={() => setKind(k)}
                 className={cn(
-                  'min-h-9 rounded px-3 text-sm',
+                  'min-h-9 rounded px-3 text-sm pointer-coarse:min-h-11',
                   kind === k ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground',
                 )}
               >
@@ -478,7 +478,7 @@ function StartCard() {
                 aria-checked={level === l}
                 onClick={() => setLevel(l)}
                 className={cn(
-                  'min-h-9 rounded px-3 text-sm',
+                  'min-h-9 rounded px-3 text-sm pointer-coarse:min-h-11',
                   level === l ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground',
                 )}
               >
@@ -516,7 +516,7 @@ function StartCard() {
                 ? prompts.find((p) => p.id === promptId)?.brief
                 : info.start.pickHint}
               {kind === 'system-design' && !aiUnlocked && !promptId && (
-                <> AI-system prompts join the random pick once 5 AI concepts are known (<Link to="/concepts" className="underline underline-offset-4">AI-systems track</Link>).</>
+                <> AI-system prompts join the random pick once 5 AI concepts are known (<Link to="/concepts" className="tap-inline underline underline-offset-4">AI-systems track</Link>).</>
               )}
             </span>
           </label>
@@ -548,7 +548,7 @@ function StartCard() {
           <ul className="divide-y divide-border rounded-lg border border-border">
             {mocks.map((m) => (
               <li key={m.id}>
-                <Link to={`/mock/${m.id}`} className="flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-secondary/50">
+                <Link to={`/mock/${m.id}`} className="flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-secondary/50 pointer-coarse:min-h-11">
                   <span className="flex-1 truncate">{m.promptTitle}</span>
                   <span className="text-xs text-muted-foreground">{MOCK_LEVEL_LABEL[m.level]}</span>
                   <span className="w-24 text-right text-xs text-muted-foreground">
@@ -595,6 +595,13 @@ function StageChips({ view }: { view: MockView }) {
           </li>
         );
       })}
+      {/* Each chip's goal is a hover tooltip, which a finger never sees: on
+          touch, the CURRENT stage's goal is spelled out after the chips. */}
+      {stageMeta[view.state.stage]?.goal && (
+        <li className="hidden basis-full text-xs text-muted-foreground pointer-coarse:block">
+          Now: {stageMeta[view.state.stage]?.goal}
+        </li>
+      )}
     </ol>
   );
 }
@@ -775,7 +782,7 @@ function Interview({
     <div className="flex h-full flex-col">
       <div className="space-y-2 border-b border-border px-4 py-2.5">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-          <Link to="/mock" className="text-muted-foreground hover:text-foreground">
+          <Link to="/mock" className="tap-link text-muted-foreground hover:text-foreground">
             Mocks
           </Link>
           <span className="truncate font-medium" title={view.prompt}>

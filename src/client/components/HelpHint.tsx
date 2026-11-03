@@ -78,7 +78,7 @@ export function HelpHint({ id, align = 'start', className }: HelpHintProps) {
             // Negative margin + padding: a 14px glyph with a ~30px hit area,
             // which clears WCAG 2.5.8 without pushing anything around it. The
             // same trick the error-bar dismiss button uses in SolveSurface.
-            '-m-2 p-2',
+            '-m-2 p-2 pointer-coarse:-m-[15px] pointer-coarse:p-[15px]',
             className,
           )}
         >

@@ -195,13 +195,13 @@ export function HelpPage() {
         <nav aria-label="Help contents">
           <ol className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
             {HELP_SECTIONS.map((s, i) => (
-              <li key={s.id} className="flex gap-2 text-sm">
+              <li key={s.id} className="flex items-baseline gap-2 text-sm">
                 <span className="tabular-nums text-muted-foreground/60">
                   {i + 1}.
                 </span>
                 <a
                   href={`#${s.id}`}
-                  className="text-foreground underline-offset-4 hover:text-primary hover:underline"
+                  className="tap-link text-foreground underline-offset-4 hover:text-primary hover:underline"
                 >
                   {s.title}
                 </a>
@@ -229,7 +229,7 @@ export function HelpPage() {
             <Term label="Mock">
               A system-design interview over chat, graded at Senior, Staff or
               Principal — see{' '}
-              <a href="#mock" className="text-primary underline-offset-4 hover:underline">
+              <a href="#mock" className="tap-inline text-primary underline-offset-4 hover:underline">
                 Mock interviews
               </a>
               .
@@ -244,7 +244,7 @@ export function HelpPage() {
               curriculum, for when you would rather read than type.
             </Term>
             <Term label="Patterns">
-              <Link to="/patterns" className="text-primary underline-offset-4 hover:underline">
+              <Link to="/patterns" className="tap-inline text-primary underline-offset-4 hover:underline">
                 Pattern shapes
               </Link>{' '}
               (under Study, and linked from Today, Recognize and every solved
@@ -268,7 +268,7 @@ export function HelpPage() {
             visible examples, then <strong>Submit</strong> to be graded against
             hidden tests and coached on what you wrote. Hints are there if you
             want them, and they cost something specific — see{' '}
-            <a href="#hints" className="text-primary underline-offset-4 hover:underline">
+            <a href="#hints" className="tap-inline text-primary underline-offset-4 hover:underline">
               Hints, the answer, and cold review
             </a>
             .
@@ -747,7 +747,7 @@ export function HelpPage() {
             and each mock shows what it actually cost.
           </KeyIdea>
           <p>
-            Estimation is its own drill: <Link to="/envelope" className="underline underline-offset-4">Envelope</Link>{' '}
+            Estimation is its own drill: <Link to="/envelope" className="tap-inline underline underline-offset-4">Envelope</Link>{' '}
             asks interview-style back-of-the-envelope questions (requests per second, storage, bandwidth, ID sizes)
             and checks the number within 30%. The method: write each number as a small number × 10ⁿ, do the small
             math, add exponents to multiply and subtract them to divide, then read the answer back off the 3/6/9/12

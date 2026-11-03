@@ -79,7 +79,12 @@ const GRAMMARS: Partial<Record<Language, () => Extension>> = {
  */
 const BASE_THEME = EditorView.theme(
   {
-    '&': { height: '100%', fontSize: '16px', backgroundColor: 'transparent' },
+    '&': { height: '100%', fontSize: '16px' },
+    // `&.cm-editor`, not `&`: oneDark sets its slate backgrounds at the same
+    // specificity and won, leaving a grey slab on the app's near-black. Same for
+    // the gutter below.
+    '&.cm-editor': { backgroundColor: 'transparent' },
+    '&.cm-editor .cm-gutters': { backgroundColor: 'transparent', borderRight: 'none' },
     '&.cm-focused': { outline: 'none' },
     '.cm-scroller': {
       fontFamily:
@@ -87,7 +92,7 @@ const BASE_THEME = EditorView.theme(
       lineHeight: '1.55',
     },
     '.cm-content': { paddingTop: '12px', paddingBottom: '12px' },
-    '.cm-gutters': { backgroundColor: 'transparent', borderRight: 'none' },
+    '.cm-lineNumbers .cm-gutterElement': { paddingRight: '10px' },
   },
   { dark: true },
 );

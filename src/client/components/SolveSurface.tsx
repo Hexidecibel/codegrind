@@ -49,10 +49,13 @@ import {
   submitMockCode,
 } from '@/client/lib/api';
 import { useLocalStorage } from '@/client/hooks/useLocalStorage';
+import { useSplitPane } from '@/client/hooks/useSplitPane';
 import {
   useControlSize,
   useIsDesktop,
   useIsShort,
+  useIsTabletPortrait,
+  useIsWide,
 } from '@/client/hooks/useMediaQuery';
 import { useVisualViewportHeight } from '@/client/hooks/useAppHeight';
 import {
@@ -63,6 +66,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Button } from '@/client/components/ui/button';
 import { ProblemPanel } from '@/client/components/ProblemPanel';
+import { PaneDivider } from '@/client/components/PaneDivider';
 import {
   CodeEditor,
   type CodeEditorHandle,
@@ -170,6 +174,11 @@ const emptyPrediction = (): Prediction => ({
 /** Which pane the phone layout is showing; ignored at `lg` and up. */
 type Pane = 'problem' | 'code' | 'side';
 
+/** Problem-pane share (percent) the tablet divider may take, per arrangement. */
+const STACKED_SPLIT_BOUNDS = { min: 15, max: 75 };
+const SIDE_SPLIT_BOUNDS = { min: 25, max: 65 };
+const SIDE_PANEL_SPLIT_BOUNDS = { min: 20, max: 45 };
+
 /**
  * The shared solve loop: editor + Run/Submit/Hint + results/coach + Ask-the-coach.
  * Owns all interaction state; the host supplies the problem and optional chrome
@@ -206,13 +215,41 @@ export function SolveSurface({
   const setAssistance = sessionAssist ? setSessionAssist : setStoredAssistance;
   const assistance = normalizeAssistance(assistanceRaw);
 
-  // Below `lg` the two panes are tabbed instead of side-by-side; there simply
-  // isn't room to stack a full problem statement above a usable editor.
+  // Three arrangements of the same pieces, and the question of which is about
+  // ROOM, not about the device:
+  //   sideBySide — `lg` and up, mouse or finger.
+  //   stacked    — a tablet upright: statement over editor, both on screen.
+  //   neither    — tabs, because a phone cannot fit both.
+  // `isDesktop` is the separate question of whether there is a soft keyboard and
+  // a finger, which is what the blur, caret and control-size logic below reads.
   const isDesktop = useIsDesktop();
+  const sideBySide = useIsWide();
+  const stacked = useIsTabletPortrait() && !sideBySide;
   const isShort = useIsShort();
   const controlSize = useControlSize();
   const viewportHeight = useVisualViewportHeight();
-  const [pane, setPane] = useState<Pane>('problem');
+  const [selectedPane, setPane] = useState<Pane>('problem');
+  // Where the statement has its own space, `problem` is not a place to be sent:
+  // the editor is already showing.
+  const pane: Pane =
+    (sideBySide || stacked) && selectedPane === 'problem' ? 'code' : selectedPane;
+  // Tablet portrait only: fold the statement away for a full-height editor.
+  const [problemOpen, setProblemOpen] = useState(true);
+  // Tablets get a draggable problem/code divider, remembered separately for the
+  // stacked (portrait) and side-by-side (landscape) arrangements. Desktop keeps
+  // its fixed split; phones have tabs and nothing to divide.
+  const tabletSplit = !isDesktop && (sideBySide || stacked);
+  const splitBounds = stacked
+    ? STACKED_SPLIT_BOUNDS
+    : sidePanel
+      ? SIDE_PANEL_SPLIT_BOUNDS
+      : SIDE_SPLIT_BOUNDS;
+  const [split, setSplit] = useSplitPane(
+    stacked ? 'codegrind.split.stacked' : sidePanel ? 'codegrind.split.sidePanel' : 'codegrind.split.side',
+    stacked ? 38 : sidePanel ? 30 : 42,
+    splitBounds,
+  );
+  const splitRef = useRef<HTMLDivElement | null>(null);
   // Focus inside the editor is our proxy for "the soft keyboard is up" — the
   // one signal that works on both Android (which resizes the layout viewport)
   // and iOS (which doesn't).
@@ -875,7 +912,9 @@ export function SolveSurface({
             ? 'Tap again — this marks the attempt assisted, like a hint.'
             : "Show the reference solution. Counts as assistance, so it won't earn tier credit."
         }
-        className={cn('min-w-0 gap-1.5 px-2 lg:px-3', compact && 'shrink-0')}
+        // The compact form is an icon, and at px-2 that is 34px wide: under the
+        // 44px a finger needs whenever the bar is at its touch size.
+        className={cn('min-w-0 gap-1.5 px-2 lg:px-3', compact && 'shrink-0', controlSize === 'touch' && 'min-w-11')}
       >
         {answerLoading ? (
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -1012,6 +1051,7 @@ export function SolveSurface({
           }}
           controlSize={controlSize}
           required={requirePrediction}
+          compact={stacked}
         />
       )}
     </div>
@@ -1181,49 +1221,7 @@ export function SolveSurface({
     </div>
   );
 
-  // ---- Desktop (≥ lg): the classic side-by-side split ------------------------
-  if (isDesktop) {
-    return (
-      <div className="flex h-full min-h-0 flex-col">
-        {banner}
-        <div className="flex min-h-0 flex-1 flex-row">
-          {/* Left — problem statement (narrower when a side panel shares the row) */}
-          <div
-            className={cn(
-              'min-h-0 border-r border-border',
-              sidePanel ? 'w-[30%]' : 'w-[42%]',
-            )}
-          >
-            <ProblemPanel problem={problem} hidePattern={!!mockId || (!!hidePattern && !submitResult)} />
-          </div>
-
-          {/* Right — workspace */}
-          <div className="flex min-h-0 flex-1 flex-col">
-            {/* Toolbar */}
-            <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
-              {toolbarExtras}
-              <div className="ml-auto flex items-center gap-2">{actions}</div>
-            </div>
-
-            {reviewNote}
-            {errorBar}
-            {editorPane}
-            {desktopResults}
-            {footerBar}
-          </div>
-
-          {/* Right — the host's side panel (a coding mock's interview chat) */}
-          {sidePanel && (
-            <div className="flex min-h-0 w-[min(30rem,32%)] shrink-0 flex-col border-l border-border">
-              {sidePanel}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // ---- Phone (< lg): Problem / Code tabs, actions pinned to the bottom -------
+  // ---- Below `lg`: Problem / Code tabs, actions pinned to the bottom ---------
   // Both panes stay mounted (the editor keeps its buffer, cursor and undo stack);
   // the inactive one is display:none, which is why `pane` triggers a relayout.
   //
@@ -1241,15 +1239,18 @@ export function SolveSurface({
 
   const paneTabs = (
     <>
-      <PaneTab
-        pane="problem"
-        active={pane === 'problem'}
-        onSelect={setPane}
-        icon={<FileText className="h-4 w-4" />}
-        label="Problem"
-        compact={isShort}
-      />
-      <PaneTab
+      {!stacked && (
+        <PaneTab
+          pane="problem"
+          active={pane === 'problem'}
+          onSelect={setPane}
+          icon={<FileText className="h-4 w-4" />}
+          label="Problem"
+          compact={isShort}
+        />
+      )}
+      {/* Stacked, Code is only a tab if there is something to switch it with. */}
+      {(!stacked || sidePanel) && <PaneTab
         pane="code"
         active={pane === 'code'}
         onSelect={setPane}
@@ -1275,7 +1276,7 @@ export function SolveSurface({
             ? 'Cold review — no hints, solve it from scratch.'
             : undefined
         }
-      />
+      />}
       {sidePanel && (
         <PaneTab
           pane="side"
@@ -1357,7 +1358,7 @@ export function SolveSurface({
         isShort ? 'py-1' : 'py-2',
       )}
     >
-      {isShort && (
+      {isShort && !sideBySide && (
         <div className="flex shrink-0 items-center gap-1">
           {paneTabs}
           {pane === 'code' && indentKeys}
@@ -1378,14 +1379,85 @@ export function SolveSurface({
         />
         {hintButton(true)}
         {answerButton(true)}
+        {sideBySide && indentKeys}
         {runSubmit(true)}
       </div>
     </div>
   );
 
+  // ---- `lg` and up: the classic side-by-side split -----------------------------
+  // With a mouse: everything in a toolbar above the editor, results always open.
+  // With a finger, the same split keeps the phone's working parts, because it has
+  // the phone's problems: actions on a bar at the bottom that rides above the
+  // keyboard, the verdict folding away while you type, and the steering controls
+  // over the statement, so they do not cost the editor two rows.
+  if (sideBySide) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        {!isShort && banner}
+        <div ref={splitRef} className="flex min-h-0 flex-1 flex-row">
+          {/* Left — problem statement (narrower when a side panel shares the row) */}
+          <div
+            id="pane-problem"
+            className={cn(
+              'flex min-h-0 shrink-0 flex-col',
+              !tabletSplit && 'border-r border-border',
+              !tabletSplit && (sidePanel ? 'w-[30%]' : 'w-[42%]'),
+            )}
+            style={tabletSplit ? { width: `${split}%` } : undefined}
+          >
+            {!isDesktop && !isShort && toolbarExtras && (
+              <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
+                {toolbarExtras}
+              </div>
+            )}
+            <div className="min-h-0 flex-1">
+              <ProblemPanel problem={problem} hidePattern={!!mockId || (!!hidePattern && !submitResult)} />
+            </div>
+          </div>
+
+          {tabletSplit && (
+            <PaneDivider
+              axis="x"
+              value={split}
+              bounds={splitBounds}
+              onChange={setSplit}
+              containerRef={splitRef}
+              controls="pane-problem"
+            />
+          )}
+
+          {/* Right — workspace */}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {isDesktop && (
+              <div className="flex flex-wrap items-center gap-2 border-b border-border bg-card px-3 py-2">
+                {toolbarExtras}
+                <div className="ml-auto flex items-center gap-2">{actions}</div>
+              </div>
+            )}
+
+            {!isShort && reviewNote}
+            {errorBar}
+            {editorPane}
+            {isDesktop ? desktopResults : phoneResults}
+            {(isDesktop || !typing || accepted) && footerBar}
+            {!isDesktop && actionBar}
+          </div>
+
+          {/* Right — the host's side panel (a coding mock's interview chat) */}
+          {sidePanel && (
+            <div className="flex min-h-0 w-[min(30rem,32%)] shrink-0 flex-col border-l border-border">
+              {sidePanel}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {toolbarExtras && !demoteExtras && onProblemTab && (
+      {toolbarExtras && !demoteExtras && (onProblemTab || (stacked && pane !== 'side' && !typing)) && (
         <div className="flex shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-card px-3 py-2">
           {toolbarExtras}
         </div>
@@ -1393,27 +1465,62 @@ export function SolveSurface({
 
       {!isShort && (
         <div
-          role="tablist"
+          role={stacked && !sidePanel ? undefined : 'tablist'}
           aria-label="Solve panes"
           className="flex shrink-0 gap-1 border-b border-border bg-card px-2 py-1"
         >
+          {stacked && (
+            <button
+              type="button"
+              // Keep focus (and the keyboard) in the editor. Blurring it brings
+              // the toolbar row back, which shifts this bar down mid-tap so the
+              // click lands on whatever slid under the finger instead.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setProblemOpen((v) => !v)}
+              aria-expanded={problemOpen}
+              aria-controls="pane-problem"
+              className="inline-flex min-h-11 flex-1 items-center gap-1.5 rounded-md px-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <FileText className="h-4 w-4" />
+              {problemOpen ? 'Hide problem' : 'Show problem'}
+              {problemOpen ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+            </button>
+          )}
           {paneTabs}
           {pane === 'code' && indentKeys}
         </div>
       )}
 
-      {onProblemTab && reviewNote}
+      {(onProblemTab || (stacked && problemOpen && pane !== 'side')) && reviewNote}
       {errorBar}
 
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div ref={splitRef} className="flex min-h-0 flex-1 flex-col">
         <div
           id="pane-problem"
           role="tabpanel"
           aria-labelledby="tab-problem"
-          className={cn('min-h-0 flex-1', pane !== 'problem' && 'hidden')}
+          className={cn(
+            stacked ? 'min-h-0 shrink-0' : 'min-h-0 flex-1',
+            (stacked ? !problemOpen || pane === 'side' : pane !== 'problem') && 'hidden',
+          )}
+          style={stacked ? { height: `${split}%` } : undefined}
         >
           <ProblemPanel problem={problem} footer={contextFooter} hidePattern={!!mockId || (!!hidePattern && !submitResult)} />
         </div>
+        {stacked && problemOpen && pane !== 'side' && (
+          <PaneDivider
+            axis="y"
+            value={split}
+            bounds={splitBounds}
+            onChange={setSplit}
+            containerRef={splitRef}
+            controls="pane-problem"
+          />
+        )}
         {/* overflow-hidden: belt and braces so the editor can never paint
             outside its slot, whatever the floor above resolves to. */}
         <div
@@ -1443,7 +1550,7 @@ export function SolveSurface({
       {/* "Next problem" is what you want when you're done, not a permanent band
           above the keyboard while you type — on the Code tab it appears once a
           submission is accepted. */}
-      {(onProblemTab || accepted) && footerBar}
+      {(onProblemTab || accepted || (stacked && !typing)) && footerBar}
       {actionBar}
     </div>
   );
@@ -1577,6 +1684,7 @@ function PlanPanel({
   onNeverAsk,
   controlSize,
   required = false,
+  compact = false,
 }: {
   prediction: Prediction;
   onChange: (p: Prediction) => void;
@@ -1587,22 +1695,51 @@ function PlanPanel({
   controlSize: 'sm' | 'touch';
   /** Today routine: no Skip, and Start needs an approach + time complexity. */
   required?: boolean;
+  /**
+   * Tablet portrait: the panel shares the screen with the statement above it,
+   * so it drops the subtitle, tightens the spacing and puts the opt-out on the
+   * button row — about 120px — to fit without scrolling on an iPad mini.
+   */
+  compact?: boolean;
 }) {
   const ready = !required || (!!prediction.approach.trim() && !!prediction.predTime.trim());
   const touch = controlSize === 'touch';
   const set = <K extends keyof Prediction>(key: K, value: Prediction[K]) =>
     onChange({ ...prediction, [key]: value });
+  const neverAsk = (layout: string) => (
+    <button
+      type="button"
+      onClick={onNeverAsk}
+      className={cn(
+        'flex min-h-11 items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground',
+        layout,
+      )}
+    >
+      <EyeOff className="h-3.5 w-3.5 shrink-0" />
+      Don&rsquo;t ask again — turn it back on under Assist
+    </button>
+  );
 
   return (
-    <div className="absolute inset-0 z-10 flex items-start justify-center overflow-y-auto bg-background/95 p-4 backdrop-blur-sm">
-      <div className="mt-2 w-full max-w-lg space-y-4 rounded-xl border border-primary/25 bg-card p-5 shadow-lg">
+    <div
+      className={cn(
+        'absolute inset-0 z-10 flex items-start justify-center overflow-y-auto bg-background/95 backdrop-blur-sm',
+        compact ? 'p-2' : 'p-4',
+      )}
+    >
+      <div
+        className={cn(
+          'w-full rounded-xl border border-primary/25 bg-card shadow-lg',
+          compact ? 'max-w-xl space-y-3 p-4' : 'mt-2 max-w-lg space-y-4 p-5',
+        )}
+      >
         <div className="flex items-center gap-2">
           <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/15 text-primary">
             <Target className="h-4 w-4" />
           </div>
           <div>
             <h2 className="text-base font-bold">Plan your attack</h2>
-            <p className="text-xs text-muted-foreground">
+            <p className={cn('text-xs text-muted-foreground', compact && 'hidden')}>
               Commit to a plan before you solve — it sharpens recall and
               calibrates your instincts.
             </p>
@@ -1705,22 +1842,14 @@ function PlanPanel({
           >
             Skip
           </Button>}
+          {!required && compact && neverAsk('ml-auto w-auto text-right')}
         </div>
 
         {/* The way out. Not a Button: "never show this again" is a decision, and
             giving it the same weight as "Start solving" invites the mis-tap that
             costs the feature. Says where to get it back in the same breath —
             an opt-out you cannot reverse is worse than the prompt it removed. */}
-        {!required && (
-          <button
-            type="button"
-            onClick={onNeverAsk}
-            className="flex min-h-11 w-full items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <EyeOff className="h-3.5 w-3.5" />
-            Don&rsquo;t ask again — turn it back on under Assist
-          </button>
-        )}
+        {!required && !compact && neverAsk('w-full justify-center')}
       </div>
     </div>
   );

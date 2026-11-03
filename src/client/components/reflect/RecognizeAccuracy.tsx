@@ -35,7 +35,7 @@ export function RecognizeAccuracy() {
       title="Pattern recognition"
       description={
         <>
-          From <Link to="/recognize" className="underline underline-offset-4">Recognize</Link>: did you call the
+          From <Link to="/recognize" className="tap-inline underline underline-offset-4">Recognize</Link>: did you call the
           pattern from the statement alone?
           {stats.recentAccuracy !== null && ` Last ${stats.recentN}: ${pct(stats.recentAccuracy)} right.`}
           {stats.due > 0 && ` ${stats.due} due.`}

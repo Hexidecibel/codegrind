@@ -93,6 +93,28 @@ describe('every tab is usable with no label showing', () => {
     // The `?` is narrower by design (36px) but keeps the 44px height.
     expect(anchors[7]).toContain('min-h-11');
   });
+
+  it('only gives the 44px target up for a mouse (or the short landscape budget), never for width alone', () => {
+    // A landscape iPad is past `sm` and `lg` and still driven by a finger. A bare
+    // `sm:min-h-0` shrank every tab to 32px on every tablet.
+    const anchors = [...render().matchAll(/<a [^>]*class="([^"]*)"/g)].map((m) => m[1]);
+    for (const cls of anchors) {
+      expect(cls).not.toMatch(/(^|\s)sm:min-h-0(\s|$)/);
+      expect(cls).toContain('sm:pointer-fine:min-h-0');
+    }
+  });
+});
+
+describe('the app shell', () => {
+  it('follows the visual viewport at every width, so a tablet keyboard cannot cover the bottom bar', () => {
+    // `lg:h-dvh` used to override --app-height from 1024px up, and iOS does not
+    // shrink dvh for its keyboard. useAppHeight leaves the variable unset on a
+    // mouse-driven desktop, which therefore still gets plain dvh.
+    const shell = /<div class="([^"]*flex-col overflow-hidden[^"]*)"/.exec(render());
+    expect(shell, 'no app shell').not.toBeNull();
+    expect(shell![1]).toContain('h-[var(--app-height,100dvh)]');
+    expect(shell![1]).not.toContain('lg:h-dvh');
+  });
 });
 
 describe('the header budget', () => {

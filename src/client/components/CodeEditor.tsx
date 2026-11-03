@@ -74,7 +74,7 @@ export interface CodeEditorImplProps {
 
 export type CodeEditorProps = Omit<CodeEditorImplProps, 'onReady'>;
 
-// Both editors are code-split: a phone never downloads Monaco (megabytes), and
+// Both editors are code-split: a touch screen never downloads Monaco (megabytes), and
 // a desktop never downloads CodeMirror.
 const MonacoEditor = lazy(() =>
   import('@/client/components/MonacoEditor').then((m) => ({
@@ -123,10 +123,12 @@ const loading = (
 );
 
 /**
- * Editor seam. Monaco at/above the `lg` breakpoint, CodeMirror 6 below it —
+ * Editor seam. Monaco on a mouse-driven desktop, CodeMirror 6 everywhere else —
  * Monaco has no supported touch story (cursor placement, selection handles and
- * the soft keyboard all misbehave), CodeMirror 6 is built for it. The swap is
- * driven by `matchMedia`, never by user-agent, so rotation re-evaluates it.
+ * the soft keyboard all misbehave), CodeMirror 6 is built for it. A landscape
+ * iPad is as wide as a laptop, so width alone would hand it Monaco; the swap
+ * also asks about the pointer. It is driven by `matchMedia`, never by
+ * user-agent, because iPadOS Safari reports itself as a Mac.
  *
  * The code buffer lives in the host, so crossing the breakpoint keeps the work
  * (undo history does not — different editors, different stacks).

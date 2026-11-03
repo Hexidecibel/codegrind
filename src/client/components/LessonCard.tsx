@@ -141,7 +141,7 @@ export function LessonCard({ lesson }: { lesson: Lesson }) {
           onClick={markFuzzy}
           disabled={fuzzy}
           // Deliberately low-contrast: an escape hatch, not a call to action.
-          className="inline-flex min-h-9 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground/70 transition-colors hover:text-foreground disabled:opacity-70"
+          className="inline-flex min-h-9 pointer-coarse:min-h-11 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground/70 transition-colors hover:text-foreground disabled:opacity-70"
         >
           {fuzzy ? (
             <>

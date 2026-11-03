@@ -381,7 +381,7 @@ export function PatternsPage() {
             <button
               type="button"
               onClick={() => jump('which')}
-              className="shrink-0 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary"
+              className="shrink-0 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary pointer-coarse:min-h-11 pointer-coarse:px-3.5 pointer-coarse:text-sm"
             >
               Which one?
             </button>
@@ -391,7 +391,8 @@ export function PatternsPage() {
                 type="button"
                 onClick={() => jump(p.id)}
                 className={cn(
-                  'shrink-0 rounded-full border px-2.5 py-1 text-xs transition-colors hover:text-foreground',
+                  // 26px chips are a mouse's density; on touch they grow to the 44px target.
+                  'shrink-0 rounded-full border px-2.5 py-1 text-xs transition-colors hover:text-foreground pointer-coarse:min-h-11 pointer-coarse:px-3.5 pointer-coarse:text-sm',
                   hashId === p.id ? 'border-primary/60 text-foreground' : 'border-border text-muted-foreground',
                   cards.get(p.id)?.due && 'border-primary/50',
                 )}
@@ -451,7 +452,7 @@ export function PatternsPage() {
                         <Inline text={r.clue} />
                       </td>
                       <td className="whitespace-nowrap py-1.5">
-                        <button type="button" onClick={() => jump(r.pattern)} className="text-primary underline-offset-4 hover:underline">
+                        <button type="button" onClick={() => jump(r.pattern)} className="tap-link pointer-coarse:min-w-11 pointer-coarse:justify-center text-primary underline-offset-4 hover:underline">
                           {r.label}
                         </button>
                       </td>

@@ -3,9 +3,19 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* A phone in landscape with the soft keyboard up — mirrors SHORT_QUERY in
-   hooks/useMediaQuery.ts; keep the two in sync. */
-@custom-variant short (@media (max-height: 500px) and (min-width: 600px));
+/* Short and wide: a phone in landscape, or a tablet in landscape with the soft
+   keyboard up. The media query mirrors SHORT_QUERY in hooks/useMediaQuery.ts;
+   keep the two in sync. `data-short` is the same answer from the visual viewport,
+   because iOS never resizes the layout viewport for its keyboard, so the media
+   query alone stays false on an iPad. */
+@custom-variant short {
+  @media (max-height: 500px) and (min-width: 600px) {
+    @slot;
+  }
+  &:is([data-short] *) {
+    @slot;
+  }
+}
 
 @theme inline {
   --color-background: var(--background);
@@ -100,6 +110,45 @@
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
     }
+  }
+}
+
+/* ---- Touch screens --------------------------------------------------------
+   UNLAYERED ON PURPOSE, so it beats `text-sm` and friends in the utilities layer
+   wherever a field happens to be written: iOS Safari zooms the page when a field
+   under 16px takes focus, and nothing brings it back when focus leaves. Keyed on
+   the pointer rather than width because the iPad is the wide case.
+
+   `manipulation` drops double-tap-to-zoom (pinch still works), so tapping the
+   same button twice quickly, as a drill does, cannot zoom the page instead. */
+@media (pointer: coarse) {
+  html {
+    touch-action: manipulation;
+  }
+  input:not([type="checkbox"], [type="radio"], [type="range"]),
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* A link INSIDE running prose: the same 44px hit area, but from padding offset
+   by an equal negative margin, which an inline box paints and hit-tests without
+   adding to the line height, so the paragraph does not reflow around it. */
+@utility tap-inline {
+  @media (pointer: coarse) {
+    padding-block: 0.8125rem;
+    margin-block: -0.8125rem;
+  }
+}
+
+/* A text link that is a destination rather than prose: 44px tall on touch, and
+   exactly what it was with a mouse. */
+@utility tap-link {
+  @media (pointer: coarse) {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
   }
 }
 

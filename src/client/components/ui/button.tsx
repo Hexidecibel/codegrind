@@ -21,13 +21,15 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
-        lg: "h-10 rounded-md px-8",
-        icon: "h-9 w-9",
-        // Finger-sized: 44px is the Apple HIG / WCAG 2.5.5 AAA target. Use
-        // below `lg` (see useControlSize) — never on desktop, where `sm` is the
-        // established density.
+        default: "h-9 px-4 py-2 pointer-coarse:h-11 short:h-9",
+        // On touch `sm` is density nobody can hit, so it grows to the 44px target
+        // everywhere in one place; `short:` is the keyboard-up landscape budget.
+        sm: "h-8 rounded-md px-3 text-xs pointer-coarse:h-11 pointer-coarse:text-sm short:h-8 short:text-xs",
+        lg: "h-10 rounded-md px-8 pointer-coarse:h-11 short:h-10",
+        icon: "h-9 w-9 pointer-coarse:h-11 pointer-coarse:w-11 short:h-9 short:w-9",
+        // Finger-sized: 44px is the Apple HIG / WCAG 2.5.5 AAA target. Use on
+        // touch screens (see useControlSize) — never on desktop, where `sm` is
+        // the established density.
         touch: "h-11 rounded-md px-4 text-sm",
         touchIcon: "h-11 w-11",
       },

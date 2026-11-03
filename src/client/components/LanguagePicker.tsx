@@ -95,7 +95,7 @@ export function LanguagePicker({
       onValueChange={(v) => void commit(v as Language)}
       disabled={disabled || saving || language === null}
     >
-      <SelectTrigger className="h-11 w-[120px] lg:h-8" aria-label="Problem language">
+      <SelectTrigger className="h-11 w-[120px] lg:pointer-fine:h-8" aria-label="Problem language">
         <SelectValue placeholder="Language" />
       </SelectTrigger>
       <SelectContent>

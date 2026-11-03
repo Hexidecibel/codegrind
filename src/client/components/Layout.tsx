@@ -44,9 +44,11 @@ function Tab({
       title={label}
       className={({ isActive }) =>
         cn(
-          // Below `sm` the label is hidden, so the text line-box no longer sets
-          // the height — without min-h/min-w these collapse to a 40×28 target.
-          'inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors sm:min-h-0 sm:min-w-0',
+          // Icon-only, the text line-box no longer sets the height, so without
+          // min-h/min-w these collapse to a 40×28 target. The compact size is
+          // for a mouse, and for the short landscape budget — never for a finger
+          // on a tablet, however wide it is.
+          'inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors sm:pointer-fine:min-h-0 sm:pointer-fine:min-w-0 short:min-h-0 short:min-w-0',
           isActive || owned
             ? 'bg-secondary text-foreground'
             : 'text-muted-foreground hover:text-foreground',
@@ -87,11 +89,12 @@ export function Layout({ children }: { children: ReactNode }) {
   useAppHeight();
   return (
     // Not h-screen: 100vh is the URL-bar-retracted height on mobile, so the
-    // bottom of the app ends up clipped by `overflow-hidden`. Below `lg` we go
-    // one better and track the visual viewport (`--app-height`), which is the
-    // only thing that shrinks for the soft keyboard on iOS.
-    <div className="flex h-[var(--app-height,100dvh)] flex-col overflow-hidden bg-background text-foreground lg:h-dvh">
-      {/* `short:` = landscape phone with the keyboard up (see index.css): every
+    // bottom of the app ends up clipped by `overflow-hidden`. Anything with a
+    // soft keyboard goes one better and tracks the visual viewport
+    // (`--app-height`), which is the only thing that shrinks for it on iOS; a
+    // mouse-driven desktop leaves that unset and falls through to dvh.
+    <div className="flex h-[var(--app-height,100dvh)] flex-col overflow-hidden bg-background text-foreground">
+      {/* `short:` = landscape with the keyboard up (see index.css): every
           vertical pixel is contested there, so the header tightens to ~40px. */}
       <header className="flex items-center gap-0 sm:gap-4 border-b border-border bg-card px-4 py-2.5 short:py-1">
         <div className="flex items-center gap-2">
@@ -143,7 +146,7 @@ export function Layout({ children }: { children: ReactNode }) {
             title="Help"
             className={({ isActive }) =>
               cn(
-                'inline-flex min-h-11 w-9 items-center justify-center rounded-full transition-colors sm:min-h-0 sm:h-8 sm:w-8',
+                'inline-flex min-h-11 w-9 items-center justify-center rounded-full transition-colors min-[480px]:pointer-coarse:w-11 sm:pointer-fine:min-h-0 sm:pointer-fine:h-8 sm:pointer-fine:w-8 short:min-h-0 short:h-8 short:w-8',
                 isActive ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground',
               )
             }

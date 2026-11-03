@@ -320,7 +320,7 @@ export function ConceptTrackPage() {
               {ai.map((i, n) => (
                 <li key={i.concept} className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2">
                   <span className="w-5 text-right text-xs tabular-nums text-muted-foreground">{n + 1}</span>
-                  <Link to={`/concepts/${i.concept}`} className="min-w-0 flex-1 font-medium hover:underline">
+                  <Link to={`/concepts/${i.concept}`} className="tap-link min-w-0 flex-1 font-medium hover:underline">
                     {i.label}
                   </Link>
                   {i.lastGrade && <span className="text-xs text-muted-foreground">last: {i.lastGrade}</span>}

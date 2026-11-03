@@ -53,7 +53,7 @@ export function Section({
               onClick={() => setOpen((v) => !v)}
               aria-expanded={open}
               aria-controls={panelId}
-              className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:min-h-8"
+              className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:pointer-fine:min-h-8"
             >
               <Table2 className="h-3.5 w-3.5" />
               {open ? 'Hide data' : 'Show data'}

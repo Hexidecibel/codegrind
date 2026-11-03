@@ -175,7 +175,7 @@ export function InterviewsPanel({ today, onChange }: { today: string; onChange: 
 
   return (
     <section className="rounded-xl border border-border bg-card p-3 sm:p-4">
-      <button type="button" className="flex w-full items-center gap-2 text-left" onClick={() => setOpen((o) => !o)}>
+      <button type="button" className="flex w-full items-center gap-2 text-left pointer-coarse:min-h-11" onClick={() => setOpen((o) => !o)}>
         <Briefcase className="h-4 w-4 text-primary" />
         <span className="text-sm font-semibold">Interviews</span>
         <span className="text-xs text-muted-foreground">

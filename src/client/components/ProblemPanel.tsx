@@ -73,7 +73,7 @@ export function ProblemPanel({
                 {shape && (
                   <Link
                     to={patternHref(shape.id)}
-                    className="text-xs text-primary underline-offset-4 hover:underline"
+                    className="tap-link text-xs text-primary underline-offset-4 hover:underline"
                     title={`The code shape of ${shape.title}`}
                   >
                     Pattern shape →

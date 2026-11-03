@@ -228,7 +228,10 @@ export function EnvelopePage() {
     setResult(null);
   };
 
-  const guidedHere = guided && !!item?.guided && !result;
+  // A guided attempt answers inside GuidedRunner; once its result is in, the
+  // plain answer box must not reappear (empty and disabled) above the verdict.
+  const guidedItem = guided && !!item?.guided;
+  const guidedHere = guidedItem && !result;
 
   const right = done.filter((d) => d.ok).length;
   const quickKinds = QUICK_KINDS as readonly string[];
@@ -301,7 +304,7 @@ export function EnvelopePage() {
               Interview-style estimation questions, plus quick one-idea drills. Estimates count within 30%; quick drills
               must be exact. Free; misses come back on a spaced schedule.
             </p>
-            <label className="flex items-center gap-2 text-sm">
+            <label className="flex items-center gap-2 text-sm pointer-coarse:min-h-11">
               <input type="checkbox" checked={guided} onChange={(e) => toggleGuided(e.target.checked)} className="h-4 w-4 accent-primary" />
               Guided: one small step at a time, checked as you go
             </label>
@@ -357,7 +360,7 @@ export function EnvelopePage() {
 
             {guidedHere ? (
               <GuidedRunner key={`${item.key}:${idx}`} itemKey={item.key} onDone={onResult} />
-            ) : (
+            ) : guidedItem ? null : (
               <div className="space-y-2">
                 <label className="block text-sm text-muted-foreground" htmlFor="env-answer">
                   Your answer{item.unitHint ? ` (a bare number is read as ${item.unitHint})` : ''}

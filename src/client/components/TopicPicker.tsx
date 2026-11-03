@@ -28,7 +28,7 @@ export function TopicPicker({
         onValueChange={(v) => onTopic(v as Topic)}
         disabled={disabled}
       >
-        <SelectTrigger className="h-11 w-[150px] lg:h-8">
+        <SelectTrigger className="h-11 w-[150px] lg:pointer-fine:h-8">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -45,7 +45,7 @@ export function TopicPicker({
         onValueChange={(v) => onDifficulty(v as Difficulty)}
         disabled={disabled}
       >
-        <SelectTrigger className="h-11 w-[110px] capitalize lg:h-8">
+        <SelectTrigger className="h-11 w-[110px] capitalize lg:pointer-fine:h-8">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

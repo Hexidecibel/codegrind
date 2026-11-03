@@ -27,7 +27,7 @@ import { TodayNextBar } from '@/client/components/TodayNextBar';
 import { describeWait } from '@/client/lib/wait-copy';
 import { useLocalStorage } from '@/client/hooks/useLocalStorage';
 import { staleForLanguage, type GrindSnapshot } from '@/client/lib/grind-snapshot';
-import { useControlSize, useIsDesktop } from '@/client/hooks/useMediaQuery';
+import { useControlSize, useIsWide } from '@/client/hooks/useMediaQuery';
 import { Button } from '@/client/components/ui/button';
 import { Badge } from '@/client/components/ui/badge';
 import { SolveSurface } from '@/client/components/SolveSurface';
@@ -69,7 +69,7 @@ export function GrindPage() {
   /** Milliseconds the in-flight "Next problem" request has been running. */
   const [waitMs, setWaitMs] = useState(0);
   const validated = useRef(false);
-  const isDesktop = useIsDesktop();
+  const isWide = useIsWide();
   const controlSize = useControlSize();
   const location = useLocation();
   const navigate = useNavigate();
@@ -456,7 +456,7 @@ export function GrindPage() {
                   ) : primer ? (
                     // Collapsed on a phone: expanded it pushes the problem statement
                     // most of a screen down.
-                    <PatternPrimer primer={primer} defaultOpen={isDesktop} />
+                    <PatternPrimer primer={primer} defaultOpen={isWide} />
                   ) : null}
                 </div>
               )}
@@ -512,28 +512,28 @@ export function GrindPage() {
           <div>
             <Link
               to="/manual"
-              className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              className="tap-link text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
             >
               or pick manually
             </Link>
             <span className="mx-2 text-xs text-muted-foreground">·</span>
             <Link
               to="/recognize"
-              className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              className="tap-link text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
             >
               rusty? recognize patterns (no code)
             </Link>
             <span className="mx-2 text-xs text-muted-foreground">·</span>
             <Link
               to="/envelope"
-              className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              className="tap-link text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
             >
               envelope math reps
             </Link>
             <span className="mx-2 text-xs text-muted-foreground">·</span>
             <Link
               to="/patterns"
-              className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              className="tap-link text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
             >
               pattern shapes
             </Link>
