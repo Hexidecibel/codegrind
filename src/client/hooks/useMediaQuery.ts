@@ -128,6 +128,24 @@ export function useIsShort(): boolean {
 }
 
 /**
+ * A phone: a finger on a small screen. Portrait phones are under `sm` (640px)
+ * wide; landscape phones are wider than that but short (an iPhone is ~390-430px
+ * tall on its side; an iPad's shortest side is 744px+). Mirrors the `phone:` CSS
+ * variant in src/index.css; keep the two in sync. No user-agent sniffing: a
+ * narrow desktop window has a fine pointer and stays desktop.
+ *
+ * Chrome (header, tab bar) switches by the CSS variant; content that swaps out
+ * entirely reads this hook, and pure components take an `isPhone` prop.
+ */
+export const PHONE_QUERY =
+  '(pointer: coarse) and (max-width: 639px), (pointer: coarse) and (max-height: 459px)';
+
+/** True on a phone, portrait or landscape. */
+export function useIsPhone(): boolean {
+  return useMediaQuery(PHONE_QUERY);
+}
+
+/**
  * The Button size to use for interactive chrome. Touch screens get 44px targets;
  * desktop keeps its existing `sm` density, and so does a short landscape
  * viewport where 44px bars would eat the editor (32px still clears WCAG 2.5.8).
