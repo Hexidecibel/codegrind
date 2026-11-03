@@ -63,7 +63,7 @@ export const HELP_SECTIONS: readonly HelpSection[] = [
   {
     id: 'loop',
     title: 'The loop',
-    summary: 'Six tabs, and what each one is for.',
+    summary: 'Five tabs and More, and what each one is for.',
   },
   {
     id: 'scheduler',

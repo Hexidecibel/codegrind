@@ -17,6 +17,10 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowRight,
+  Briefcase,
+  CalendarClock,
+  MessagesSquare,
+  Mic,
   CalendarCheck,
   Check,
   ChevronDown,
@@ -54,6 +58,8 @@ import { LeverLine } from '@/client/components/home/LeverLine';
 import { MockNudge } from '@/client/components/home/MockNudge';
 import { TargetCard } from '@/client/components/home/TargetCard';
 import { WeekPanel } from '@/client/components/home/WeekPanel';
+import { CARD } from '@/client/components/home/HomeCard';
+import { helpHref } from '@/client/lib/help-content';
 import { mockKindInfo } from '@/shared/mock-kinds';
 import {
   endTodayEarly,
@@ -74,56 +80,64 @@ function longDate(date: string): string {
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
+/**
+ * Today: where am I, in two seconds. Title + date + streak, the countdown to
+ * the next loop, the progress bar; then the children (the one big action).
+ */
 function Header({ state, children }: { state: TodayState; children?: ReactNode }) {
   const pct = Math.round((state.completed / state.total) * 100);
   return (
-    <section className="space-y-4 rounded-xl border border-border bg-card p-4 sm:p-5">
+    <section aria-label="Today" className={cn(CARD, 'space-y-4')}>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
-          <CalendarCheck className="h-6 w-6 text-primary" /> Today
+          <CalendarCheck className="h-6 w-6 text-primary" aria-hidden /> Today
         </h1>
         <span className="text-sm text-muted-foreground">{longDate(state.date)}</span>
-        <span
-          className="ml-auto inline-flex items-center gap-1 text-sm font-semibold"
-          title="Consecutive days with practice"
-        >
-          <Flame className={cn('h-4 w-4', state.streak > 0 ? 'text-amber-400' : 'text-muted-foreground')} />
-          {state.streak}-day streak
+        <span className="ml-auto inline-flex items-center gap-1 text-sm font-semibold" title="Consecutive days with practice">
+          <Flame className={cn('h-4 w-4', state.streak > 0 ? 'text-amber-400' : 'text-muted-foreground')} aria-hidden />
+          <span>
+            {state.streak}
+            <span className="font-normal text-muted-foreground">-day streak</span>
+          </span>
         </span>
       </div>
 
       {state.nextLoop && (
-        <div className="flex flex-wrap items-baseline gap-x-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          <Briefcase className="h-4 w-4 text-muted-foreground" aria-hidden />
           <span className="font-semibold">
             {state.nextLoop.company} {countdownPhrase(state.nextLoop.daysLeft)}
           </span>
-          <span className="text-xs text-muted-foreground">
-            {state.nextLoop.date} · {state.nextLoop.rounds.map((r) => ROUND_LABEL[r]).join(', ')}
-            {state.nextLoop.isFinalReviewDay
-              ? ' · final review today: every open card and review problem is due'
-              : state.nextLoop.finalReviewDay
-                ? ` · final review ${state.nextLoop.finalReviewDay}`
-                : ''}
-          </span>
-        </div>
+          <span className="text-muted-foreground">· {state.nextLoop.rounds.map((r) => ROUND_LABEL[r]).join(', ')}</span>
+          {state.nextLoop.isFinalReviewDay && (
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-300">final review today</span>
+          )}
+        </p>
       )}
 
-      <div className="space-y-1.5">
-        <div className="flex justify-between text-xs text-muted-foreground">
+      <div className="space-y-2">
+        <div className="flex justify-between text-sm">
           <span>
-            {state.current === null ? 'Day complete' : `${state.completed} of ${state.total} steps`}
-            {state.endedEarly ? ' · ended early' : ''}
+            {state.current === null ? (
+              <span className="font-semibold text-emerald-400">Day complete</span>
+            ) : (
+              <>
+                <span className="font-semibold">{state.completed}</span>
+                <span className="text-muted-foreground"> of {state.total} steps</span>
+              </>
+            )}
+            {state.endedEarly && <span className="text-muted-foreground"> · ended early</span>}
           </span>
-          <span>{state.refresh.on ? '~60 min' : state.quick ? '~30 min' : '~90 min'}</span>
+          <span className="inline-flex items-center gap-1 text-muted-foreground">
+            <Timer className="h-3.5 w-3.5" aria-hidden />
+            {state.refresh.on ? '~60 min' : state.quick ? '~30 min' : '~90 min'}
+          </span>
         </div>
-        <div
-          className="h-2.5 overflow-hidden rounded-full bg-secondary"
-          role="progressbar"
-          aria-valuenow={pct}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        >
-          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+        <div className="h-2.5 overflow-hidden rounded-full bg-secondary" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+          <div
+            className={cn('h-full rounded-full transition-all', state.current === null ? 'bg-emerald-400' : 'bg-primary')}
+            style={{ width: `${pct}%` }}
+          />
         </div>
       </div>
 
@@ -137,17 +151,14 @@ function StepNoteLine({ note, pending }: { note: StepNote | undefined; pending: 
   if (!note && !pending) return null;
   if (!note) {
     return (
-      <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+      <p className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
         <Loader2 className="h-3 w-3 animate-spin" /> AI reviewing this step…
       </p>
     );
   }
   return (
-    <div className="mt-1.5 space-y-0.5 rounded-md border border-border/60 bg-secondary/30 px-2.5 py-1.5 text-xs">
-      <p className="whitespace-pre-line text-foreground/85">
-        <Sparkles className="mr-1 inline h-3 w-3 text-primary" />
-        {note.note}
-      </p>
+    <div className="space-y-1 rounded-md bg-secondary/40 px-3 py-2 text-sm">
+      <p className="whitespace-pre-line text-foreground/85">{note.note}</p>
       {note.carry && (
         <p className="text-muted-foreground">
           <span className="font-medium text-foreground/90">Carry:</span> {note.carry}
@@ -158,106 +169,109 @@ function StepNoteLine({ note, pending }: { note: StepNote | undefined; pending: 
 }
 
 function StepIcon({ step, index }: { step: TodayStep; index: number }) {
-  const base = 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold';
-  if (step.status === 'done') return <div className={cn(base, 'bg-emerald-500/15 text-emerald-400')}><Check className="h-4 w-4" /></div>;
-  if (step.status === 'skipped') return <div className={cn(base, 'bg-secondary text-muted-foreground')}><SkipForward className="h-4 w-4" /></div>;
-  if (step.status === 'locked') return <div className={cn(base, 'bg-secondary text-muted-foreground')}><Lock className="h-4 w-4" /></div>;
+  const base = 'flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold';
+  if (step.status === 'done')
+    return (
+      <div className={cn(base, 'bg-emerald-500/15 text-emerald-400')}>
+        <Check className="h-4 w-4" />
+      </div>
+    );
+  if (step.status === 'skipped')
+    return (
+      <div className={cn(base, 'bg-secondary text-muted-foreground')}>
+        <SkipForward className="h-3.5 w-3.5" />
+      </div>
+    );
+  if (step.status === 'locked')
+    return (
+      <div className={cn(base, 'bg-secondary text-muted-foreground')}>
+        <Lock className="h-3.5 w-3.5" />
+      </div>
+    );
   const active = step.status === 'current' || step.status === 'in-progress';
-  return (
-    <div className={cn(base, active ? 'bg-primary text-primary-foreground' : 'bg-secondary text-muted-foreground')}>
-      {index + 1}
-    </div>
-  );
+  return <div className={cn(base, active ? 'bg-primary text-primary-foreground' : 'bg-secondary text-muted-foreground')}>{index + 1}</div>;
 }
 
+/**
+ * One compact line per step: icon, label, its result (or what it is), and the
+ * row's one action. The AI step review opens on tap (Sparkles), never inline,
+ * so the list stays scannable. Start / Skip live on the big card above.
+ */
 function StepRow({
   step,
   index,
   busy,
-  onSkip,
   onUnskip,
   extra,
   note,
   notePending = false,
   offToday = false,
-  hideActions = false,
   lockedText = 'Unlocks after the mock (or end the day early).',
 }: {
-  /** The current step's Start / Skip live on the big card above the list. */
-  hideActions?: boolean;
   lockedText?: string;
   /** Turned off by the 30-min day: no Undo (turn the mode off instead). */
   offToday?: boolean;
   step: TodayStep;
   index: number;
   busy: boolean;
-  onSkip: () => void;
   onUnskip: () => void;
   note?: StepNote;
   notePending?: boolean;
-  /** A sub-row under the step (the warm-up's optional Recognize add-on). */
+  /** A sub-row under the step (the warm-up's Envelope / Recognize add-ons). */
   extra?: ReactNode;
 }) {
+  const [showNote, setShowNote] = useState(false);
   const active = step.status === 'current' || step.status === 'in-progress';
   const isDebrief = step.id === 'debrief';
+  const line = step.result ?? (step.status === 'locked' ? lockedText : step.detail);
   return (
-    <li
-      className={cn(
-        'rounded-xl border p-4 transition-colors',
-        active ? 'border-primary/60 bg-primary/5 shadow-sm' : 'border-border bg-card',
-        (step.status === 'skipped' || step.status === 'locked') && 'opacity-70',
-      )}
-    >
-      <div className="flex items-start gap-3">
+    <li className={cn('space-y-2 px-3 py-2.5', active && 'bg-primary/5')}>
+      <div className="flex min-h-11 items-center gap-3">
         <StepIcon step={step} index={index} />
-        <div className="min-w-0 flex-1 space-y-0.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={cn('font-semibold', active && 'text-base')}>{step.label}</span>
-            {step.status === 'in-progress' && (
-              <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] text-amber-300">in progress</span>
+        <div className="min-w-0 flex-1">
+          <p className="flex items-center gap-2 text-sm font-medium">
+            <span className="truncate">{step.label}</span>
+            {active && <span className="shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] text-primary">now</span>}
+            {step.status === 'skipped' && <span className="shrink-0 text-xs font-normal text-muted-foreground">{offToday ? 'off today' : 'skipped'}</span>}
+          </p>
+          <p
+            className={cn(
+              'truncate text-xs',
+              step.result && step.ok === true && 'text-emerald-400',
+              step.result && step.ok === false && 'text-rose-300',
+              !(step.result && step.ok !== null) && 'text-muted-foreground',
             )}
-            {step.status === 'skipped' && <span className="text-xs text-muted-foreground">{offToday ? 'off today' : 'skipped'}</span>}
-          </div>
-          {step.result ? (
-            <p
-              className={cn(
-                'text-sm',
-                step.ok === true && 'text-emerald-400',
-                step.ok === false && 'text-rose-300',
-                step.ok === null && 'text-foreground/90',
-              )}
-            >
-              {step.result}
-            </p>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              {step.status === 'locked' ? lockedText : step.detail}
-            </p>
-          )}
-          <StepNoteLine note={note} pending={notePending} />
+            title={line}
+          >
+            {line}
+          </p>
         </div>
+        {(note || notePending) && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={showNote ? 'Hide the AI review' : 'Show the AI review'}
+            aria-expanded={showNote}
+            onClick={() => setShowNote((v) => !v)}
+            className={cn('shrink-0 pointer-coarse:h-11 pointer-coarse:w-11', showNote ? 'text-primary' : 'text-muted-foreground')}
+          >
+            {note ? <Sparkles className="h-4 w-4" /> : <Loader2 className="h-4 w-4 animate-spin" />}
+          </Button>
+        )}
         {step.status === 'skipped' && !offToday && (
-          <Button variant="ghost" size="sm" onClick={onUnskip} disabled={busy} className="text-muted-foreground">
+          <Button variant="ghost" size="sm" onClick={onUnskip} disabled={busy} className="shrink-0 text-muted-foreground">
             Undo
           </Button>
         )}
         {step.status === 'done' && !isDebrief && step.href !== '/today' && (
-          <Button variant="ghost" size="sm" asChild className="text-muted-foreground">
+          <Button variant="ghost" size="sm" asChild className="shrink-0 text-muted-foreground">
             <Link to={step.href}>Open</Link>
           </Button>
         )}
       </div>
-
-      {active && !isDebrief && !hideActions && (
-        <div className="mt-4 flex flex-wrap items-center gap-2 pl-11">
-          <Button asChild size="lg" className="gap-2">
-            <Link to={step.href}>
-              {step.status === 'in-progress' ? 'Continue' : 'Start'} <ArrowRight className="h-4 w-4" />
-            </Link>
-          </Button>
-          <Button variant="ghost" onClick={onSkip} disabled={busy} className="gap-1.5 text-muted-foreground">
-            <SkipForward className="h-4 w-4" /> Skip step
-          </Button>
+      {showNote && (
+        <div className="pl-10">
+          <StepNoteLine note={note} pending={notePending} />
         </div>
       )}
       {extra}
@@ -265,168 +279,198 @@ function StepRow({
   );
 }
 
+/** A slim add-on row (Envelope, Recognize): icon, label + chip, one button. */
+function AddOnRow({
+  icon: Icon,
+  label,
+  chip,
+  line,
+  href,
+  primary,
+  action,
+  children,
+}: {
+  icon: typeof ScanSearch;
+  label: string;
+  chip: ReactNode;
+  line?: ReactNode;
+  href: string;
+  primary: boolean;
+  action: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className={cn('flex flex-wrap items-center gap-3 rounded-lg border px-3 py-2', primary ? 'border-primary/40' : 'border-border')}>
+      <Icon className={cn('h-4 w-4 shrink-0', primary ? 'text-primary' : 'text-muted-foreground')} aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+          {label} {chip}
+        </p>
+        {line && <p className="truncate text-xs text-muted-foreground">{line}</p>}
+        {children}
+      </div>
+      <Button asChild size="sm" variant="outline" className="gap-1">
+        <Link to={href}>
+          {action} <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+      </Button>
+    </div>
+  );
+}
+
+const doneChip = (text: string) => <span className="text-xs font-normal text-emerald-400">{text}</span>;
+const mutedChip = (text: string) => <span className="text-xs font-normal text-muted-foreground">{text}</span>;
+
 /**
  * "Recognize ×5": optional, never a step (it does not block the day or count
  * toward the progress bar). Highlighted when the server says you're rusty.
  */
 function RecognizeRow({ r, note, pending }: { r: TodayState['recognize']; note?: StepNote; pending: boolean }) {
+  const hot = r.recommended && !r.done;
   return (
-    <div
-      className={cn(
-        'mt-3 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 pl-3 sm:ml-11',
-        r.recommended && !r.done ? 'border-primary/50 bg-primary/5' : 'border-border',
-      )}
+    <AddOnRow
+      icon={ScanSearch}
+      label="Recognize ×5"
+      chip={
+        r.done ? (
+          doneChip(`done · ${r.doneToday} today`)
+        ) : r.recommended ? (
+          <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-normal text-primary">recommended</span>
+        ) : (
+          mutedChip('optional')
+        )
+      }
+      line={`${r.reason}${!r.done && r.doneToday > 0 ? ` · ${r.doneToday} done today` : ''}`}
+      href={r.href}
+      primary={hot}
+      action={r.done ? 'Again' : 'Start'}
     >
-      <ScanSearch className={cn('h-4 w-4 shrink-0', r.recommended && !r.done ? 'text-primary' : 'text-muted-foreground')} />
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium">
-          Recognize ×5{' '}
-          {r.done ? (
-            <span className="text-xs text-emerald-400">done · {r.doneToday} today</span>
-          ) : r.recommended ? (
-            <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] text-primary">recommended</span>
-          ) : (
-            <span className="text-xs text-muted-foreground">optional</span>
-          )}
+      {(note || pending) && (
+        <div className="mt-1.5">
+          <StepNoteLine note={note} pending={pending} />
         </div>
-        <div className="text-xs text-muted-foreground">
-          {r.reason}
-          {!r.done && r.doneToday > 0 ? ` · ${r.doneToday} done today` : ''}
-        </div>
-        <StepNoteLine note={note} pending={pending} />
-      </div>
-      <Button asChild size="sm" variant={r.recommended && !r.done ? 'default' : 'outline'} className="gap-1">
-        <Link to={r.href}>
-          {r.done ? 'Again' : 'Start'} <ArrowRight className="h-3.5 w-3.5" />
-        </Link>
-      </Button>
-    </div>
+      )}
+    </AddOnRow>
   );
 }
 
 /**
- * "Envelope ×5": back-of-the-envelope math reps. Part of the warm-up (the
+ * "Envelope ×N": back-of-the-envelope math reps. Part of the warm-up (the
  * warm-up is done only when `remaining` is 0); due envelope cards lead it.
  */
 function EnvelopeRow({ e }: { e: TodayState['envelope'] }) {
   if (!e || (e.daily === 0 && e.due === 0 && e.doneToday === 0)) return null;
   return (
-    <div
-      className={cn(
-        'mt-3 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 pl-3 sm:ml-11',
-        !e.done ? 'border-primary/50 bg-primary/5' : 'border-border',
-      )}
-    >
-      <Calculator className={cn('h-4 w-4 shrink-0', !e.done ? 'text-primary' : 'text-muted-foreground')} />
-      <div className="min-w-0 flex-1">
-        <div className="text-sm font-medium">
-          Envelope ×{e.daily}{' '}
-          {e.done ? (
-            <span className="text-xs text-emerald-400">
-              done · {e.correctToday}/{e.doneToday} right
-            </span>
-          ) : (
-            <span className="text-xs text-muted-foreground">{e.remaining} to go</span>
-          )}
-        </div>
-        {e.skill && (
-          <div className="text-xs">
-            <span className="font-medium text-primary">Today&apos;s skill:</span> {e.skill.label} · guided, one step at a time
-          </div>
-        )}
-        <div className="text-xs text-muted-foreground">
-          Back-of-the-envelope math, interview style: small × 10ⁿ, add or subtract exponents, then back with commas.
-          {e.due > 0 ? ` ${e.due} review card${e.due === 1 ? '' : 's'} due.` : ''}
-        </div>
-      </div>
-      <Button asChild size="sm" variant={!e.done ? 'default' : 'outline'} className="gap-1">
-        <Link to={e.done ? '/envelope' : e.href}>
-          {e.done ? 'More' : 'Start'} <ArrowRight className="h-3.5 w-3.5" />
-        </Link>
-      </Button>
-    </div>
+    <AddOnRow
+      icon={Calculator}
+      label={`Envelope ×${e.daily}`}
+      chip={
+        <>
+          {e.done ? doneChip(`done · ${e.correctToday}/${e.doneToday} right`) : mutedChip(`${e.remaining} to go`)}
+          {e.due > 0 && <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-normal text-amber-300">{e.due} due</span>}
+        </>
+      }
+      line={e.skill ? `Today’s skill: ${e.skill.label} · guided` : 'Quick estimation math.'}
+      href={e.done ? '/envelope' : e.href}
+      primary={!e.done}
+      action={e.done ? 'More' : 'Start'}
+    />
   );
 }
 
 const isNoteId = (id: string): id is StepNoteId => (STEP_NOTE_IDS as readonly string[]).includes(id);
 
-/**
- * "Pattern refresh": the 9-day plan (one pattern a day, then a mixed day).
- * On = a big "Refresh day N of 9 — <pattern>" banner and the refresh steps;
- * off = a toggle row like the 30-min day's, plus a note once it has finished.
- */
-function RefreshPanel({ state, busy, onToggle }: { state: TodayState; busy: boolean; onToggle: (on: boolean) => void }) {
-  const r = state.refresh;
-  if (r.on) {
-    return (
-      <section className="space-y-2 rounded-xl border border-violet-500/40 bg-gradient-to-b from-violet-500/[0.09] to-transparent p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <RefreshCw className="h-5 w-5 text-violet-400" />
-          <h2 className="text-lg font-bold">
-            Refresh day {r.day} of {r.total} — {r.label}
-          </h2>
-          {r.dayComplete && <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-300">day done · next pattern tomorrow</span>}
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {r.pattern
-            ? 'One pattern a day: re-learn its shape, write it from memory, practise it named, then a cold review of yesterday’s pattern (unnamed) and Recognize ×5. No mock or concept rep this week.'
-            : 'Last day: three mediums, any pattern, topic hidden. Name the pattern and say its shape before you code.'}{' '}
-          A missed day never skips a pattern — the day moves on only when its steps are done or skipped.
-        </p>
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          {r.pattern && (
-            <Button asChild size="sm" variant="outline" className="gap-1">
-              <Link to={patternHref(r.pattern)}>
-                <Shapes className="h-3.5 w-3.5" /> {r.label} shape
-              </Link>
-            </Button>
-          )}
-          <Button asChild size="sm" variant="ghost" className="gap-1 text-muted-foreground">
-            <Link to="/patterns">All pattern shapes</Link>
-          </Button>
-          <span className="ml-auto text-xs text-muted-foreground">
-            Extras (optional): <Link to="/concept" className="tap-link underline-offset-4 hover:underline">concept rep</Link> ·{' '}
-            <Link to="/stories" className="tap-link underline-offset-4 hover:underline">story forge</Link>
-          </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={busy}
-            className="text-muted-foreground"
-            onClick={() => {
-              if (window.confirm('Turn the pattern refresh off? Today goes back to the normal day; turning it back on resumes where you left off.')) onToggle(false);
-            }}
-          >
-            Turn off
-          </Button>
-        </div>
-      </section>
-    );
-  }
-  const recentlyFinished = r.finishedAt && Date.now() - Date.parse(r.finishedAt) < 4 * 86_400_000;
+/** The warm-up's add-ons (Envelope, Recognize), wherever the warm-up shows. */
+function WarmupExtras({ state }: { state: TodayState }) {
+  const env = <EnvelopeRow e={state.envelope} />;
+  const rec = state.recognize && !state.refresh.on && (
+    <RecognizeRow r={state.recognize} note={state.stepNotes.recognize} pending={state.aiPending.includes('recognize')} />
+  );
+  if (!env && !rec) return null;
   return (
     <div className="space-y-2">
-      {recentlyFinished && (
-        <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
-          Pattern refresh finished — all {r.total} days done. Today is back to the normal routine; the pattern cards you wrote from memory come back in the warm-up when they are due.
-        </p>
-      )}
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
-        <RefreshCw className="h-4 w-4 text-muted-foreground" />
-        <div className="min-w-0 flex-1">
-          <div className="font-medium">Pattern refresh</div>
-          <div className="text-xs text-muted-foreground">
-            A 9-day reset: one pattern a day (hash map → intervals), then a mixed day. Replaces the mock and concept rep while it runs.
-            {r.completedThrough > 0 && r.completedThrough < r.total ? ` Resumes at day ${r.completedThrough + 1}.` : ''}
-          </div>
-        </div>
-        <Button size="sm" variant="secondary" disabled={busy} onClick={() => onToggle(true)}>
-          {r.completedThrough >= r.total ? 'Run it again' : 'Turn on'}
-        </Button>
-      </div>
+      {env}
+      {rec}
     </div>
   );
 }
+
+/** A settings-style row: icon, label + one caption, one control. */
+function OptionRow({ icon: Icon, label, caption, children }: { icon: typeof Timer; label: ReactNode; caption: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium">{label}</p>
+        <p className="text-xs text-muted-foreground">{caption}</p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * "Pattern refresh": the 9-day plan (one pattern a day, then a mixed day).
+ * The how-it-works lives on Help; here it is one caption and the controls.
+ */
+function RefreshOption({ state, busy, onToggle }: { state: TodayState; busy: boolean; onToggle: (on: boolean) => void }) {
+  const r = state.refresh;
+  const recentlyFinished = !r.on && r.finishedAt && Date.now() - Date.parse(r.finishedAt) < 4 * 86_400_000;
+  const caption = r.on
+    ? r.pattern
+      ? `Day ${r.day} of ${r.total}: one pattern a day, no mock or concept rep.`
+      : 'Last day: three mixed mediums, topic hidden.'
+    : recentlyFinished
+      ? `Finished — all ${r.total} days done.`
+      : r.completedThrough > 0 && r.completedThrough < r.total
+        ? `A 9-day reset, one pattern a day. Resumes at day ${r.completedThrough + 1}.`
+        : 'A 9-day reset, one pattern a day.';
+  return (
+    <OptionRow
+      icon={RefreshCw}
+      label={
+        <>
+          Pattern refresh {r.on && <span className="text-xs font-normal text-emerald-400">on</span>}{' '}
+          <Link to={helpHref('loop')} className="tap-inline text-xs font-normal text-primary underline-offset-4 hover:underline">
+            how it works
+          </Link>
+        </>
+      }
+      caption={
+        <>
+          {caption}
+          {r.on && (
+            <>
+              {' '}
+              Extras: <Link to="/concept" className="tap-inline underline-offset-4 hover:underline">concept rep</Link> ·{' '}
+              <Link to="/stories" className="tap-inline underline-offset-4 hover:underline">story forge</Link>
+            </>
+          )}
+        </>
+      }
+    >
+      {r.on ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          className="text-muted-foreground"
+          onClick={() => {
+            if (window.confirm('Turn the pattern refresh off? Today goes back to the normal day; turning it back on resumes where you left off.')) onToggle(false);
+          }}
+        >
+          Turn off
+        </Button>
+      ) : (
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => onToggle(true)}>
+          {r.completedThrough >= r.total ? 'Run it again' : 'Turn on'}
+        </Button>
+      )}
+    </OptionRow>
+  );
+}
+
+const usd = (n: number) => `$${n.toFixed(n < 0.01 ? 4 : 2)}`;
 
 function DebriefPanel({
   state,
@@ -441,42 +485,34 @@ function DebriefPanel({
   const d = state.debrief;
   if (step.status === 'locked') return null;
   return (
-    <section id="debrief" className="scroll-mt-4 space-y-4 rounded-xl border border-primary/30 bg-card p-4 sm:p-5">
-      <h2 className="flex items-center gap-2 text-lg font-bold">
-        <Sparkles className="h-5 w-5 text-primary" /> Debrief
+    <section id="debrief" aria-label="Debrief" className={cn(CARD, 'scroll-mt-4 space-y-4')}>
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+        <Sparkles className="h-4 w-4 text-primary" aria-hidden /> Debrief
       </h2>
       {!d ? (
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            One short AI read of today — what went well, what to fix (each with a concrete drill), and what
-            tomorrow should lean on.{' '}
-            {state.aiReviews
-              ? 'Written automatically once every step is done or skipped (or you end the day early).'
-              : 'AI reviews are off, so it runs only when you click.'}
+            Wins, fixes and tomorrow’s focus, in one short AI read.{' '}
+            {state.aiReviews ? 'It writes itself when the day ends.' : 'AI reviews are off: run it by hand.'}
           </p>
           {state.aiPending.includes('debrief') ? (
             <p className="inline-flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" /> Writing your debrief…
             </p>
           ) : (
-            <Button size="lg" onClick={() => onRun(false)} disabled={busy} className="gap-2">
+            <Button onClick={() => onRun(false)} disabled={busy} variant="secondary" className="gap-2">
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              {busy ? 'Reading your day…' : `Debrief me now (~$${state.debriefEstimateUsd.toFixed(state.debriefEstimateUsd < 0.01 ? 4 : 2)})`}
+              {busy ? 'Reading your day…' : `Debrief me now (~${usd(state.debriefEstimateUsd)})`}
             </Button>
           )}
         </div>
       ) : (
         <div className="space-y-4">
-          {state.nextLoop && (
-            <p className="text-xs text-muted-foreground">
-              {state.nextLoop.company} {countdownPhrase(state.nextLoop.daysLeft)} ({state.nextLoop.date})
-            </p>
-          )}
           <p className="text-base font-semibold">{d.verdict}</p>
           {d.wins.length > 0 && (
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <h3 className="flex items-center gap-1.5 text-sm font-semibold text-emerald-400">
-                <Trophy className="h-4 w-4" /> Wins
+                <Trophy className="h-4 w-4" aria-hidden /> Wins
               </h3>
               <ul className="list-disc space-y-1 pl-5 text-sm">
                 {d.wins.map((w, i) => (
@@ -486,44 +522,39 @@ function DebriefPanel({
             </div>
           )}
           {d.fixes.length > 0 && (
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <h3 className="flex items-center gap-1.5 text-sm font-semibold text-amber-300">
-                <Wrench className="h-4 w-4" /> Fixes
+                <Wrench className="h-4 w-4" aria-hidden /> Fixes
               </h3>
-              <ul className="space-y-2 text-sm">
+              <ul className="divide-y divide-border rounded-lg border border-border text-sm">
                 {d.fixes.map((f, i) => (
-                  <li key={i} className="rounded-lg border border-border px-3 py-2">
-                    <div>{f.issue}</div>
-                    <div className="mt-0.5 text-muted-foreground">
+                  <li key={i} className="space-y-1 px-3 py-2">
+                    <p>{f.issue}</p>
+                    <p className="text-muted-foreground">
                       <span className="font-medium text-foreground/90">Do:</span> {f.action}
-                    </div>
+                    </p>
                   </li>
                 ))}
               </ul>
             </div>
           )}
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <h3 className="flex items-center gap-1.5 text-sm font-semibold">
-              <Target className="h-4 w-4 text-primary" /> Tomorrow
+              <Target className="h-4 w-4 text-primary" aria-hidden /> Tomorrow
             </h3>
-            <div className="flex flex-wrap gap-1.5 text-xs">
+            <div className="flex flex-wrap gap-1.5 text-xs" title={d.tomorrowFocus.patterns.length ? "Tomorrow's problems lean toward these (lightly)." : undefined}>
               {d.tomorrowFocus.patterns.map((p) => (
                 <span key={p} className="rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1">
                   {humanize(p)}
                 </span>
               ))}
               {d.tomorrowFocus.mockKind && (
-                <span className="rounded-full border border-border px-2.5 py-1">
-                  Mock: {mockKindInfo(d.tomorrowFocus.mockKind).label}
-                </span>
+                <span className="rounded-full border border-border px-2.5 py-1">Mock: {mockKindInfo(d.tomorrowFocus.mockKind).label}</span>
               )}
               {!d.tomorrowFocus.patterns.length && !d.tomorrowFocus.mockKind && (
                 <span className="text-muted-foreground">The usual adaptive plan.</span>
               )}
             </div>
-            {d.tomorrowFocus.patterns.length > 0 && (
-              <p className="text-xs text-muted-foreground">Tomorrow's problems lean toward these (lightly).</p>
-            )}
           </div>
           <div className="flex flex-wrap items-center gap-3 border-t border-border pt-3 text-xs text-muted-foreground">
             {state.debriefUsage && (
@@ -538,7 +569,7 @@ function DebriefPanel({
               disabled={busy}
               className="ml-auto gap-1.5"
               onClick={() => {
-                if (window.confirm(`Regenerate the debrief? One more model call (~$${state.debriefEstimateUsd.toFixed(state.debriefEstimateUsd < 0.01 ? 4 : 2)}).`)) {
+                if (window.confirm(`Regenerate the debrief? One more model call (~${usd(state.debriefEstimateUsd)}).`)) {
                   onRun(true);
                 }
               }}
@@ -576,7 +607,7 @@ export function CurrentStepCard({
   const step = state.current ? state.steps.find((s) => s.id === state.current) : undefined;
   if (!step) {
     return (
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/5 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-3 rounded-lg bg-emerald-500/10 px-4 py-3">
         <Check className="h-5 w-5 text-emerald-400" aria-hidden />
         <p className="flex-1 text-sm font-semibold">Day complete. Nice work.</p>
         {state.steps.some((s) => s.id === 'debrief' && s.status !== 'locked') && (
@@ -588,51 +619,47 @@ export function CurrentStepCard({
     );
   }
   const isDebrief = step.id === 'debrief';
-  const label = step.status === 'in-progress' ? 'Continue' : 'Start';
+  const index = state.steps.findIndex((s) => s.id === step.id);
   return (
-    <div className="space-y-3 rounded-lg border border-primary/60 bg-primary/5 p-4">
-      <div className="space-y-0.5">
-        <p className="text-xs text-muted-foreground">Next up</p>
+    <div className="space-y-4 rounded-lg border border-primary/50 bg-primary/5 p-4">
+      <div className="space-y-1">
+        <p className="text-xs font-medium uppercase tracking-wide text-primary">
+          Next up · step {index + 1} of {state.steps.length}
+        </p>
         <p className="text-lg font-semibold">{step.label}</p>
         <p className="text-sm text-muted-foreground">{step.detail}</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {isDebrief ? (
-          <Button size="lg" className="gap-2" onClick={scrollToDebrief}>
-            Go to the debrief <ArrowRight className="h-4 w-4" />
+          <Button size="lg" className="h-12 gap-2 px-6 text-base" onClick={scrollToDebrief}>
+            Go to the debrief <ArrowRight className="h-5 w-5" />
           </Button>
         ) : (
           <>
-            <Button asChild size="lg" className="gap-2">
+            <Button asChild size="lg" className="h-12 gap-2 px-6 text-base">
               <Link to={step.href}>
-                {label} <ArrowRight className="h-4 w-4" />
+                {step.status === 'in-progress' ? 'Continue' : 'Start'} <ArrowRight className="h-5 w-5" />
               </Link>
             </Button>
-            <Button variant="ghost" onClick={() => onSkip(step.id)} disabled={busy} className="gap-1.5 text-muted-foreground">
+            <Button variant="ghost" onClick={() => onSkip(step.id)} disabled={busy} className="ml-auto gap-1.5 text-muted-foreground">
               <SkipForward className="h-4 w-4" /> Skip step
             </Button>
           </>
         )}
       </div>
-      {step.id === 'warmup' && (
-        <>
-          <EnvelopeRow e={state.envelope} />
-          {state.recognize && !state.refresh.on && (
-            <RecognizeRow r={state.recognize} note={state.stepNotes.recognize} pending={state.aiPending.includes('recognize')} />
-          )}
-        </>
-      )}
+      {step.id === 'warmup' && <WarmupExtras state={state} />}
     </div>
   );
 }
 
-/** Refresh on: one line and one button. The full panel is in "Show all steps". */
+/** Refresh on: one line and one button. The controls are in "Show all steps". */
 function RefreshLine({ r }: { r: TodayState['refresh'] }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-violet-500/40 bg-violet-500/5 px-3 py-2">
-      <RefreshCw className="h-4 w-4 text-violet-400" aria-hidden />
+    <div className="flex flex-wrap items-center gap-3 rounded-lg bg-secondary/60 px-3 py-2">
+      <RefreshCw className="h-4 w-4 text-primary" aria-hidden />
       <p className="min-w-0 flex-1 text-sm font-semibold">
-        Refresh day {r.day} of {r.total} — {r.label}
+        Refresh day {r.day} of {r.total} · {r.label}
+        {r.dayComplete && <span className="ml-2 text-xs font-normal text-emerald-400">done · next pattern tomorrow</span>}
       </p>
       <Button asChild size="sm" variant="outline" className="gap-1">
         <Link to={r.pattern ? patternHref(r.pattern) : '/patterns'}>
@@ -645,13 +672,14 @@ function RefreshLine({ r }: { r: TodayState['refresh'] }) {
 
 function SpendLine({ state }: { state: TodayState }) {
   return (
-    <p className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-      <Coins className="h-3.5 w-3.5" aria-hidden /> AI ${state.spend.todayUsd.toFixed(2)} today · ${state.spend.monthUsd.toFixed(2)} this
-      month · {state.spend.todayCalls} calls today
+    <p className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground" title={`${state.spend.todayCalls} AI calls today`}>
+      <Coins className="h-3.5 w-3.5" aria-hidden /> AI ${state.spend.todayUsd.toFixed(2)} today · ${state.spend.monthUsd.toFixed(2)} this month
       {!state.aiReviews && <span className="ml-1 rounded bg-secondary px-1.5 py-0.5 text-[10px]">reviews off</span>}
     </p>
   );
 }
+
+const quietLink = 'tap-link inline-flex items-center gap-1.5 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline';
 
 /** Everything else about today, behind one disclosure. */
 function DayDetails({
@@ -666,87 +694,101 @@ function DayDetails({
   const [open, setOpen] = useState(() => stepsOpenByDefault(state));
   const canEndEarly = !state.endedEarly && state.current !== null && state.current !== 'debrief';
   return (
-    <div className="space-y-3">
+    <div className="space-y-4 border-t border-border pt-2">
       <button
         type="button"
         aria-expanded={open}
         aria-controls="today-steps"
         onClick={() => setOpen((v) => !v)}
-        className="flex min-h-11 w-full items-center gap-1 rounded-md px-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        className="flex min-h-11 w-full items-center gap-2 rounded-md px-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         {open ? <ChevronUp className="h-4 w-4" aria-hidden /> : <ChevronDown className="h-4 w-4" aria-hidden />}
         {open ? 'Hide steps' : 'Show all steps'}
-        <span className="ml-auto text-xs">
+        {/* The day at a glance: one dot per step. */}
+        <span className="ml-auto flex items-center gap-1" aria-hidden>
+          {state.steps.map((s) => (
+            <span
+              key={s.id}
+              className={cn(
+                'h-2 w-2 rounded-full',
+                s.status === 'done' && 'bg-emerald-400',
+                (s.status === 'current' || s.status === 'in-progress') && 'bg-primary',
+                (s.status === 'skipped' || s.status === 'locked' || s.status === 'todo') && 'bg-secondary',
+              )}
+            />
+          ))}
+        </span>
+        <span className="sr-only">
           {state.completed} of {state.total} done
         </span>
       </button>
       {open && (
-        <div id="today-steps" className="space-y-3">
-          <ol className="space-y-2.5">
+        <div id="today-steps" className="space-y-4">
+          <ol className="divide-y divide-border overflow-hidden rounded-lg border border-border">
             {state.steps.map((s, i) => (
               <StepRow
                 key={s.id}
                 step={s}
                 index={i}
                 busy={busy}
-                hideActions={s.id === state.current}
-                onSkip={() => act(() => skipTodayStep(s.id, true))}
                 onUnskip={() => act(() => skipTodayStep(s.id, false))}
                 offToday={!!s.off || (state.quick && QUICK_OFF_STEPS.includes(s.id) && s.status === 'skipped')}
-                lockedText={state.refresh.on ? 'Unlocks once today’s pattern steps are done or skipped (or end the day early).' : undefined}
+                lockedText={state.refresh.on ? 'Unlocks after today’s pattern steps.' : undefined}
                 note={isNoteId(s.id) ? state.stepNotes[s.id] : undefined}
                 notePending={isNoteId(s.id) && state.aiPending.includes(s.id)}
                 extra={
                   s.id === 'warmup' && s.id !== state.current ? (
-                    <>
-                      <EnvelopeRow e={state.envelope} />
-                      {state.recognize && !state.refresh.on && (
-                        <RecognizeRow r={state.recognize} note={state.stepNotes.recognize} pending={state.aiPending.includes('recognize')} />
-                      )}
-                    </>
+                    <div className="pl-10">
+                      <WarmupExtras state={state} />
+                    </div>
                   ) : undefined
                 }
               />
             ))}
           </ol>
 
-          <RefreshPanel state={state} busy={busy} onToggle={(on) => void act(() => setTodayRefresh(on))} />
-
-          {!state.refresh.on && (
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
-              <Timer className="h-4 w-4 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <div className="font-medium">30-min day {state.quick && <span className="text-xs text-emerald-400">on</span>}</div>
-                <div className="text-xs text-muted-foreground">
-                  Warm-up cards + Envelope ×3, one problem, the debrief (no concept rep, Problem 2 or mock). Streak and spacing are kept; review problems stay due.
-                </div>
-              </div>
-              <Button size="sm" variant={state.quick ? 'outline' : 'secondary'} disabled={busy} onClick={() => act(() => setTodayQuick(!state.quick))}>
-                {state.quick ? 'Back to the full day' : 'Short on time'}
-              </Button>
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            <Link to="/patterns" className="tap-link underline-offset-4 hover:underline">
-              Pattern shapes →
-            </Link>
+          <div className="divide-y divide-border rounded-lg border border-border">
+            <RefreshOption state={state} busy={busy} onToggle={(on) => void act(() => setTodayRefresh(on))} />
             {!state.refresh.on && (
-              <Link to="/stories" className="tap-link underline-offset-4 hover:underline">
-                Story forge — draft a behavioral story by voice →
-              </Link>
+              <OptionRow
+                icon={Timer}
+                label={<>30-min day {state.quick && <span className="text-xs font-normal text-emerald-400">on</span>}</>}
+                caption="Warm-up, one problem, the debrief. Streak kept."
+              >
+                <Button size="sm" variant={state.quick ? 'outline' : 'secondary'} disabled={busy} onClick={() => act(() => setTodayQuick(!state.quick))}>
+                  {state.quick ? 'Back to the full day' : 'Short on time'}
+                </Button>
+              </OptionRow>
             )}
-            {!state.refresh.on && <span className="ml-auto">Today's mock: {mockKindInfo(state.mockKind).label}</span>}
           </div>
 
-          <SpendLine state={state} />
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <Link to="/patterns" className={quietLink}>
+              <Shapes className="h-3.5 w-3.5" aria-hidden /> Pattern shapes
+            </Link>
+            {!state.refresh.on && (
+              <Link to="/stories" className={quietLink} title="Draft a behavioral story by voice">
+                <Mic className="h-3.5 w-3.5" aria-hidden /> Story forge
+              </Link>
+            )}
+            {!state.refresh.on && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                <MessagesSquare className="h-3.5 w-3.5" aria-hidden /> Today’s mock: {mockKindInfo(state.mockKind).label}
+              </span>
+            )}
+            <span className="ml-auto">
+              <SpendLine state={state} />
+            </span>
+          </div>
 
           {(canEndEarly || (state.endedEarly && state.current !== null)) && (
-            <div className="flex flex-wrap items-center gap-3 text-sm">
+            <div className="flex flex-wrap items-center gap-3">
               {canEndEarly && (
                 <Button
-                  variant="outline"
+                  variant="ghost"
+                  size="sm"
                   disabled={busy}
+                  className="text-muted-foreground"
                   onClick={() => {
                     if (window.confirm('End the day early? Unfinished steps are skipped and the debrief unlocks.')) {
                       void act(() => endTodayEarly(true));
@@ -757,7 +799,7 @@ function DayDetails({
                 </Button>
               )}
               {state.endedEarly && state.current !== null && (
-                <Button variant="ghost" disabled={busy} onClick={() => act(() => endTodayEarly(false))}>
+                <Button variant="ghost" size="sm" disabled={busy} onClick={() => act(() => endTodayEarly(false))}>
                   Resume the day
                 </Button>
               )}
@@ -769,24 +811,26 @@ function DayDetails({
   );
 }
 
-/** "Coming up": interview loops (collapsed) and the review problems due. */
+/** "Coming up": interview loops and the review problems due. */
 function ComingUp({ state, week, onLoopsChange }: { state: TodayState; week: WeeklyResponse | null; onLoopsChange: () => void }) {
   const due = week ? week.reviewDue.reduce((n, r) => n + r.due, 0) : 0;
   return (
     <section aria-label="Coming up" className="space-y-2">
-      <h2 className="px-1 text-sm font-semibold text-muted-foreground">Coming up</h2>
+      <h2 className="flex items-center gap-2 px-1 text-sm font-semibold text-muted-foreground">
+        <CalendarClock className="h-4 w-4" aria-hidden /> Coming up
+      </h2>
       <InterviewsPanel today={state.date} onChange={onLoopsChange} />
       {week && (
-        <p className="flex items-center gap-2 px-1 text-sm">
+        <p className="flex min-h-11 items-center gap-2 px-1 text-sm">
           <Repeat className="h-4 w-4 text-muted-foreground" aria-hidden />
           {due === 0 ? (
-            <span className="text-muted-foreground">No review problems due.</span>
+            <span className="text-muted-foreground">No reviews due. All caught up.</span>
           ) : (
             <>
               <span>
-                {due} review {due === 1 ? 'problem' : 'problems'} due
+                <span className="font-semibold">{due}</span> review {due === 1 ? 'problem' : 'problems'} due
               </span>
-              <Link to="/grind" className="tap-link text-primary underline-offset-4 hover:underline">
+              <Link to="/grind" className="tap-link ml-auto text-primary underline-offset-4 hover:underline">
                 Grind them →
               </Link>
             </>
