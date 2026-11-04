@@ -187,26 +187,34 @@ for (let end = 0; end < nums.length; end++) {
     bigO: "O(log n)",
     topics: ["binary-search"],
     spot: "sorted input, or the answer has a cutoff: every value below it fails and every value above it works (\"minimum speed to finish in h hours\").",
-    shape: "keep a range `[lo, hi]`, check the middle, throw away the half that can't hold the answer.",
-    code: `// Find target in a sorted array
-let lo = 0, hi = nums.length - 1;
-while (lo <= hi) {
-  const mid = Math.floor((lo + hi) / 2);
-  if (nums[mid] === target) return mid;
-  if (nums[mid] < target) lo = mid + 1;
-  else hi = mid - 1;
-}
-return -1;
-
-// Binary search on the ANSWER: smallest x where works(x) is true
-let lo = minPossible, hi = maxPossible;
+    shape: "one template: find the **first true** in F F F T T T. Ask \"what's my T?\", then `hi = mid` on T, `lo = mid + 1` on F, return `lo`.",
+    code: `// The template: first index where isT(i) is true
+let lo = 0, hi = nums.length;          // half-open [lo, hi)
 while (lo < hi) {
   const mid = Math.floor((lo + hi) / 2);
-  if (works(mid)) hi = mid;             // mid works → answer is mid or smaller
-  else lo = mid + 1;                   // mid fails → answer is bigger
+  if (isT(mid)) hi = mid;              // T → answer is mid or left of it
+  else lo = mid + 1;                   // F → answer is right of mid
+}
+return lo;                             // nums.length if there's no T
+
+// Find target in a sorted array: T = nums[mid] >= target
+let lo = 0, hi = nums.length;
+while (lo < hi) {
+  const mid = Math.floor((lo + hi) / 2);
+  if (nums[mid] >= target) hi = mid;
+  else lo = mid + 1;
+}
+return nums[lo] === target ? lo : -1;  // lo may be n; nums[n] is undefined, safe
+
+// Binary search on the ANSWER: T = works(x)
+let lo = minPossible, hi = maxPossible; // hi must be a value that works
+while (lo < hi) {
+  const mid = Math.floor((lo + hi) / 2);
+  if (works(mid)) hi = mid;
+  else lo = mid + 1;
 }
 return lo;`,
-    trap: "mixing the two loop styles. `lo <= hi` goes with `mid ± 1`; `lo < hi` goes with `hi = mid`. Pick one pair and stick to it.",
+    trap: "T has to stay true once it turns true (F F F T T T, never T F T). Same three lines every time: `lo < hi`, `hi = mid`, `lo = mid + 1`. Never `mid - 1`. For the index search, `lo` can come back as `nums.length`, so check it before using it.",
     note: "`(lo + hi) >> 1` is the same (right shift = halve, round down) and fine for array indexes; in JS it breaks above ~2.1 billion because `>>` works on 32-bit ints, so use `Math.floor` (or `>>> 1`) when searching a huge answer range.",
   },
   {
