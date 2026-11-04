@@ -28,6 +28,8 @@ const MOCK_SOURCE = readFileSync(fileURLToPath(new URL('./llm.mock.ts', import.m
 const DEBRIEF_SOURCE = readFileSync(fileURLToPath(new URL('./llm.debrief.ts', import.meta.url)), 'utf8');
 // The Recognize drill's optional AI check, same rules.
 const RECOGNIZE_SOURCE = readFileSync(fileURLToPath(new URL('./llm.recognize.ts', import.meta.url)), 'utf8');
+// The /patterns "Check it" grade.
+const PATTERNS_SOURCE = readFileSync(fileURLToPath(new URL('./llm.patterns.ts', import.meta.url)), 'utf8');
 // Phase F's automatic reviews (card grading, step reviews).
 const REVIEW_SOURCE = readFileSync(fileURLToPath(new URL('./llm.review.ts', import.meta.url)), 'utf8');
 // Phase G's Envelope miss note.
@@ -145,6 +147,25 @@ describe('llm.recognize.ts stays vendor-free too', () => {
 
   it('makes exactly one call, small role, thinking off, explicit budget', () => {
     const calls = RECOGNIZE_SOURCE.match(/await structured\(\{[\s\S]*?\n\s*\}\);/g) ?? [];
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatch(/role: 'small'/);
+    expect(calls[0]).toMatch(/thinking: 'off'/);
+    expect(calls[0]).toMatch(/maxTokens: \d+/);
+  });
+});
+
+describe('llm.patterns.ts stays vendor-free too', () => {
+  const h = (p: RegExp) => hits(p, PATTERNS_SOURCE);
+
+  it('has no "provider", no SDK, no wire format and no model name', () => {
+    expect(h(/provider/i)).toEqual([]);
+    expect(h(/@anthropic-ai\/sdk|openai|from '\.\/llm\.anthropic/)).toEqual([]);
+    expect(h(/messages\.create|input_schema|cache_control|type: 'ephemeral'/)).toEqual([]);
+    expect(h(/claude-|ANTHROPIC_MODEL|ANTHROPIC_API_KEY/)).toEqual([]);
+  });
+
+  it('makes exactly one call, small role, thinking off, explicit budget', () => {
+    const calls = PATTERNS_SOURCE.match(/await structured\(\{[\s\S]*?\n\s*\}\);/g) ?? [];
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatch(/role: 'small'/);
     expect(calls[0]).toMatch(/thinking: 'off'/);

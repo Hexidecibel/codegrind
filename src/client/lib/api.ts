@@ -2,7 +2,7 @@
 // contract type from @/shared/types. Errors surface as thrown Error objects
 // (the server responds `{ error: string }` on failure).
 
-import type { PatternId, PatternsState } from '@/shared/pattern-shapes';
+import type { PatternCheck, PatternId, PatternsState } from '@/shared/pattern-shapes';
 import type { ClosenessStats } from '@/shared/closeness';
 import type { WeeklyResponse } from '@/shared/weekly';
 import type {
@@ -686,6 +686,14 @@ export function gradePatternRecall(id: PatternId, grade: 'got' | 'shaky' | 'miss
   return request<PatternsState>(`/api/patterns/${encodeURIComponent(id)}/recall`, {
     method: 'POST',
     body: JSON.stringify({ grade, answer }),
+  });
+}
+
+/** POST /api/patterns/:id/check — "Check it": the model suggests a grade. One small call; saves nothing. */
+export function checkPatternRecall(patternId: PatternId, answer: string): Promise<PatternCheck> {
+  return request<PatternCheck>(`/api/patterns/${encodeURIComponent(patternId)}/check`, {
+    method: 'POST',
+    body: JSON.stringify({ patternId, answer }),
   });
 }
 

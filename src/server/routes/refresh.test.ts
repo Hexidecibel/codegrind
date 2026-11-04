@@ -14,6 +14,11 @@ import path from 'node:path';
 
 const fake = vi.hoisted(() => ({ runDebrief: vi.fn() }));
 vi.mock('../services/llm.debrief.js', () => fake);
+const fakeCheck = vi.hoisted(() => ({ runPatternCheck: vi.fn() }));
+vi.mock('../services/llm.patterns.js', async (orig) => ({
+  ...(await orig<typeof import('../services/llm.patterns.js')>()),
+  runPatternCheck: fakeCheck.runPatternCheck,
+}));
 
 const TEST_DATA_DIR = mkdtempSync(path.join(tmpdir(), 'codegrind-refresh-test-'));
 if (!TEST_DATA_DIR.startsWith(tmpdir())) throw new Error('refusing to run outside tmpdir');
@@ -151,5 +156,43 @@ describe('/api/patterns', () => {
     const s = await (await post('/api/patterns/monotonic-stack/recall', { grade: 'shaky', answer: 'while (...) pop' })).json();
     expect(s.cards).toContainEqual(expect.objectContaining({ id: 'monotonic-stack' }));
     expect((await post('/api/patterns/bit-manipulation/view')).status).toBe(200);
+  });
+});
+
+describe('POST /api/patterns/:id/check', () => {
+  const META = { servedModel: 'claude-haiku-5-5', usage: { inputTokens: 900, outputTokens: 120, cachedInputTokens: 0 } };
+  beforeEach(() => fakeCheck.runPatternCheck.mockReset());
+
+  it('grades the attempt against the card and returns the suggestion; saves nothing', async () => {
+    const result = { suggested: 'shaky', slips: ['`inWindow[fast]` keys by index; you want `inWindow[nums[fast]]`'], shapeRight: true };
+    fakeCheck.runPatternCheck.mockResolvedValue({ result, meta: META });
+    const res = await post('/api/patterns/sliding-window/check', { patternId: 'sliding-window', answer: 'for (let fast = 0; ...)' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(result);
+    const arg = fakeCheck.runPatternCheck.mock.calls[0][0];
+    expect(arg.card.title).toBe('Sliding window');
+    expect(arg.answer).toBe('for (let fast = 0; ...)');
+    expect((await (await app.request('/api/patterns')).json()).cards).toEqual([]);
+  });
+
+  it('caps a long answer before the call', async () => {
+    fakeCheck.runPatternCheck.mockResolvedValue({ result: { suggested: 'got', slips: [], shapeRight: true }, meta: META });
+    await post('/api/patterns/heap/check', { answer: 'y'.repeat(10_000) });
+    expect(fakeCheck.runPatternCheck.mock.calls[0][0].answer).toHaveLength(4000);
+  });
+
+  it('unknown ids 404 and an empty answer 400, with no model call', async () => {
+    expect((await post('/api/patterns/nope/check', { answer: 'for ...' })).status).toBe(404);
+    expect((await post('/api/patterns/heap/check', { answer: '   ' })).status).toBe(400);
+    expect((await post('/api/patterns/heap/check', {})).status).toBe(400);
+    expect(fakeCheck.runPatternCheck).not.toHaveBeenCalled();
+  });
+
+  it('a failed or malformed check is a 502 with an error message', async () => {
+    fakeCheck.runPatternCheck.mockRejectedValue(new Error('boom'));
+    const res = await post('/api/patterns/heap/check', { answer: 'heap.push(x)' });
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toBeTruthy();
+    fakeCheck.runPatternCheck.mockReset();
   });
 });

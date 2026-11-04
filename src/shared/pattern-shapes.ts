@@ -680,3 +680,11 @@ export interface PatternsState {
   /** Due now, oldest-due first. */
   due: PatternId[];
 }
+
+/** POST /api/patterns/:id/check — the model's read of one "write it from memory" attempt. */
+export interface PatternCheck {
+  suggested: 'got' | 'shaky' | 'missed';
+  /** One short line per real bug, naming the exact spot. Empty = no slips. */
+  slips: string[];
+  shapeRight: boolean;
+}

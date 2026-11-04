@@ -8,6 +8,9 @@
 // "Write it from memory" per card: the template is hidden, you type the
 // skeleton, Compare shows yours beside the template, and a got / shaky /
 // missed self-grade moves a spaced-repetition card (gap-card ladder). Free.
+// "Check it" (typed attempts only, so never on a phone) asks the model for a
+// suggested grade + the exact slips and highlights that grade's button; the
+// user still picks. One small call per click.
 //
 // Opened from Today (`?from=today&step=relearn|recall|warmup`): Re-learn
 // records the view, Recall opens the card in recall mode, and the
@@ -15,7 +18,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, Check, Eye, Mic, PencilLine, Shapes, Zap } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, Eye, Loader2, Mic, PencilLine, Shapes, Sparkles, X, Zap } from 'lucide-react';
 import { useIsPhone } from '@/client/hooks/useMediaQuery';
 import {
   PATTERN_SHAPES,
@@ -23,13 +26,14 @@ import {
   isPatternId,
   practiceHref,
   practiceTopicOf,
+  type PatternCheck,
   type PatternId,
   type PatternRecallCard,
   type PatternShape,
   type PatternsState,
 } from '@/shared/pattern-shapes';
 import { GAP_CARD_LADDER_DAYS } from '@/shared/gap-cards';
-import { getPatterns, gradePatternRecall, viewPattern } from '@/client/lib/api';
+import { checkPatternRecall, getPatterns, gradePatternRecall, viewPattern } from '@/client/lib/api';
 import { todayStepFrom } from '@/client/lib/today-flow';
 import { TodayNextBar } from '@/client/components/TodayNextBar';
 import { humanize } from '@/client/lib/format';
@@ -111,6 +115,38 @@ function dueWords(card: PatternRecallCard | undefined): string | null {
   return `next recall in ${days} day${days === 1 ? '' : 's'}`;
 }
 
+const GRADE_WORDS = { got: 'Got it', shaky: 'Shaky', missed: 'Missed' } as const;
+const GRADE_TONE = { got: 'text-emerald-300', shaky: 'text-amber-300', missed: 'text-rose-300' } as const;
+
+/** "Check it" result: one line with the suggested grade, then the slips (or "No slips"). */
+function CheckResult({ check }: { check: PatternCheck }) {
+  return (
+    <div className="space-y-1.5 rounded-md border border-border bg-black/20 px-3 py-2 text-sm">
+      <div className="flex items-center gap-1.5">
+        <Sparkles className="h-4 w-4 text-primary" />
+        <span className={cn('font-semibold', GRADE_TONE[check.suggested])}>{GRADE_WORDS[check.suggested]}</span>
+        <span className="text-xs text-muted-foreground">· shape {check.shapeRight ? '✓' : '✗'}</span>
+      </div>
+      {check.slips.length === 0 ? (
+        <p className="flex items-center gap-1.5 text-emerald-300">
+          <Check className="h-4 w-4" /> No slips
+        </p>
+      ) : (
+        <ul className="space-y-1">
+          {check.slips.map((s, i) => (
+            <li key={i} className="flex gap-1.5 leading-snug">
+              <X className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />
+              <span>
+                <Inline text={s} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function PatternCard({
   p,
   card,
@@ -132,7 +168,36 @@ function PatternCard({
   const [busy, setBusy] = useState(false);
   const [graded, setGraded] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [check, setCheck] = useState<PatternCheck | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
   const status = dueWords(card);
+  // Only a typed attempt can be checked, so a phone (no textarea) never sees it.
+  const canCheck = !sayIt && answer.trim() !== '' && !check;
+
+  const runCheck = async () => {
+    setChecking(true);
+    setCheckError(null);
+    try {
+      setCheck(await checkPatternRecall(p.id, answer));
+      setCompared(true);
+    } catch (e) {
+      setCheckError((e as Error).message);
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const checkButton = (
+    <Button variant="secondary" disabled={checking || busy} onClick={() => void runCheck()} className="gap-1.5">
+      {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+      {checking ? 'Checking…' : 'Check it'}
+    </Button>
+  );
+  const checkErrorLine = checkError && <p className="w-full text-xs text-destructive-foreground">{checkError}</p>;
+  /** The suggested grade's button gets a ring; every button stays clickable. */
+  const suggest = (g: 'got' | 'shaky' | 'missed') =>
+    check && (check.suggested === g ? 'ring-2 ring-primary ring-offset-2 ring-offset-background' : 'opacity-60');
 
   const grade = async (g: 'got' | 'shaky' | 'missed') => {
     setBusy(true);
@@ -161,6 +226,8 @@ function PatternCard({
     setCompared(false);
     setGraded(null);
     setError(null);
+    setCheck(null);
+    setCheckError(null);
   };
 
   return (
@@ -247,9 +314,11 @@ function PatternCard({
                 <Button onClick={() => setCompared(true)} className="gap-1.5">
                   <Eye className="h-4 w-4" /> Compare
                 </Button>
+                {canCheck && checkButton}
                 <Button variant="ghost" className="text-muted-foreground" onClick={() => onRecallOpen(false)}>
                   Cancel
                 </Button>
+                {checkErrorLine}
               </div>
             </>
           ) : (
@@ -283,15 +352,23 @@ function PatternCard({
                 </div>
               ) : (
                 <div className="space-y-1.5">
-                  <div className="text-xs text-muted-foreground">How close was yours? Be strict: the shape, not the names.</div>
+                  {check ? (
+                    <CheckResult check={check} />
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="text-xs text-muted-foreground">How close was yours? Be strict: the shape, not the names.</div>
+                      {canCheck && checkButton}
+                      {checkErrorLine}
+                    </div>
+                  )}
                   <div className={cn('flex flex-wrap gap-2', sayIt && 'grid grid-cols-3')}>
-                    <Button size="sm" disabled={busy} onClick={() => void grade('got')} className="bg-emerald-600 text-white hover:bg-emerald-500">
+                    <Button size="sm" disabled={busy} onClick={() => void grade('got')} className={cn('bg-emerald-600 text-white hover:bg-emerald-500', suggest('got'))}>
                       Got it
                     </Button>
-                    <Button size="sm" disabled={busy} variant="secondary" onClick={() => void grade('shaky')}>
+                    <Button size="sm" disabled={busy} variant="secondary" className={cn(suggest('shaky'))} onClick={() => void grade('shaky')}>
                       Shaky
                     </Button>
-                    <Button size="sm" disabled={busy} variant="outline" className="border-rose-500/50 text-rose-300" onClick={() => void grade('missed')}>
+                    <Button size="sm" disabled={busy} variant="outline" className={cn('border-rose-500/50 text-rose-300', suggest('missed'))} onClick={() => void grade('missed')}>
                       Missed
                     </Button>
                   </div>

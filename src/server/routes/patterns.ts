@@ -1,19 +1,20 @@
 // =============================================================================
-// routes/patterns — the /patterns page (pattern shapes) — all free
+// routes/patterns — the /patterns page (pattern shapes) — free except "Check it"
 // =============================================================================
 //   GET  /api/patterns                 recall cards + what is due
 //   POST /api/patterns/:id/view        a card was opened (Today's Re-learn)
 //   POST /api/patterns/:id/recall      {grade: got|shaky|missed, answer?} self-grade
+//   POST /api/patterns/:id/check       {answer}  "Check it": ONE small model call, on click
 
 import { Hono, type Context } from 'hono';
-import { PatternsError, gradeRecall, patternsState, viewPattern } from '../services/patterns.service.js';
+import { PatternsError, checkRecall, gradeRecall, patternsState, viewPattern } from '../services/patterns.service.js';
 import { errorBody } from '../services/explain.service.js';
 
 export const patternsRoutes = new Hono();
 
 function fail(c: Context, tag: string, err: unknown) {
   if (err instanceof PatternsError) return c.json({ error: err.message }, err.status);
-  return c.json(errorBody(tag, err), 500);
+  return c.json(errorBody(tag, err), tag === 'patterns-check' ? 502 : 500);
 }
 
 patternsRoutes.get('/patterns', (c) => {
@@ -38,5 +39,14 @@ patternsRoutes.post('/patterns/:id/recall', async (c) => {
     return c.json(gradeRecall(c.req.param('id'), body));
   } catch (err) {
     return fail(c, 'patterns-recall', err);
+  }
+});
+
+patternsRoutes.post('/patterns/:id/check', async (c) => {
+  try {
+    const body = (await c.req.json().catch(() => ({}))) as { answer?: unknown };
+    return c.json(await checkRecall(c.req.param('id'), body));
+  } catch (err) {
+    return fail(c, 'patterns-check', err);
   }
 });
