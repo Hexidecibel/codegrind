@@ -15,6 +15,7 @@ import { LanguagePicker } from '@/client/components/LanguagePicker';
 import { SolveSurface } from '@/client/components/SolveSurface';
 import { ProblemPanel } from '@/client/components/ProblemPanel';
 import { BestOnIpad, useIpadGate } from '@/client/components/BestOnIpad';
+import { isPatternId, type PatternId } from '@/shared/pattern-shapes';
 
 /**
  * Where /manual opens when the bank cannot suggest anything.
@@ -54,6 +55,9 @@ const TODAY_ASSISTANCE: AssistanceSettings = { level: 2, overrides: presetToOver
  * Deep links into Manual (all optional, never stored as the preference):
  *
  *   ?topic=<topic>&difficulty=<difficulty>   open on that slot ("Practice this")
+ *   &pattern=<PatternId>                     generate one that uses that /patterns card's
+ *                                            pattern (the bank can't match a pattern);
+ *                                            dropped when the player picks another topic
  *   ?problem=<id>                            open that exact problem (a cold review)
  *   ?hide=1                                  topic hidden until the first submit
  *   ?from=today&step=<id>                    the Today routine: Minimal editor + the "Next" bar
@@ -90,6 +94,7 @@ function Workspace({ search, readOnly = false }: { search: string; readOnly?: bo
     const q = new URLSearchParams(search);
     const topic = q.get('topic');
     const difficulty = q.get('difficulty');
+    const pattern = q.get('pattern');
     return {
       slot:
         topic && (TOPICS as readonly string[]).includes(topic)
@@ -98,6 +103,7 @@ function Workspace({ search, readOnly = false }: { search: string; readOnly?: bo
               difficulty: (DIFFICULTIES as readonly string[]).includes(difficulty ?? '') ? (difficulty as Difficulty) : ('easy' as Difficulty),
             }
           : null,
+      pattern: isPatternId(pattern) ? pattern : null,
       problemId: q.get('problem'),
       hide: q.get('hide') === '1',
       todayStep: todayStepFrom(search),
@@ -123,6 +129,7 @@ function Workspace({ search, readOnly = false }: { search: string; readOnly?: bo
         : null),
   );
   const [submitted, setSubmitted] = useState(0);
+  const [pattern, setPattern] = useState<PatternId | null>(link.pattern);
 
   const [problem, setProblem] = useState<Problem | null>(null);
   const [loadingProblem, setLoadingProblem] = useState(false);
@@ -172,12 +179,14 @@ function Workspace({ search, readOnly = false }: { search: string; readOnly?: bo
     async (fresh: boolean, target?: { topic: Topic; difficulty: Difficulty }) => {
       const where = target ?? slot;
       if (!where) return;
+      // A pattern link always generates: banked problems don't know their card.
+      const generate = fresh || pattern !== null;
       setError(null);
-      if (fresh) setGenerating(true);
+      if (generate) setGenerating(true);
       else setLoadingProblem(true);
       try {
-        const p = fresh
-          ? await generateProblem(where.topic, where.difficulty)
+        const p = generate
+          ? await generateProblem(where.topic, where.difficulty, pattern ?? undefined)
           : await nextProblem(where.topic, where.difficulty);
         setProblem(p);
       } catch (err) {
@@ -197,7 +206,7 @@ function Workspace({ search, readOnly = false }: { search: string; readOnly?: bo
           .catch(() => {});
       }
     },
-    [slot],
+    [slot, pattern],
   );
 
   // Auto-load the first problem once — but only after the slot is known, which
@@ -236,6 +245,7 @@ function Workspace({ search, readOnly = false }: { search: string; readOnly?: bo
   const pickTopic = useCallback(
     (topic: Topic) => {
       setStoredTopic(topic);
+      setPattern(null);
       setSlot((prev) => ({
         topic,
         difficulty: prev?.difficulty ?? FALLBACK_SLOT.difficulty,

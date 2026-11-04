@@ -8,8 +8,10 @@
 //
 // Each pattern maps to the curriculum's topic ids (shared/types TOPICS) so
 // links go both ways: a topic → its card (`patternForTopic`), a card → Manual
-// at that topic (`topics[0]`). Prefix sum and fast & slow have no topic of
-// their own; they still get cards, just no "Practice this".
+// at that topic (`practiceTopicOf`) with `pattern=<id>`, so the generated
+// problem uses that card's pattern. Prefix sum and fast & slow have no topic
+// of their own; they practise on `practiceTopic` (hashing, linked-list), which
+// `patternForTopic` never reads, so those topics keep their general cards.
 // Two cards can share a topic (stack + monotonic stack, BFS + topo sort +
 // union-find on graphs); `patternForTopic` returns the FIRST card in
 // PATTERN_SHAPES order, so the older general card keeps the topic.
@@ -31,6 +33,8 @@ export interface PatternShape {
   bigO: string;
   /** Curriculum topics this pattern is the shape for; [0] is the "Practice this" topic. */
   topics: Topic[];
+  /** "Practice this" topic for a card with no `topics` of its own; not used by `patternForTopic`. */
+  practiceTopic?: Topic;
   /** Inline markup: `**bold**` and `` `code` ``. */
   spot: string;
   shape: string;
@@ -210,6 +214,7 @@ return lo;`,
     title: "Prefix sum",
     bigO: "O(n)",
     topics: [],
+    practiceTopic: "hashing",
     spot: "sums over ranges, or \"how many subarrays add up to k\".",
     shape: "running total. Sum of `i..j` is `pre[j+1] − pre[i]`. With a hash map of totals seen so far, you can count subarrays in one pass.",
     code: `// Range sums
@@ -381,6 +386,7 @@ return prev1;
     title: "Fast & slow pointers",
     bigO: "O(n) · O(1)",
     topics: [],
+    practiceTopic: "linked-list",
     spot: "linked list cycle, middle of a list, \"happy number\"-style loops.",
     shape: "slow moves 1, fast moves 2. If there's a loop, fast laps slow and they meet. If fast hits the end, there's no loop, and slow is in the middle.",
     code: `let slow = head, fast = head;
@@ -606,9 +612,14 @@ export function patternHref(id: PatternId, query = ''): string {
   return `/patterns${query ? `?${query}` : ''}#${id}`;
 }
 
-/** Manual at the pattern's topic, Easy (the "Practice this" deep link). */
-export function practiceHref(topic: Topic, difficulty = 'easy'): string {
-  return `/manual?topic=${topic}&difficulty=${difficulty}`;
+/** The topic a card's "Practice this" opens Manual at. */
+export function practiceTopicOf(p: PatternShape): Topic {
+  return p.practiceTopic ?? p.topics[0];
+}
+
+/** Manual at the pattern's topic, Easy (the "Practice this" deep link); `pattern` steers generation to that card. */
+export function practiceHref(topic: Topic, difficulty = 'easy', pattern?: PatternId): string {
+  return `/manual?topic=${topic}&difficulty=${difficulty}${pattern ? `&pattern=${pattern}` : ''}`;
 }
 
 // -----------------------------------------------------------------------------

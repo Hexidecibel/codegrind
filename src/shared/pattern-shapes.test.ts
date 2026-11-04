@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PATTERN_IDS, PATTERN_SHAPES, WHICH_ONE, isPatternId, patternForTopic } from './pattern-shapes.js';
+import { PATTERN_IDS, PATTERN_SHAPES, WHICH_ONE, isPatternId, patternForTopic, practiceHref, practiceTopicOf } from './pattern-shapes.js';
 import { TOPICS } from './types.js';
 
 describe('pattern shapes', () => {
@@ -27,5 +27,21 @@ describe('pattern shapes', () => {
     expect(patternForTopic('greedy')?.id).toBe('greedy');
     expect(patternForTopic('linked-list')?.id).toBe('linked-list-reversal');
     expect(patternForTopic('bit-manipulation')?.id).toBe('bit-manipulation');
+  });
+
+  it('every card has a real "Practice this" topic', () => {
+    for (const p of PATTERN_SHAPES) expect(TOPICS).toContain(practiceTopicOf(p));
+    expect(practiceTopicOf(PATTERN_SHAPES.find((p) => p.id === 'prefix-sum')!)).toBe('hashing');
+    expect(practiceTopicOf(PATTERN_SHAPES.find((p) => p.id === 'fast-slow')!)).toBe('linked-list');
+  });
+
+  it('practiceTopic never moves a topic off its general card', () => {
+    expect(patternForTopic('hashing')?.id).toBe('hash-map');
+    expect(patternForTopic('linked-list')?.id).toBe('linked-list-reversal');
+  });
+
+  it('practiceHref carries the pattern id', () => {
+    expect(practiceHref('stack', 'easy', 'monotonic-stack')).toBe('/manual?topic=stack&difficulty=easy&pattern=monotonic-stack');
+    expect(practiceHref('stack', 'medium')).toBe('/manual?topic=stack&difficulty=medium');
   });
 });

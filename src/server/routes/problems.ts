@@ -9,6 +9,7 @@ import {
 import { generateAndStore, getNextProblem, getProblem } from '../services/bank.service.js';
 import { getActiveLanguage } from '../services/db.js';
 import { errorBody } from '../services/explain.service.js';
+import { isPatternId } from '../../shared/pattern-shapes.js';
 
 export const problemsRoutes = new Hono();
 
@@ -19,10 +20,11 @@ function isDifficulty(v: unknown): v is Difficulty {
   return typeof v === 'string' && (DIFFICULTIES as readonly string[]).includes(v);
 }
 
-// POST /api/problems/generate { topic, difficulty } — generate + store, return player-safe view.
+// POST /api/problems/generate { topic, difficulty, pattern? } — generate + store, return player-safe view.
+// `pattern` is a /patterns card id ("Practice this"); an unknown id is ignored.
 problemsRoutes.post('/problems/generate', async (c) => {
   try {
-    const body = await c.req.json<{ topic?: string; difficulty?: string }>();
+    const body = await c.req.json<{ topic?: string; difficulty?: string; pattern?: string }>();
     if (!isTopic(body.topic)) {
       return c.json({ error: `topic must be one of: ${TOPICS.join(', ')}` }, 400);
     }
@@ -33,7 +35,8 @@ problemsRoutes.post('/problems/generate', async (c) => {
     // language is chosen at GENERATION time (it binds the reference solution and
     // every `expected` value), so a client cannot ask for one bank and be graded
     // against another's harness.
-    const record = await generateAndStore(getActiveLanguage(), body.topic, body.difficulty);
+    const pattern = isPatternId(body.pattern) ? body.pattern : undefined;
+    const record = await generateAndStore(getActiveLanguage(), body.topic, body.difficulty, pattern ? { pattern } : undefined);
     return c.json(toPlayerProblem(record));
   } catch (err) {
     // Explained, not echoed: a cold generation that fails does so with an

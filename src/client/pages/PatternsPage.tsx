@@ -22,6 +22,7 @@ import {
   WHICH_ONE,
   isPatternId,
   practiceHref,
+  practiceTopicOf,
   type PatternId,
   type PatternRecallCard,
   type PatternShape,
@@ -303,9 +304,9 @@ function PatternCard({
       )}
 
       <div className="flex flex-wrap gap-2 pt-1">
-        {p.topics[0] && (
+        {practiceTopicOf(p) && (
           <Button asChild size="sm" variant="outline" className="gap-1.5">
-            <Link to={practiceHref(p.topics[0])}>
+            <Link to={practiceHref(practiceTopicOf(p), 'easy', p.id)}>
               <Zap className="h-3.5 w-3.5" /> Practice this (Easy)
             </Link>
           </Button>

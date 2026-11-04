@@ -178,10 +178,11 @@ export function getProblemById(id: string): Promise<Problem> {
 export function generateProblem(
   topic: Topic,
   difficulty: Difficulty,
+  pattern?: PatternId,
 ): Promise<Problem> {
   return request<Problem>('/api/problems/generate', {
     method: 'POST',
-    body: JSON.stringify({ topic, difficulty }),
+    body: JSON.stringify({ topic, difficulty, pattern }),
   });
 }
 

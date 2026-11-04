@@ -35,6 +35,7 @@ import {
 } from './llm.language.js';
 import { renderCarryBlock, type CarryNote } from '../../shared/today.js';
 import { structured, text as textCall } from './llm.client.js';
+import { isPatternId, patternShape, type PatternId } from '../../shared/pattern-shapes.js';
 import {
   LlmToolCallError,
   looksLikeToolCallFraming,
@@ -362,6 +363,8 @@ export interface GenerateProblemOpts {
   avoidTitles?: string[];
   /** Extra freeform steer (e.g. "introduce this pattern gently at easy"). */
   noveltyHint?: string;
+  /** A /patterns card ("Practice this"): the problem must be solved with this pattern. */
+  pattern?: PatternId;
 }
 
 // ---------------------------------------------------------------------------
@@ -422,7 +425,7 @@ ${p.integerRubric}
 referenceSolution must be the INTENDED optimal solution, not a brute force, and the whole hidden suite must run comfortably inside a few seconds.`,
   }));
 
-function buildGenerateUserMessage(
+export function buildGenerateUserMessage(
   language: Language,
   topic: Topic,
   difficulty: Difficulty,
@@ -431,6 +434,12 @@ function buildGenerateUserMessage(
   let msg = `Create one ${difficulty} problem for the topic/pattern "${topic}". Make it self-contained and deterministic so it can be auto-graded.`;
   const brief = DIFFICULTY_BRIEF_BY_LANGUAGE[language][difficulty];
   if (brief) msg += `\n\n${brief}`;
+  // Only a validated PatternId gets here, and only its card's fixed title goes
+  // into the prompt, never text from the request.
+  if (opts?.pattern && isPatternId(opts.pattern)) {
+    const name = patternShape(opts.pattern).title.toLowerCase();
+    msg += `\n\nThe intended solution MUST use the ${name} pattern: pick a problem where ${name} is the natural optimal approach and the referenceSolution uses it. Still do not name the technique in the title or statement.`;
+  }
   if (opts?.variationOf) {
     msg += `\n\nThis should be a VARIATION that drills the SAME core technique as the problem titled "${opts.variationOf.title}" (pattern: ${opts.variationOf.pattern}) — but in a genuinely new scenario/shape (different framing, inputs, or domain), NOT a reworded copy.`;
     if (opts.variationOf.prompt) {
