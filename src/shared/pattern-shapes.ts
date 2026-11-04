@@ -10,6 +10,9 @@
 // links go both ways: a topic → its card (`patternForTopic`), a card → Manual
 // at that topic (`topics[0]`). Prefix sum and fast & slow have no topic of
 // their own; they still get cards, just no "Practice this".
+// Two cards can share a topic (stack + monotonic stack, BFS + topo sort +
+// union-find on graphs); `patternForTopic` returns the FIRST card in
+// PATTERN_SHAPES order, so the older general card keeps the topic.
 //
 // Also here: the 9-day Pattern Refresh plan Today runs (REFRESH_PLAN).
 
@@ -51,6 +54,12 @@ export const PATTERN_IDS = [
   'backtracking',
   'dynamic-programming',
   'fast-slow',
+  'monotonic-stack',
+  'topo-sort',
+  'union-find',
+  'greedy',
+  'linked-list-reversal',
+  'bit-manipulation',
 ] as const;
 export type PatternId = (typeof PATTERN_IDS)[number];
 
@@ -64,7 +73,7 @@ export const WHICH_ONE: readonly WhichOneRow[] = [
   { clue: "longest / shortest **contiguous** substring or subarray that…", pattern: "sliding-window", label: "Sliding window" },
   { clue: "sorted + find; \"minimum X such that…\"; answer has a yes/no cutoff", pattern: "binary-search", label: "Binary search" },
   { clue: "sum of a range; number of subarrays summing to k", pattern: "prefix-sum", label: "Prefix sum" },
-  { clue: "brackets, undo, \"next greater/smaller element\"", pattern: "stack", label: "Stack" },
+  { clue: "brackets, undo, the most recent thing matters", pattern: "stack", label: "Stack" },
   { clue: "shortest path in steps, grid spreading, level by level", pattern: "bfs", label: "BFS" },
   { clue: "trees, explore everything, count islands, paths", pattern: "dfs", label: "DFS" },
   { clue: "top k, k-th largest, merge k sorted, always need the smallest", pattern: "heap", label: "Heap" },
@@ -72,6 +81,12 @@ export const WHICH_ONE: readonly WhichOneRow[] = [
   { clue: "all combinations / subsets / permutations", pattern: "backtracking", label: "Backtracking" },
   { clue: "number of ways, min cost, max profit, choices that build on smaller answers", pattern: "dynamic-programming", label: "DP" },
   { clue: "linked list cycle, middle of list", pattern: "fast-slow", label: "Fast & slow" },
+  { clue: "\"next greater / smaller element\", days until warmer, biggest rectangle in a histogram", pattern: "monotonic-stack", label: "Monotonic stack" },
+  { clue: "prerequisites, build order, \"can all the tasks finish?\"", pattern: "topo-sort", label: "Topological sort" },
+  { clue: "connected components, \"same group?\", which edge makes a cycle", pattern: "union-find", label: "Union-find" },
+  { clue: "fewest / most of something, \"can you reach the end?\", one safe choice at each step", pattern: "greedy", label: "Greedy" },
+  { clue: "reverse a linked list, or part of one (between positions, k at a time)", pattern: "linked-list-reversal", label: "List reversal" },
+  { clue: "every value appears twice except one, count 1 bits, **O(1) extra space**", pattern: "bit-manipulation", label: "Bit manipulation" },
 ];
 
 export const PATTERN_SHAPES: readonly PatternShape[] = [
@@ -217,8 +232,8 @@ for (const x of nums) {
     title: "Stack",
     bigO: "O(n)",
     topics: ["stack"],
-    spot: "matching pairs (brackets), the most recent thing matters, or \"next greater / smaller element\".",
-    shape: "push as you go; pop when the new item resolves the top. For \"next greater\", keep the stack in order and pop everything the new item beats.",
+    spot: "matching pairs (brackets), undo, the most recent thing matters.",
+    shape: "push as you go; pop when the new item resolves the top.",
     code: `// Valid brackets
 const pairs = { ')': '(', ']': '[', '}': '{' };
 const stack = [];
@@ -226,16 +241,9 @@ for (const ch of s) {
   if (!pairs[ch]) stack.push(ch);
   else if (stack.pop() !== pairs[ch]) return false;
 }
-return stack.length === 0;
-
-// Monotonic stack: next greater element for each index
-const ans = Array(nums.length).fill(-1);
-const st = [];                           // indexes still waiting for a bigger value
-for (let i = 0; i < nums.length; i++) {
-  while (st.length && nums[i] > nums[st.at(-1)]) ans[st.pop()] = nums[i];
-  st.push(i);
-}`,
-    trap: "push **indexes**, not values, when you need to fill an answer array or measure distance.",
+return stack.length === 0;`,
+    trap: "skipping the final `stack.length === 0` check. `\"((\"` never fails a pop, but it isn't valid.",
+    note: "\"Next greater / smaller element\"? That's its own card: **Monotonic stack**.",
   },
   {
     id: "bfs",
@@ -383,6 +391,202 @@ while (fast && fast.next) {
 }
 return false;                              // no cycle; slow is the middle`,
     trap: "checking `fast.next.next` without first checking `fast && fast.next` crashes at the end of the list.",
+  },
+  {
+    id: "monotonic-stack",
+    title: "Monotonic stack",
+    bigO: "O(n) time · O(n) space",
+    topics: ["stack"],
+    spot: "\"next greater / smaller element\", \"how many days until it's warmer\", the biggest rectangle in a histogram. Each item waits for the first later item that beats it.",
+    shape: "a **waiting room** of indexes still waiting for a bigger value. Each new value walks in and **pops everyone it beats**: it is their answer. Then it sits down and waits too.",
+    code: `// Next greater element: for each index, the first bigger value to its right
+const ans = Array(nums.length).fill(-1);   // -1 = nobody bigger ever came
+const waiting = [];                         // the waiting room: INDEXES, not values
+                                            // (their values go down, bottom to top)
+
+for (let i = 0; i < nums.length; i++) {
+  // 1. POP: nums[i] beats whoever is on top → nums[i] is their answer
+  while (waiting.length && nums[i] > nums[waiting.at(-1)]) {
+    const j = waiting.pop();                // j was waiting for something bigger
+    ans[j] = nums[i];                       // ...and nums[i] is it
+  }
+  // 2. PUSH: now i waits for its own bigger value
+  waiting.push(i);
+}
+return ans;                                 // anyone still waiting keeps -1
+
+// Daily temperatures: the same loop, but the answer is the WAIT
+//   ans[j] = i - j;                        // days j sat in the waiting room
+
+// Largest rectangle in a histogram: the waiting room holds bars going UP.
+// A shorter bar pops each taller bar: that bar's rectangle ends here.
+heights.push(0);                            // a 0 at the end pops everyone left
+const st = [];
+let best = 0;
+for (let i = 0; i < heights.length; i++) {
+  while (st.length && heights[i] < heights[st.at(-1)]) {
+    const h = heights[st.pop()];            // the popped bar sets the height
+    const left = st.length ? st.at(-1) + 1 : 0;   // it stretches back to just past the new top
+    best = Math.max(best, h * (i - left));  // ...and forward to just before i
+  }
+  st.push(i);
+}
+return best;`,
+    trap: "pushing **values** instead of **indexes**. You need the index to fill `ans[j]` or to measure the wait `i - j`.",
+    note: "Next **smaller**? Flip the pop test to `<`. Circular array? Loop `i` from `0` to `2n - 1` and read `nums[i % n]`.",
+  },
+  {
+    id: "topo-sort",
+    title: "Topological sort",
+    bigO: "O(V + E)",
+    topics: ["graphs"],
+    spot: "tasks with prerequisites, \"course schedule\", build order: one thing must come **before** another.",
+    shape: "count each node's **indegree** (arrows pointing in). Queue every node at 0. Take one, then knock one off each neighbor; a neighbor that hits 0 joins the queue.",
+    code: `// Course schedule: can you finish all n courses? pairs are [course, prereq]
+const graph = Array.from({ length: n }, () => []);
+const indegree = Array(n).fill(0);          // prereqs each course still needs
+for (const [course, pre] of prerequisites) {
+  graph[pre].push(course);                  // arrow: pre → course
+  indegree[course]++;
+}
+
+const queue = [];
+for (let i = 0; i < n; i++) if (indegree[i] === 0) queue.push(i);   // ready now
+
+for (let h = 0; h < queue.length; h++) {    // the queue doubles as the order
+  const node = queue[h];                    // take this course
+  for (const next of graph[node]) {
+    indegree[next]--;                       // one prereq done
+    if (indegree[next] === 0) queue.push(next);   // all done → ready
+  }
+}
+return queue.length === n;                  // fewer than n → a cycle blocked some`,
+    trap: "a cycle never fails loudly. Its nodes just never reach 0, so check **processed count < n** at the end.",
+  },
+  {
+    id: "union-find",
+    title: "Union-find",
+    bigO: "≈ O(1) per call",
+    topics: ["graphs"],
+    spot: "\"number of connected components\", \"are these two in the same group?\", \"which edge makes a cycle\". Groups only ever **merge**.",
+    shape: "every node points at a **parent**; the root names the group. `find` walks up to the root and flattens the path. `union` hangs the smaller tree under the bigger root.",
+    code: `const parent = Array.from({ length: n }, (_, i) => i);   // everyone is their own root
+const size = Array(n).fill(1);
+
+function find(x) {
+  while (parent[x] !== x) {
+    parent[x] = parent[parent[x]];          // path compression: skip to grandparent
+    x = parent[x];
+  }
+  return x;
+}
+
+function union(a, b) {
+  let ra = find(a), rb = find(b);
+  if (ra === rb) return false;              // already in the same group
+  if (size[ra] < size[rb]) [ra, rb] = [rb, ra];
+  parent[rb] = ra;                          // smaller tree under the bigger root
+  size[ra] += size[rb];
+  return true;
+}
+
+// Connected components: start at n, each real merge removes one
+let components = n;
+for (const [a, b] of edges) if (union(a, b)) components--;
+
+// Redundant connection: the first edge whose ends are already joined
+for (const [a, b] of edges) if (!union(a, b)) return [a, b];`,
+    trap: "`parent[a] = b` links the nodes, not the groups. Always `find` both roots first, then link root to root.",
+  },
+  {
+    id: "greedy",
+    title: "Greedy",
+    bigO: "usually O(n log n) (the sort)",
+    topics: ["greedy"],
+    spot: "fewest / most of something, \"can you reach the end?\", and one choice at each step looks obviously safe.",
+    shape: "**sort first** (often by end), then walk once and take the locally best choice. Never go back.",
+    code: `// Non-overlapping intervals: fewest to remove so none overlap
+intervals.sort((a, b) => a[1] - b[1]);      // sort by END: finish early, leave room
+let end = -Infinity, removed = 0;
+for (const [s, e] of intervals) {
+  if (s >= end) end = e;                    // fits → keep it
+  else removed++;                           // overlaps → drop it (it ends later)
+}
+return removed;
+
+// Jump game: can you reach the last index?
+let reach = 0;                              // farthest index reachable so far
+for (let i = 0; i < nums.length; i++) {
+  if (i > reach) return false;              // stuck: i is past what you can reach
+  reach = Math.max(reach, i + nums[i]);
+}
+return true;`,
+    trap: "a greedy that feels right can still be wrong. **Prove it**, or try to break it with a tiny example. If a tiny example breaks it, it's DP.",
+  },
+  {
+    id: "linked-list-reversal",
+    title: "Linked list reversal",
+    bigO: "O(n) time · O(1) space",
+    topics: ["linked-list"],
+    spot: "reverse a list, or part of one (between positions, k at a time), palindrome list.",
+    shape: "three pointers: **prev**, **cur**, **next**. Save next, flip `cur.next` back to prev, step both forward. A **dummy head** saves you from special-casing the first node.",
+    code: `// Reverse the whole list
+let prev = null, cur = head;
+while (cur) {
+  const next = cur.next;                    // 1. save the rest of the list
+  cur.next = prev;                          // 2. flip this arrow backwards
+  prev = cur;                               // 3. step prev forward
+  cur = next;                               // 4. step cur forward
+}
+return prev;                                // prev is the new head
+
+// Reverse between positions left..right (1-based), with a dummy head
+const dummy = { next: head };
+let before = dummy;
+for (let i = 1; i < left; i++) before = before.next;   // node just before the part
+let p = null, c = before.next;
+for (let i = left; i <= right; i++) {       // the same four lines
+  const next = c.next;
+  c.next = p;
+  p = c;
+  c = next;
+}
+before.next.next = c;                       // old first of the part → node after it
+before.next = p;                            // node before → new first of the part
+return dummy.next;`,
+    trap: "setting `cur.next` before saving it loses the rest of the list. **Save next first**, always.",
+    note: "Reverse in **k-groups**: check k nodes exist ahead (fewer → stop), reverse them with the same four lines, reconnect like above, then move `before` to the old first node and repeat.",
+  },
+  {
+    id: "bit-manipulation",
+    title: "Bit manipulation",
+    bigO: "O(n) time · O(1) space",
+    topics: ["bit-manipulation"],
+    spot: "\"every value appears twice except one\", count the 1 bits, powers of two, and **O(1) extra space** with no other trick in sight.",
+    shape: "XOR is a **light switch**: each value flips it, and a pair flips it back. XOR everything and only the odd one out is left on. `n & (n - 1)` drops the lowest 1 bit.",
+    code: `// Single number: every value appears twice except one
+let x = 0;
+for (const v of nums) x ^= v;               // pairs flip back off: a ^ a = 0
+return x;                                   // the one left on
+
+// Count the 1 bits: n & (n - 1) drops the lowest one each time
+let bits = 0;
+while (n !== 0) {
+  n &= n - 1;
+  bits++;
+}
+
+// Counting bits for 0..n: i has one more 1 than i with its lowest 1 dropped
+const ans = [0];
+for (let i = 1; i <= n; i++) ans[i] = ans[i & (i - 1)] + 1;
+
+// Masks
+(n >> i) & 1                                // is bit i set?
+n | (1 << i)                                // turn bit i on
+n & ~(1 << i)                               // turn bit i off
+n > 0 && (n & (n - 1)) === 0                // power of two`,
+    trap: "missing the tell. **O(1) extra space** on a problem a hash map would solve is the hint to think XOR.",
+    note: "`&` binds looser than `===`, so `n & 1 === 0` means `n & (1 === 0)`. Wrap bit math in parentheses.",
   },
 ];
 

@@ -146,4 +146,10 @@ describe('/api/patterns', () => {
     expect((await post('/api/patterns/nope/recall', { grade: 'got' })).status).toBe(404);
     expect((await post('/api/patterns/heap/recall', { grade: 'maybe' })).status).toBe(400);
   });
+
+  it('the newer pattern ids recall and view too', async () => {
+    const s = await (await post('/api/patterns/monotonic-stack/recall', { grade: 'shaky', answer: 'while (...) pop' })).json();
+    expect(s.cards).toContainEqual(expect.objectContaining({ id: 'monotonic-stack' }));
+    expect((await post('/api/patterns/bit-manipulation/view')).status).toBe(200);
+  });
 });
