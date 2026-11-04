@@ -23,6 +23,7 @@ const PROFILE = {
   systemDesignNotes: 'Their own experience: queues.\n\nHonest gaps: GraphQL.',
   knownFacts: ['Acme was a new product.'],
   ownWork: ['widgetly: a document tool with no customers.'],
+  familiarSystems: ['wedding-jukebox'],
 };
 
 describe('where the profile is read from', () => {
@@ -55,6 +56,7 @@ describe('loadCandidateProfile', () => {
       systemDesignNotes: '',
       knownFacts: ['a', 'b'],
       ownWork: [],
+      familiarSystems: [],
     });
   });
 });

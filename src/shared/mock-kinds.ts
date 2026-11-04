@@ -81,6 +81,8 @@ export interface MockPickOptions {
   aiUnlocked?: boolean;
   /** An upcoming loop is AI-focused. */
   aiFocus?: boolean;
+  /** Prompt ids the candidate has built (candidate profile familiarSystems). */
+  familiarIds?: readonly string[];
 }
 
 export interface MockKindInfo {
@@ -158,7 +160,7 @@ const SYSTEM_DESIGN: MockKindInfo = {
     blurb:
       'A system-design interview over chat. The interviewer asks, pushes and moves you through the stages; ask it to explain anything and it will break off to teach, then pick up where you were. At the end it grades every stage at the level you choose and gives you drills.',
     pickHint:
-      'Your first mock starts on a system you have built before; after that, one you have not done recently.',
+      'Your first mock starts on a system you have built before, if your profile lists any; after that, one you have not done recently.',
     familiarTag: ' (one you have built)',
   },
 };

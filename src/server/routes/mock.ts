@@ -43,6 +43,7 @@ import {
 } from '../services/mock.service.js';
 import { listMocks } from '../services/mock.store.js';
 import { errorBody } from '../services/explain.service.js';
+import { CANDIDATE_PROFILE } from '../services/candidate-profile.js';
 
 export const mockRoutes = new Hono();
 
@@ -66,7 +67,13 @@ mockRoutes.get('/mock/prompts', (c) => {
     // random pick yet (the start card labels them practice until then).
     const aiUnlocked = kind === 'system-design' ? mockPickOptions().aiUnlocked === true : false;
     return c.json({
-      prompts: prompts.map(({ id, title, brief, familiar, ai }) => ({ id, title, brief, familiar, ...(ai ? { ai: true } : {}) })),
+      prompts: prompts.map(({ id, title, brief, familiar, ai }) => ({
+        id,
+        title,
+        brief,
+        familiar: familiar || CANDIDATE_PROFILE.familiarSystems.includes(id),
+        ...(ai ? { ai: true } : {}),
+      })),
       aiUnlocked,
     });
   } catch (err) {

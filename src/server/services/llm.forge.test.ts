@@ -9,6 +9,7 @@ const FACTS = renderKnownFacts({
   systemDesignNotes: '',
   knownFacts: ['Acme was a NEW product, not a migration.', 'widgetly has NO live customers.'],
   ownWork: [],
+  familiarSystems: [],
 });
 
 describe('the forge prompt', () => {

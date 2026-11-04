@@ -250,7 +250,7 @@ Nothing is required. The wizard covers model choice and Settings can change it l
 | `CODEGRIND_MODEL_DENY` | empty | comma-separated model ids never to call |
 | `CODEGRIND_MAX_OUTPUT_TOKENS` | `8000` | output cap for a local endpoint (`0` removes it) |
 | `CODEGRIND_STORY_BANK_URL` | empty | optional: base URL of an external story-bank service. Set, it turns on the story forge and lets the behavioral and deep-dive mocks read your stories; unset, all of that is hidden and nothing is called. |
-| `CODEGRIND_CANDIDATE_PROFILE` | `$DATA_DIR/candidate-profile.json` | optional: a local JSON file with your own background (`systemDesignNotes`, `knownFacts[]`, `ownWork[]`) for the interviewer, story forge and lesson prompts; absent, they assume nothing about you. |
+| `CODEGRIND_CANDIDATE_PROFILE` | `$DATA_DIR/candidate-profile.json` | optional: a local JSON file with your own background (`systemDesignNotes`, `knownFacts[]`, `ownWork[]`, `familiarSystems[]` prompt ids you have built) for the interviewer, story forge and lesson prompts; absent, they assume nothing about you. |
 | `CODEGRIND_RB_DIR` | empty | optional: install dir of that story-bank service, whose `bin/backup` runs before the story forge saves a draft. Unset skips the backup. |
 | `VITE_STORY_CAPTURE_URL` | empty | build-time: URL of your own story-capture app (a folder-backed story-bank service), linked from the behavioral grade report. Unset hides the link. |
 

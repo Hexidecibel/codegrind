@@ -39,6 +39,7 @@ import type { MockPickOptions } from '../../shared/mock-kinds.js';
 import { costOf } from '../../shared/mock.js';
 import { db, listLoops, loopDeadlineMs } from './db.js';
 import { costOfMeta } from './ai-usage.service.js';
+import { CANDIDATE_PROFILE } from './candidate-profile.js';
 import { routingFor } from './llm.client.js';
 import { generateConceptLesson, runConceptGrade } from './llm.concept.js';
 import { CONCEPT_REPS_ANCHOR, ensureConceptRepsAnchor, insertGap, recentConceptSignals, recentTurnSignals } from './mock.store.js';
@@ -78,9 +79,9 @@ function states(): Record<string, ReturnType<typeof learningStates>[string]> {
 /** What the system-design mock pick needs (the AI gate + the loop focus). Never throws. */
 export function mockPickOptions(now = new Date()): MockPickOptions {
   try {
-    return { aiUnlocked: aiPromptsUnlocked(states()), aiFocus: aiFocusNow(now) };
+    return { aiUnlocked: aiPromptsUnlocked(states()), aiFocus: aiFocusNow(now), familiarIds: CANDIDATE_PROFILE.familiarSystems };
   } catch {
-    return { aiUnlocked: false, aiFocus: false };
+    return { aiUnlocked: false, aiFocus: false, familiarIds: CANDIDATE_PROFILE.familiarSystems };
   }
 }
 

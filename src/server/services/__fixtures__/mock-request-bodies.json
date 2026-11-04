@@ -313,7 +313,7 @@
         "content": [
           {
             "type": "text",
-            "text": "MOCK SETUP\nLevel the candidate is interviewing for: Staff\nPrompt: A ticketing system for events\nBrief to open with: Design a ticketing system for live events: organisers put events on sale, buyers purchase tickets, and staff scan tickets at the door.\nTwists you may introduce once a happy path exists (one at a time, only if time allows):\n- A popular event goes on sale and 50,000 people hit buy in the same minute.\n- The venue has no connectivity at the door — scanning must work offline.\n- A payment succeeds but the confirmation never reaches the buyer.\nTime budget: 45 minutes, at most 40 candidate turns.\nThis is a system the candidate has built before. Let them use that.\n\nBegin: give your opening (mode interview, stage requirements)."
+            "text": "MOCK SETUP\nLevel the candidate is interviewing for: Staff\nPrompt: A ticketing system for events\nBrief to open with: Design a ticketing system for live events: organisers put events on sale, buyers purchase tickets, and staff scan tickets at the door.\nTwists you may introduce once a happy path exists (one at a time, only if time allows):\n- A popular event goes on sale and 50,000 people hit buy in the same minute.\n- The venue has no connectivity at the door — scanning must work offline.\n- A payment succeeds but the confirmation never reaches the buyer.\nTime budget: 45 minutes, at most 40 candidate turns.\nThis is not a system the candidate has built.\n\nBegin: give your opening (mode interview, stage requirements)."
           }
         ]
       },

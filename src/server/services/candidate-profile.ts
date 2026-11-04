@@ -16,7 +16,8 @@
 //   {
 //     "systemDesignNotes": "free text after the framework in the SD interviewer's card",
 //     "knownFacts": ["one confirmed fact per line, for the story forge and deep-dive grader"],
-//     "ownWork": ["one project per line, for the AI-systems lessons' drawOn"]
+//     "ownWork": ["one project per line, for the AI-systems lessons' drawOn"],
+//     "familiarSystems": ["system-design prompt ids the candidate has built (the warm-up pool)"]
 //   }
 //
 // A test run never reads the default file (process.env.VITEST): the suite and
@@ -29,9 +30,10 @@ export interface CandidateProfile {
   systemDesignNotes: string;
   knownFacts: string[];
   ownWork: string[];
+  familiarSystems: string[];
 }
 
-export const EMPTY_PROFILE: CandidateProfile = Object.freeze({ systemDesignNotes: '', knownFacts: [], ownWork: [] });
+export const EMPTY_PROFILE: CandidateProfile = Object.freeze({ systemDesignNotes: '', knownFacts: [], ownWork: [], familiarSystems: [] });
 
 /** Where the profile is read from; null when nothing should be read. */
 export function candidateProfilePath(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -52,6 +54,7 @@ export function parseCandidateProfile(raw: unknown): CandidateProfile {
     systemDesignNotes: typeof r.systemDesignNotes === 'string' ? r.systemDesignNotes.trim() : '',
     knownFacts: lines(r.knownFacts),
     ownWork: lines(r.ownWork),
+    familiarSystems: lines(r.familiarSystems),
   };
 }
 

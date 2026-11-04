@@ -66,8 +66,9 @@ describe('system design in the registry', () => {
     expect(sd.prompts).toBe(SD_PROMPTS);
     expect(sd.promptById('url-shortener')?.title).toBe('A URL shortener');
     expect(sd.promptById('nope')).toBeNull();
-    // The first mock ever is a familiar one.
-    expect(sd.pickPrompt([], () => 0).familiar).toBe(true);
+    // The first mock ever is a familiar one, when the profile lists any.
+    expect(sd.pickPrompt([], () => 0).familiar).toBe(false);
+    expect(sd.pickPrompt([], () => 0, { familiarIds: ['event-ticketing'] }).id).toBe('event-ticketing');
   });
 
   it('validates stages and concepts against its own lists', () => {

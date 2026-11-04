@@ -17,6 +17,7 @@ import { Hono } from 'hono';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { sdPrompt } from '../../shared/sd-prompts.js';
 
 const fake = vi.hoisted(() => ({ interviewerTurn: vi.fn(), gradeMock: vi.fn() }));
 vi.mock('../services/llm.mock.js', () => fake);
@@ -116,9 +117,9 @@ describe('start', () => {
     expect(fake.interviewerTurn).toHaveBeenCalledTimes(1);
   });
 
-  it('picks a familiar prompt for the first mock, and accepts a chosen one', async () => {
+  it('picks a non-AI prompt for the first mock (no profile), and accepts a chosen one', async () => {
     const first = await start();
-    expect(['event-ticketing', 'telecom-inventory', 'wedding-jukebox', 'hiker-photos']).toContain(first.promptId);
+    expect(sdPrompt(String(first.promptId))?.ai).toBeFalsy();
     const chosen = await start({ promptId: 'url-shortener', level: 'principal' });
     expect(chosen.promptId).toBe('url-shortener');
     expect(chosen.level).toBe('principal');

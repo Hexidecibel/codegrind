@@ -63,7 +63,7 @@ describe('pickPrompt — AI prompts are gated, then mixed in', () => {
     for (const r of seq(40)) {
       expect(pickPrompt(['url-shortener'], () => r).ai).toBeFalsy();
       expect(pickPrompt(['url-shortener'], () => r, { aiFocus: true }).ai).toBeFalsy();
-      expect(pickPrompt([], () => r, { aiFocus: true }).familiar).toBe(true);
+      expect(pickPrompt([], () => r, { aiFocus: true }).ai).toBeFalsy();
     }
   });
 

@@ -13,6 +13,7 @@
 import { SD_STAGES, MOCK_LEVEL_LABEL, type MockLevel } from '../../../shared/sd.js';
 import { MOCK_KIND_INFO, type MockPrompt } from '../../../shared/mock-kinds.js';
 import { sdPrompt, type SdPrompt } from '../../../shared/sd-prompts.js';
+import { CANDIDATE_PROFILE } from '../candidate-profile.js';
 import { CANDIDATE_CARD, WARM_UP_RULE } from '../sd-candidate.js';
 import { RUBRIC_TEXT } from '../sd-rubric.js';
 import { CARD_FRONT_STYLE, coercers, gradeTool, interviewerTool } from './common.js';
@@ -76,7 +77,11 @@ Rules:
 Return the grade by calling emit_mock_grade exactly once.`;
 
 /** The frozen setup message — the first user turn, stored on the mock row. */
-export function buildSdContext(prompt: SdPrompt, level: MockLevel): string {
+export function buildSdContext(
+  prompt: SdPrompt,
+  level: MockLevel,
+  familiarIds: readonly string[] = CANDIDATE_PROFILE.familiarSystems
+): string {
   return [
     'MOCK SETUP',
     `Level the candidate is interviewing for: ${MOCK_LEVEL_LABEL[level]}`,
@@ -85,7 +90,7 @@ export function buildSdContext(prompt: SdPrompt, level: MockLevel): string {
     `Twists you may introduce once a happy path exists (one at a time, only if time allows):`,
     ...prompt.twists.map((t) => `- ${t}`),
     `Time budget: ${INFO.minutes} minutes, at most ${INFO.turnCap} candidate turns.`,
-    prompt.familiar
+    prompt.familiar || familiarIds.includes(prompt.id)
       ? 'This is a system the candidate has built before. Let them use that.'
       : 'This is not a system the candidate has built.',
     // Phase H3: only AI prompts carry this line, so every other context is

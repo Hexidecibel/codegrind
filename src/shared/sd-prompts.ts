@@ -6,9 +6,11 @@
 // fetched: Phase 1 has no runtime dependency on resume-builder. Phase 3 adds
 // posting-themed prompts generated per job posting; these stay as the base bank.
 //
-// `familiar` marks a system the candidate has actually built. Those are the
+// `familiar` marks a system the candidate has actually built. That is personal,
+// so the bank ships with none: the server marks them from the candidate
+// profile (familiarSystems → MockPickOptions.familiarIds). Those are the
 // warm-up prompts: start with something they can already do. A first mock
-// with no prompt chosen is therefore always a familiar one (pickPrompt).
+// with no prompt chosen is a familiar one when there are any (pickPrompt).
 //
 // `twists` are what an interviewer reaches for once the happy path is drawn —
 // the abnormal flow the card says to practise asking about.
@@ -35,7 +37,7 @@ export const SD_PROMPTS: readonly SdPrompt[] = [
     title: 'A ticketing system for events',
     brief:
       'Design a ticketing system for live events: organisers put events on sale, buyers purchase tickets, and staff scan tickets at the door.',
-    familiar: true,
+    familiar: false,
     twists: [
       'A popular event goes on sale and 50,000 people hit buy in the same minute.',
       'The venue has no connectivity at the door — scanning must work offline.',
@@ -47,7 +49,7 @@ export const SD_PROMPTS: readonly SdPrompt[] = [
     title: 'An inventory system for telecom warehouses',
     brief:
       'Design an inventory system for a company that stores telecom equipment across many warehouses and field sites.',
-    familiar: true,
+    familiar: false,
     twists: [
       'Technicians record usage from sites with poor connectivity.',
       'Two warehouses both claim the last unit of a part.',
@@ -59,7 +61,7 @@ export const SD_PROMPTS: readonly SdPrompt[] = [
     title: 'The wedding jukebox',
     brief:
       'Design a jukebox for a wedding: guests request songs from their phones, and one playlist plays through the venue speakers.',
-    familiar: true,
+    familiar: false,
     twists: [
       'Two hundred guests request at once after the first dance.',
       'The DJ needs to veto a song before it plays.',
@@ -71,7 +73,7 @@ export const SD_PROMPTS: readonly SdPrompt[] = [
     title: 'A photo-sharing app for hikers',
     brief:
       'Design a photo-sharing app for hikers: people upload photos from trails, tagged with location, and browse what others have seen nearby.',
-    familiar: true,
+    familiar: false,
     twists: [
       'Uploads start on a mountain with one bar of signal.',
       'A trail goes viral and its photos are requested a thousand times a second.',
@@ -295,6 +297,8 @@ export interface PickPromptOptions {
   aiUnlocked?: boolean;
   /** An upcoming interview loop is at an AI-focused company: favour the AI prompts (once unlocked). */
   aiFocus?: boolean;
+  /** Prompt ids the candidate has built (candidate profile familiarSystems): the first-mock pool. */
+  familiarIds?: readonly string[];
 }
 
 /** An AI prompt is mixed in when none of the last this-many mocks was one. */
@@ -303,7 +307,7 @@ export const AI_MIX_RECENT = 2;
 /**
  * Which prompt to run when the candidate did not choose.
  *
- * The first mock ever is a familiar one — see the header. After that, anything
+ * The first mock ever is a familiar one when any are (opts.familiarIds) — see the header. After that, anything
  * not used in the last few mocks, chosen by `rand` (injected so the choice is
  * testable). Phase H3 AI prompts:
  *   - locked (not enough AI concepts known): never picked here.
@@ -318,7 +322,9 @@ export function pickPrompt(
   const at = (xs: readonly SdPrompt[]) => xs[Math.floor(rand() * xs.length) % xs.length];
   const eligible = SD_PROMPTS.filter((p) => !p.ai || opts.aiUnlocked);
   if (recentIds.length === 0) {
-    return at(eligible.filter((p) => (opts.aiFocus && opts.aiUnlocked ? p.ai : p.familiar)));
+    if (opts.aiFocus && opts.aiUnlocked) return at(eligible.filter((p) => p.ai));
+    const familiar = eligible.filter((p) => p.familiar || opts.familiarIds?.includes(p.id));
+    return at(familiar.length ? familiar : eligible.filter((p) => !p.ai));
   }
   const recent = recentIds.slice(0, 5);
   const fresh = eligible.filter((p) => !recent.includes(p.id));

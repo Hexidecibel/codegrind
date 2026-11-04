@@ -56,13 +56,26 @@ describe('the frozen context', () => {
     expect(ctx).toContain(PROMPT.brief);
     for (const t of PROMPT.twists) expect(ctx).toContain(t);
   });
+
+  it('says the system is familiar only when the profile lists it', () => {
+    expect(buildContext(PROMPT, 'staff')).toContain('This is not a system the candidate has built.');
+    expect(buildContext(PROMPT, 'staff', [PROMPT.id])).toContain('This is a system the candidate has built before.');
+  });
 });
 
 describe('the prompt bank', () => {
-  it('has unique ids and picks a familiar prompt for the very first mock', () => {
+  it('ships no familiar prompts: a first mock is any non-AI prompt by default', () => {
     expect(new Set(SD_PROMPTS.map((p) => p.id)).size).toBe(SD_PROMPTS.length);
+    expect(SD_PROMPTS.filter((p) => p.familiar)).toEqual([]);
     for (let i = 0; i < 10; i++) {
-      expect(pickPrompt([], () => i / 10).familiar).toBe(true);
+      expect(pickPrompt([], () => i / 10).ai).toBeFalsy();
+    }
+  });
+
+  it('picks from the profile\'s familiar systems for the very first mock', () => {
+    const familiarIds = ['wedding-jukebox', 'hiker-photos'];
+    for (let i = 0; i < 10; i++) {
+      expect(familiarIds).toContain(pickPrompt([], () => i / 10, { familiarIds }).id);
     }
   });
 
