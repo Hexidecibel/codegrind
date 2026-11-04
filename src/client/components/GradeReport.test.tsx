@@ -125,7 +125,8 @@ describe('a behavioral grade', () => {
   it('lists story gaps with a link to capture them, and notes a bank that was down', () => {
     const h = out({ loaded: false, error: 'resume-builder unreachable' });
     expect(h).toContain('Stories to capture');
-    expect(h).toContain('https://example.com');
+    // The capture link is hidden unless VITE_STORY_CAPTURE_URL is set at build time.
+    expect(h).not.toContain('Or capture them in resume-builder');
     // Phase H4: each gap links into the story forge, pre-set to its competency.
     expect(h).toContain('href="/stories?competency=conflict"');
     expect(h).toContain('story bank was unavailable');

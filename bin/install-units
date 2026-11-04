@@ -9,8 +9,8 @@
 #   bin/install-units --print codegrind.service   render just one
 #
 # THE UNITS IN deploy/ ARE TEMPLATES, NOT FILES TO COPY. They used to be one
-# machine's units — `~/local/src/codegrind`, `User=hexi`, and a pinned
-# `~/.nvm/versions/node/v22.22.0/bin` on the service PATH — and this
+# machine's units — `/home/you/src/codegrind`, `User=you`, and a pinned
+# `/home/you/.nvm/versions/node/<version>/bin` on the service PATH — and this
 # script installed them verbatim with `sudo install`. Anyone else who cloned the
 # repo and followed docs/operations.md got three units pointing at a directory
 # that does not exist on their box, a user that may not exist either, and a

@@ -6,8 +6,8 @@
 // `tsc -b` and `vitest` already look is what stops it from quietly not running.
 //
 // The bug it exists for shipped: deploy/codegrind.service carried one machine's
-// absolute paths — ~/local/src/codegrind, User=hexi and a pinned
-// ~/.nvm/versions/node/v22.22.0/bin — and bin/install-units copied all
+// absolute paths — /home/you/src/codegrind, User=you and a pinned
+// /home/you/.nvm/versions/node/<version>/bin — and bin/install-units copied all
 // three units into /etc verbatim with `sudo install`. Anybody else who cloned
 // the repo and followed docs/operations.md got three units pointing at a
 // directory that does not exist on their box and a timer that fails on every
@@ -58,7 +58,7 @@ describe('the templates are machine-independent', () => {
   });
 
   // The regression itself. `/home/` is the shape every one of the old hardcoded
-  // values had, and it is what `grep -rn '~' bin/` was already checked
+  // values had, and it is what `grep -rn '/home/<user>' bin/` was already checked
   // for in docs/operations.md — deploy/ was the hole in that check.
   it.each(TEMPLATES)('%s hardcodes no home directory', (unit) => {
     const template = fs.readFileSync(path.join(DEPLOY_DIR, unit), 'utf8');

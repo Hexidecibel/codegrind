@@ -249,6 +249,8 @@ Nothing is required. The wizard covers model choice and Settings can change it l
 | `CODEGRIND_CHAT_PROVIDER`, `CODEGRIND_CHAT_MODEL` | match the workhorse | run the tutor somewhere else |
 | `CODEGRIND_MODEL_DENY` | empty | comma-separated model ids never to call |
 | `CODEGRIND_MAX_OUTPUT_TOKENS` | `8000` | output cap for a local endpoint (`0` removes it) |
+| `CODEGRIND_RB_DIR` | empty | resume-builder's install dir, used for its `bin/backup` before story-forge writes. Unset skips the backup. |
+| `VITE_STORY_CAPTURE_URL` | empty | build-time: URL of your resume-builder, linked from the behavioral grade report. Unset hides the link. |
 
 ## Testing
 

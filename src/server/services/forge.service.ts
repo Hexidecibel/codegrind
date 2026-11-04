@@ -83,7 +83,7 @@ function rbBase(): string {
 
 /** resume-builder's install dir, for its own bin/backup. */
 export function rbDir(): string {
-  return process.env.CODEGRIND_RB_DIR || '/srv/apps/apps/resume-builder';
+  return process.env.CODEGRIND_RB_DIR || '';
 }
 
 export interface BackupResult {
@@ -98,6 +98,7 @@ export interface BackupResult {
  */
 async function runRbBackup(label: string): Promise<BackupResult> {
   const dir = rbDir();
+  if (!dir) return { ok: false, note: 'CODEGRIND_RB_DIR not set; relying on baseRev' };
   const script = path.join(dir, 'bin', 'backup');
   if (!existsSync(script)) return { ok: false, note: `no ${script}; relying on baseRev` };
   return new Promise((resolve) => {

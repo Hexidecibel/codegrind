@@ -28,7 +28,7 @@ import type {
   StoryBankStatus,
 } from '@/shared/mock';
 import { Link } from 'react-router-dom';
-import { STORY_CAPTURE_URL } from '@/shared/behavioral-questions';
+import { storyCaptureUrl } from '@/shared/behavioral-questions';
 import type { MockGap } from '@/shared/gap-cards';
 import { GAP_TYPE_META, cardFront } from '@/client/components/GapCards';
 import { MOCK_LEVEL_LABEL } from '@/shared/sd';
@@ -273,14 +273,16 @@ export function GradeReport({
               </Link>
             ))}
           </div>
-          <a
-            href={STORY_CAPTURE_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:underline"
-          >
-            Or capture them in resume-builder (Interview → Capture) <ExternalLink className="h-3.5 w-3.5" />
-          </a>
+          {storyCaptureUrl() && (
+            <a
+              href={storyCaptureUrl()}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:underline"
+            >
+              Or capture them in resume-builder (Interview → Capture) <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          )}
         </section>
       )}
 

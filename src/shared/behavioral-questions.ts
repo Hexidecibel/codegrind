@@ -160,5 +160,11 @@ export const BQ_PROMPTS = [
   },
 ] as const;
 
-/** Where to capture a missing story. No write-back: the candidate goes there. */
-export const STORY_CAPTURE_URL = 'https://example.com';
+/**
+ * Where to capture a missing story (your own resume-builder). No write-back: the
+ * candidate goes there. Set VITE_STORY_CAPTURE_URL at build time; unset hides the link.
+ */
+export function storyCaptureUrl(): string {
+  const url = (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_STORY_CAPTURE_URL;
+  return (url ?? '').trim();
+}
