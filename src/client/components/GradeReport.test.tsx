@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { GradeReport } from './GradeReport';
+import { IntegrationsContext } from '@/client/lib/integrations';
 import { SD_STAGES, SD_STAGE_META } from '@/shared/sd';
 import type { MockGrade } from '@/shared/mock';
 
@@ -99,15 +100,17 @@ describe('a behavioral grade', () => {
     ],
     storyGaps: [{ concept: 'conflict', note: 'Capture a disagreement you personally had.' }],
   };
-  const out = (bank?: { loaded: boolean; error?: string }) =>
+  const out = (bank?: { loaded: boolean; error?: string }, storyBankOn = true) =>
     renderToStaticMarkup(
-      <MemoryRouter>
-        <GradeReport
-          grade={B}
-          kind="behavioral"
-          storyBank={bank ? { stories: 0, confirmed: 0, openGaps: [], ...bank } : undefined}
-        />
-      </MemoryRouter>
+      <IntegrationsContext.Provider value={{ storyBank: storyBankOn }}>
+        <MemoryRouter>
+          <GradeReport
+            grade={B}
+            kind="behavioral"
+            storyBank={bank ? { stories: 0, confirmed: 0, openGaps: [], ...bank } : undefined}
+          />
+        </MemoryRouter>
+      </IntegrationsContext.Provider>
     );
 
   it('renders each question with STAR, I-vs-we, numbers, length, story fit and fidelity', () => {
@@ -123,14 +126,21 @@ describe('a behavioral grade', () => {
   });
 
   it('lists story gaps with a link to capture them, and notes a bank that was down', () => {
-    const h = out({ loaded: false, error: 'resume-builder unreachable' });
+    const h = out({ loaded: false, error: 'story bank unreachable' });
     expect(h).toContain('Stories to capture');
     // The capture link is hidden unless VITE_STORY_CAPTURE_URL is set at build time.
-    expect(h).not.toContain('Or capture them in resume-builder');
+    expect(h).not.toContain('Or capture them in your story bank');
     // Phase H4: each gap links into the story forge, pre-set to its competency.
     expect(h).toContain('href="/stories?competency=conflict"');
     expect(h).toContain('story bank was unavailable');
     expect(out({ loaded: true })).not.toContain('story bank was unavailable');
+  });
+
+  it('with no story bank configured: the gaps stay, the forge links go', () => {
+    const h = out(undefined, false);
+    expect(h).toContain('Stories to capture');
+    expect(h).not.toContain('/stories');
+    expect(h).not.toMatch(/resume-builder/i);
   });
 });
 

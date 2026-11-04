@@ -40,10 +40,10 @@ WorkingDirectory=@CODEGRIND_REPO@
 EnvironmentFile=@CODEGRIND_REPO@/.env
 Environment=HOST=127.0.0.1
 Environment=NODE_ENV=production
-## The behavioral mock reads the story bank from an optional companion story-bank service at http://127.0.0.1:9410
-## (code default, src/server/services/story-bank.ts). To point it elsewhere add
-## Environment=CODEGRIND_STORY_BANK_URL=http://host:port here — NOT in .env, which
-## a secrets hook may truncate.
+## Optional story-bank service (story forge, stories in the behavioral and deep-dive
+## mocks): OFF unless CODEGRIND_STORY_BANK_URL is set. To turn it on add
+## Environment=CODEGRIND_STORY_BANK_URL=http://host:port here, or in a drop-in under
+## /etc/systemd/system/codegrind.service.d/ — NOT in .env, which a secrets hook may truncate.
 Environment=PATH=@CODEGRIND_NODE_BIN@:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=@CODEGRIND_NODE_BIN@/npx tsx src/server/index.ts
 Restart=always

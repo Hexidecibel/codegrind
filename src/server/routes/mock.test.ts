@@ -40,6 +40,8 @@ const { LlmToolCallError } = await import('../services/llm.types.js');
 const app = new Hono();
 app.route('/api', mockRoutes);
 
+afterEach(() => vi.unstubAllEnvs());
+
 afterAll(() => {
   db.close();
   rmSync(TEST_DATA_DIR, { recursive: true, force: true });
@@ -94,6 +96,8 @@ async function start(body: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  // The story bank is opt-in; these tests are the "on" install unless they say otherwise.
+  vi.stubEnv('CODEGRIND_STORY_BANK_URL', 'http://127.0.0.1:9410');
   fake.interviewerTurn.mockReset();
   fake.gradeMock.mockReset();
   db.exec(`DELETE FROM mock_grades; DELETE FROM mock_gaps; DELETE FROM mock_turns; DELETE FROM mocks;`);
@@ -615,6 +619,24 @@ describe('behavioral', () => {
     expect(input.transcript).toContain('#2 CANDIDATE (3 words): I build backends.');
   });
 
+  it('off (no story bank configured): no fetch, no bank status, the grader judges the transcript alone', async () => {
+    vi.stubEnv('CODEGRIND_STORY_BANK_URL', '');
+    bankUp();
+    const p = await (await app.request('/api/mock/plan?kind=behavioral')).json();
+    expect(p.concepts).toHaveLength(4);
+    expect(p.storyBank).toBeNull();
+    const view = await startB();
+    expect(view.state.plan.items).toHaveLength(4);
+    expect(view.state.plan.storyBank).toBeUndefined();
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'intro', say: 'And?' }));
+    await post(`/api/mock/${view.id}/turn`, { expectedSeq: 1, content: 'hi' });
+    fake.gradeMock.mockResolvedValueOnce({ grade: GRADE, metas: [META] });
+    await readEvents(await post(`/api/mock/${view.id}/end`));
+    expect(fake.gradeMock.mock.calls[0][0].graderContext).toMatch(/^STORY BANK: NONE/);
+    expect(JSON.stringify(view)).not.toMatch(/resume-builder/i);
+    expect(fetchUrls).toEqual([]);
+  });
+
   it('still starts when resume-builder is down, and records why', async () => {
     bankDown();
     const view = await startB();
@@ -829,6 +851,18 @@ describe('project deep-dive (Phase H4)', () => {
     expect(g).toContain('OPEN QUESTIONS');
     expect(g).toContain('MASTER RESUME');
     expect(g).toContain('Owned a greenfield SaaS platform');
+  });
+
+  it('off (no story bank configured): no projects, no errors, no fetch; a typed project still starts', async () => {
+    vi.stubEnv('CODEGRIND_STORY_BANK_URL', '');
+    const spy = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', spy);
+    const r = await (await app.request('/api/mock/projects')).json();
+    expect(r).toMatchObject({ options: [], errors: [] });
+    fake.interviewerTurn.mockResolvedValueOnce(replyWith({ stage: 'overview', say: 'Walk me through it.' }));
+    const res = await post('/api/mock/start', { kind: 'project-deep-dive', project: { source: 'typed', text: 'A job queue' } });
+    expect(res.status).toBe(200);
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('starts on a typed one-liner even with resume-builder down; a bad choice is a 400 with no call', async () => {

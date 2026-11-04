@@ -291,7 +291,11 @@ export async function deepDiveProjects(fetchImpl?: typeof fetch): Promise<DdProj
   const [bank, resume] = await Promise.all([fetchStoryBank(fetchImpl), fetchMasterResume(fetchImpl)]);
   return {
     options: projectOptions(bank.ok ? bank.bank : null, resume.ok ? resume.resume : null),
-    errors: [...(bank.ok ? [] : [`story bank: ${bank.error}`]), ...(resume.ok ? [] : [`master resume: ${resume.error}`])],
+    // Off is not an error: the picker just offers the typed one-liner.
+    errors: [
+      ...(bank.ok || bank.off ? [] : [`story bank: ${bank.error}`]),
+      ...(resume.ok || resume.off ? [] : [`master resume: ${resume.error}`]),
+    ],
   };
 }
 

@@ -14,6 +14,7 @@ import { helpHref } from '@/client/lib/help-content';
 import { Button } from '@/client/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/client/components/ui/popover';
 import { cn } from '@/lib/utils';
+import { useStoryBankEnabled } from '@/client/lib/integrations';
 
 /** One dot per refresh day: settled days green, today primary, the rest grey. */
 export function RefreshDays({ r }: { r: Pick<TodayState['refresh'], 'day' | 'total' | 'completedThrough'> }) {
@@ -36,6 +37,7 @@ const menuItem =
   'flex min-h-11 w-full items-center gap-2.5 rounded-md px-2 text-sm transition-colors hover:bg-secondary sm:pointer-fine:min-h-9';
 
 export function RefreshBanner({ r, busy, onTurnOff }: { r: TodayState['refresh']; busy: boolean; onTurnOff: () => void }) {
+  const storyBank = useStoryBankEnabled();
   return (
     <div className="flex items-center gap-3 rounded-lg bg-secondary/60 py-1.5 pl-3 pr-1.5">
       <RefreshCw className="h-4 w-4 shrink-0 text-primary" aria-hidden />
@@ -70,9 +72,11 @@ export function RefreshBanner({ r, busy, onTurnOff }: { r: TodayState['refresh']
           <Link to="/concept" className={menuItem}>
             <Lightbulb className="h-4 w-4 text-muted-foreground" aria-hidden /> Concept rep
           </Link>
-          <Link to="/stories" className={menuItem}>
-            <Mic className="h-4 w-4 text-muted-foreground" aria-hidden /> Story forge
-          </Link>
+          {storyBank && (
+            <Link to="/stories" className={menuItem}>
+              <Mic className="h-4 w-4 text-muted-foreground" aria-hidden /> Story forge
+            </Link>
+          )}
           <div className="my-1 border-t border-border" />
           <button
             type="button"

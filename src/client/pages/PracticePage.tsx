@@ -7,6 +7,7 @@
 import { Link } from 'react-router-dom';
 import { ArrowRight, BookMarked, Calculator, Dumbbell, Mic, ScanSearch } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { useStoryBankEnabled } from '@/client/lib/integrations';
 
 export const DRILLS: readonly { to: string; label: string; line: string; icon: LucideIcon }[] = [
   { to: '/recognize', label: 'Recognize', line: 'Read a problem, name its pattern. Five cards.', icon: ScanSearch },
@@ -16,6 +17,9 @@ export const DRILLS: readonly { to: string; label: string; line: string; icon: L
 ];
 
 export function PracticePage() {
+  // The story forge saves to the optional story bank; without one it is not offered.
+  const storyBank = useStoryBankEnabled();
+  const drills = DRILLS.filter((d) => storyBank || d.to !== '/stories');
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
@@ -23,7 +27,7 @@ export function PracticePage() {
           <Dumbbell className="h-6 w-6 text-primary" aria-hidden /> Drills
         </h1>
         <ul className="grid gap-3 sm:grid-cols-2">
-          {DRILLS.map(({ to, label, line, icon: Icon }) => (
+          {drills.map(({ to, label, line, icon: Icon }) => (
             <li key={to}>
               <Link
                 to={to}

@@ -43,6 +43,7 @@ import {
 import * as apikey from '../services/apikey.service.js';
 import { describeProviders } from '../services/provider.service.js';
 import { needsAnthropicKey } from '../services/llm.client.js';
+import { storyBankEnabled } from '../services/story-bank.js';
 import { harnessExists, unsupportedLanguageMessage } from '../services/harness.service.js';
 import {
   runSeed,
@@ -106,6 +107,7 @@ export function readSetupState(): SetupState {
     llm: describeProviders(),
     language,
     languages: languageStates(),
+    integrations: { storyBank: storyBankEnabled() },
   };
 }
 

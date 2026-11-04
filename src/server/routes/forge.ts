@@ -11,8 +11,15 @@
 import { Hono, type Context } from 'hono';
 import { ForgeError, abandonForge, forgeOptions, forgeTurn, getForge, saveForge, startForge } from '../services/forge.service.js';
 import { errorBody } from '../services/explain.service.js';
+import { STORY_BANK_OFF, storyBankEnabled } from '../services/story-bank.js';
 
 export const forgeRoutes = new Hono();
+
+// The forge exists to write to the optional story bank: off, it does not exist.
+forgeRoutes.use('/forge/*', async (c, next) => {
+  if (!storyBankEnabled()) return c.json({ error: `The story forge is off: ${STORY_BANK_OFF}.` }, 404);
+  await next();
+});
 
 function fail(c: Context, tag: string, err: unknown) {
   if (err instanceof ForgeError) return c.json({ error: err.message }, err.status);

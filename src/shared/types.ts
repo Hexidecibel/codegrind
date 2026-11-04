@@ -1004,6 +1004,12 @@ export interface SetupState {
   llm: LlmStatus;
   language: Language;
   languages: SetupLanguageState[];
+  /**
+   * Optional integrations this install has configured. The client hides every
+   * entry point of one that is off. `storyBank`: CODEGRIND_STORY_BANK_URL is set
+   * (the story forge, the mock's story bank, job-posting links).
+   */
+  integrations: { storyBank: boolean };
 }
 
 /** One topic+difficulty slot in a seeding plan. */

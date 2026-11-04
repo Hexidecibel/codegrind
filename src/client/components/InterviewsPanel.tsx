@@ -1,8 +1,8 @@
 // =============================================================================
 // InterviewsPanel — target interview loops on Today (Phase H2)
 // =============================================================================
-// Company, date, round types, and an optional link to a resume-builder job
-// posting. The nearest loop drives Today's countdown, the spacing cap, the
+// Company, date, round types, and an optional link to a job posting from the
+// optional story-bank companion (hidden unless that integration is configured). The nearest loop drives Today's countdown, the spacing cap, the
 // final review and the mock rotation (server-side, shared/loops.ts). Collapsed
 // to one line by default; free (no model call).
 
@@ -20,6 +20,7 @@ import {
 import { createLoop, deleteLoop, getLoops, getPostings, updateLoop, type LoopBody } from '@/client/lib/api';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
+import { useStoryBankEnabled } from '@/client/lib/integrations';
 
 const EMPTY: LoopBody = { company: '', date: '', rounds: ['coding', 'system-design', 'behavioral'], postingId: null, postingTitle: null, aiFocus: false };
 
@@ -33,19 +34,22 @@ function LoopForm({
   onCancel: () => void;
 }) {
   const [body, setBody] = useState<LoopBody>(initial);
+  // Postings come from the optional story-bank companion; without it there is no picker.
+  const postingsOn = useStoryBankEnabled();
   const [postings, setPostings] = useState<JobPosting[] | null>(null);
   const [postingsDown, setPostingsDown] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!postingsOn) return;
     getPostings()
       .then((r) => {
         setPostings(r.postings);
         setPostingsDown(!r.available);
       })
       .catch(() => setPostingsDown(true));
-  }, []);
+  }, [postingsOn]);
 
   const toggleRound = (r: RoundType) =>
     setBody((b) => ({ ...b, rounds: b.rounds.includes(r) ? b.rounds.filter((x) => x !== r) : [...b.rounds, r] }));
@@ -117,27 +121,29 @@ function LoopForm({
           they are unlocked.
         </span>
       </label>
-      <label className="block space-y-1 text-xs text-muted-foreground">
-        Job posting (resume-builder, optional)
-        {postingsDown ? (
-          <div className="text-[11px]">
-            resume-builder is not reachable{body.postingTitle ? ` — linked: ${body.postingTitle}` : ''}.
-          </div>
-        ) : postings === null ? (
-          <div className="inline-flex items-center gap-1 text-[11px]">
-            <Loader2 className="h-3 w-3 animate-spin" /> loading postings…
-          </div>
-        ) : (
-          <select className={input} value={body.postingId ?? ''} onChange={(e) => pickPosting(e.target.value)}>
-            <option value="">— none —</option>
-            {postings.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.company} · {p.title}
-              </option>
-            ))}
-          </select>
-        )}
-      </label>
+      {postingsOn && (
+        <label className="block space-y-1 text-xs text-muted-foreground">
+          Job posting (optional)
+          {postingsDown ? (
+            <div className="text-[11px]">
+              The story bank is not reachable{body.postingTitle ? ` — linked: ${body.postingTitle}` : ''}.
+            </div>
+          ) : postings === null ? (
+            <div className="inline-flex items-center gap-1 text-[11px]">
+              <Loader2 className="h-3 w-3 animate-spin" /> loading postings…
+            </div>
+          ) : (
+            <select className={input} value={body.postingId ?? ''} onChange={(e) => pickPosting(e.target.value)}>
+              <option value="">— none —</option>
+              {postings.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.company} · {p.title}
+                </option>
+              ))}
+            </select>
+          )}
+        </label>
+      )}
       {error && <p className="text-xs text-destructive-foreground">{error}</p>}
       <div className="flex gap-2">
         <Button size="sm" onClick={save} disabled={saving || !body.company.trim() || !body.date || !body.rounds.length}>

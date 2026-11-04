@@ -213,7 +213,9 @@ export function renderDeepDiveGraderContext(project: ResolvedProject, bank: Stor
           '',
           ...bank.bank.stories.map(renderStoryForGrader).flatMap((s) => [s, '']),
         ].join('\n')
-      : `STORY BANK: UNAVAILABLE (${bank.error}).`,
+      : bank.off
+        ? 'STORY BANK: NONE (this install has no story bank).'
+        : `STORY BANK: UNAVAILABLE (${bank.error}).`,
     '',
     renderResumeForGrader(resume),
   ].join('\n');

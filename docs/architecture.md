@@ -149,7 +149,7 @@ The rules live in `mock.state.ts` (pure, no clock of its own), the orchestration
 `mock.service.ts`, the tables in `mock.store.ts` (same connection as `db.ts`), the
 prompt bank in `shared/sd-prompts.ts`, the rubric in `sd-rubric.ts` and what the
 interviewer knows about the candidate in `sd-candidate.ts` — the last three copied from
-resume-builder's `systemDesignCard`, never fetched at runtime.
+a story-bank app's `systemDesignCard`, never fetched at runtime.
 
 **A failed model call stores nothing.** The candidate's message is written only together
 with the reply to it, so a transcript never ends on an orphaned user turn and a resend is

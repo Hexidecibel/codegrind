@@ -155,7 +155,8 @@ async function prepareBehavioral(args: MockPrepareArgs): Promise<MockPrep> {
     rand: args.rand,
   });
   return {
-    plan: { items: plan.items, storyBank: bankStatus(bank) },
+    // Off (not configured): no status at all, so the UI says nothing about a bank.
+    plan: { items: plan.items, ...(!bank.ok && bank.off ? {} : { storyBank: bankStatus(bank) }) },
     graderContext: renderGraderContext(bank),
     reasons: plan.reasons,
   };

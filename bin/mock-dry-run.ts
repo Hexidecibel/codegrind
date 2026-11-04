@@ -175,7 +175,7 @@ function usage(): never {
       'usage: bin/mock-dry-run [--kind system-design|behavioral|coding] --dry-run | --live [--turns N] [--grade]',
       '',
       '  --kind K    which mock kind (default system-design). behavioral reads the story bank',
-      '              from resume-builder (localhost, free) and prints what the interviewer and',
+      '              (CODEGRIND_STORY_BANK_URL, if set) and prints what the interviewer and',
       '              the grader each see. coding uses a built-in sample problem (no database) and',
       '              sends the editor with every turn, as the app does.',
       '  --dry-run   print the request plan and the cost estimate. Spends nothing.',

@@ -2,7 +2,7 @@
 // story-bank — the candidate's interview stories, read from resume-builder
 // =============================================================================
 // The behavioral mock's GRADER judges story choice and fidelity against the
-// story bank the user keeps in a separate companion service ("resume-builder", optional; default http://127.0.0.1:9410). This file
+// story bank the user keeps in a separate, OPTIONAL companion service. This file
 // fetches it, renders it for the grader, maps each story's free-text `fits[]`
 // onto the mock's competencies with a keyword table (no model call), and plans
 // which four competencies a mock asks about.
@@ -23,9 +23,13 @@
 // WHEN IT IS DOWN the mock still starts: the plan is made without the bank, and
 // the grader is told the bank was unavailable (and the report says so).
 //
-// The base URL is a code default with an environment override
-// (CODEGRIND_STORY_BANK_URL, set with `Environment=` in the unit — NOT .env,
-// which a secrets hook may truncate).
+// OFF UNLESS CONFIGURED. The whole integration (this file, the story forge, the
+// job-posting picker) is switched on by ONE variable, CODEGRIND_STORY_BANK_URL
+// (the companion's base URL, e.g. http://127.0.0.1:9410; set it with
+// `Environment=` in the unit or a drop-in — NOT .env, which a secrets hook may
+// truncate). Unset: no request ever leaves for the companion, the mock plans
+// without a bank, and the client hides every entry point
+// (GET /api/setup/state → integrations.storyBank).
 
 import {
   BQ_COMPETENCIES,
@@ -37,12 +41,26 @@ import {
 import type { MockPlan, StoryBankStatus } from '../../shared/mock.js';
 import type { ConceptSignal } from '../../shared/sd.js';
 
-export const DEFAULT_STORY_BANK_URL = 'http://127.0.0.1:9410';
+/** The one switch for the whole story-bank integration. */
+export const STORY_BANK_URL_ENV = 'CODEGRIND_STORY_BANK_URL';
 const FETCH_TIMEOUT_MS = 2500;
 
+/** The companion's base URL (no trailing slash), or null when the integration is off. */
+export function storyBankBase(): string | null {
+  const v = (process.env[STORY_BANK_URL_ENV] ?? '').trim().replace(/\/+$/, '');
+  return v || null;
+}
+
+/** Is the optional story-bank integration configured on this install? */
+export function storyBankEnabled(): boolean {
+  return storyBankBase() !== null;
+}
+
+/** The error a read returns, without a request, when the integration is off. */
+export const STORY_BANK_OFF = 'no story bank is configured';
+
 export function storyBankUrl(): string {
-  const base = (process.env.CODEGRIND_STORY_BANK_URL || DEFAULT_STORY_BANK_URL).replace(/\/+$/, '');
-  return `${base}/api/data/read?file=stories.json`;
+  return `${storyBankBase() ?? ''}/api/data/read?file=stories.json`;
 }
 
 // -----------------------------------------------------------------------------
@@ -81,7 +99,8 @@ export interface StoryBank {
   gaps: StoryGapEntry[];
 }
 
-export type StoryBankResult = { ok: true; bank: StoryBank } | { ok: false; error: string };
+/** `off: true` = the integration is not configured (no request was made). */
+export type StoryBankResult = { ok: true; bank: StoryBank } | { ok: false; error: string; off?: true };
 
 const str = (x: unknown): string => (typeof x === 'string' ? x : '');
 const strs = (x: unknown): string[] =>
@@ -126,15 +145,16 @@ export function normalizeBank(raw: unknown): StoryBank {
   return { stories, gaps };
 }
 
-/** GET the bank. Never throws: a down or broken resume-builder is `{ok: false}`. */
+/** GET the bank. Never throws: a down or broken companion is `{ok: false}`; off is `{ok: false, off: true}` with no request. */
 export async function fetchStoryBank(fetchImpl: typeof fetch = fetch): Promise<StoryBankResult> {
+  if (!storyBankEnabled()) return { ok: false, error: STORY_BANK_OFF, off: true };
   try {
     const res = await fetchImpl(storyBankUrl(), { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!res.ok) return { ok: false, error: `resume-builder answered ${res.status}` };
+    if (!res.ok) return { ok: false, error: `story bank answered ${res.status}` };
     return { ok: true, bank: normalizeBank(await res.json()) };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `resume-builder unreachable (${msg.slice(0, 120)})` };
+    return { ok: false, error: `story bank unreachable (${msg.slice(0, 120)})` };
   }
 }
 
@@ -268,6 +288,13 @@ export function renderStoryForGrader(story: Story): string {
  * start). Byte-stable for a given bank.
  */
 export function renderGraderContext(r: StoryBankResult): string {
+  if (!r.ok && r.off) {
+    return [
+      'STORY BANK: NONE',
+      'This install has no story bank.',
+      'Judge story choice on the transcript alone. Leave storyId null on every question, do not report fidelity against a bank, and leave storyGaps empty — you cannot know which stories exist. Card backs use the beats the candidate actually told.',
+    ].join('\n');
+  }
   if (!r.ok) {
     return [
       'STORY BANK: UNAVAILABLE',
@@ -444,11 +471,10 @@ export interface MasterResume {
   projects: ResumeProject[];
 }
 
-export type ResumeResult = { ok: true; resume: MasterResume } | { ok: false; error: string };
+export type ResumeResult = { ok: true; resume: MasterResume } | { ok: false; error: string; off?: true };
 
 export function resumeUrl(): string {
-  const base = (process.env.CODEGRIND_STORY_BANK_URL || DEFAULT_STORY_BANK_URL).replace(/\/+$/, '');
-  return `${base}/api/data/read?file=base-resumes.json`;
+  return `${storyBankBase() ?? ''}/api/data/read?file=base-resumes.json`;
 }
 
 /** The first base resume, defensively. Throws on a shape with no resume at all. */
@@ -478,19 +504,20 @@ export function normalizeResume(raw: unknown): MasterResume {
 
 /** GET the master resume. Never throws. */
 export async function fetchMasterResume(fetchImpl: typeof fetch = fetch): Promise<ResumeResult> {
+  if (!storyBankEnabled()) return { ok: false, error: STORY_BANK_OFF, off: true };
   try {
     const res = await fetchImpl(resumeUrl(), { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!res.ok) return { ok: false, error: `resume-builder answered ${res.status}` };
+    if (!res.ok) return { ok: false, error: `story bank answered ${res.status}` };
     return { ok: true, resume: normalizeResume(await res.json()) };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `resume-builder unreachable (${msg.slice(0, 120)})` };
+    return { ok: false, error: `story bank unreachable (${msg.slice(0, 120)})` };
   }
 }
 
 /** The master resume for a grader: every line is the candidate's own confirmed claim. */
 export function renderResumeForGrader(r: ResumeResult): string {
-  if (!r.ok) return `MASTER RESUME: UNAVAILABLE (${r.error}).`;
+  if (!r.ok) return r.off ? 'MASTER RESUME: NONE (this install has no story bank).' : `MASTER RESUME: UNAVAILABLE (${r.error}).`;
   const { resume } = r;
   return [
     'MASTER RESUME (resume-builder; every line here is a claim the candidate stands behind):',

@@ -5,13 +5,14 @@
 // the OPEN QUESTIONS heading that says it is not fact — never in the confirmed
 // block the grader may use. Ported from resume-builder's renderStoryForPrompt.
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   ALWAYS_ELIGIBLE,
   bankStatus,
   competenciesFor,
   competencyCoverage,
   competencyWeights,
+  fetchMasterResume,
   fetchStoryBank,
   gapCompetencies,
   normalizeBank,
@@ -19,6 +20,7 @@ import {
   planBehavioral,
   renderGraderContext,
   renderStoryForGrader,
+  storyBankEnabled,
   storyBankUrl,
   storyCompetencies,
   type StoryBank,
@@ -148,13 +150,16 @@ describe('renderStoryForGrader — unconfirmed is never fact', () => {
 });
 
 describe('the story bank is down', () => {
+  beforeEach(() => vi.stubEnv('CODEGRIND_STORY_BANK_URL', 'http://127.0.0.1:9410'));
+  afterEach(() => vi.unstubAllEnvs());
+
   it('fetch never throws: unreachable, a 500, or garbage are all {ok:false}', async () => {
     const boom = (async () => {
       throw new TypeError('fetch failed');
     }) as unknown as typeof fetch;
     expect(await fetchStoryBank(boom)).toEqual({ ok: false, error: expect.stringMatching(/unreachable.*fetch failed/) });
     const five = (async () => new Response('no', { status: 500 })) as unknown as typeof fetch;
-    expect(await fetchStoryBank(five)).toEqual({ ok: false, error: 'resume-builder answered 500' });
+    expect(await fetchStoryBank(five)).toEqual({ ok: false, error: 'story bank answered 500' });
     const junk = (async () => new Response('{"nope":1}', { status: 200 })) as unknown as typeof fetch;
     expect((await fetchStoryBank(junk)).ok).toBe(false);
   });
@@ -168,9 +173,8 @@ describe('the story bank is down', () => {
     const r = await fetchStoryBank(ok);
     expect(r.ok && r.bank.stories).toHaveLength(3);
     expect(url).toBe('http://127.0.0.1:9410/api/data/read?file=stories.json');
-    process.env.CODEGRIND_STORY_BANK_URL = 'http://elsewhere:1/';
+    vi.stubEnv('CODEGRIND_STORY_BANK_URL', 'http://elsewhere:1/');
     expect(storyBankUrl()).toBe('http://elsewhere:1/api/data/read?file=stories.json');
-    delete process.env.CODEGRIND_STORY_BANK_URL;
   });
 
   it('tells the grader it has no bank, and reports status for the start card and the report', () => {
@@ -292,5 +296,33 @@ describe('the question catalog', () => {
     expect(BQ_QUESTIONS.length).toBeGreaterThanOrEqual(36);
     expect(new Set(BQ_QUESTIONS.map((q) => q.id)).size).toBe(BQ_QUESTIONS.length);
     for (const c of BQ_COMPETENCIES) expect(questionsFor(c).length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('off unless configured (CODEGRIND_STORY_BANK_URL)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('unset or blank: disabled, and nothing is fetched', async () => {
+    const spy = vi.fn(async () => new Response(JSON.stringify(RAW), { status: 200 }));
+    for (const v of [undefined, '', '   ']) {
+      vi.stubEnv('CODEGRIND_STORY_BANK_URL', v ?? '');
+      if (v === undefined) delete process.env.CODEGRIND_STORY_BANK_URL; // unstubAllEnvs restores it
+      expect(storyBankEnabled()).toBe(false);
+      expect(await fetchStoryBank(spy as unknown as typeof fetch)).toMatchObject({ ok: false, off: true });
+      expect(await fetchMasterResume(spy as unknown as typeof fetch)).toMatchObject({ ok: false, off: true });
+    }
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('off tells the grader there is no bank, without naming a companion app', () => {
+    vi.stubEnv('CODEGRIND_STORY_BANK_URL', '');
+    const ctx = renderGraderContext({ ok: false, error: 'x', off: true });
+    expect(ctx).toMatch(/^STORY BANK: NONE/);
+    expect(ctx).not.toMatch(/resume-builder|UNAVAILABLE|<story/);
+  });
+
+  it('set: enabled', () => {
+    vi.stubEnv('CODEGRIND_STORY_BANK_URL', 'http://127.0.0.1:9410');
+    expect(storyBankEnabled()).toBe(true);
   });
 });

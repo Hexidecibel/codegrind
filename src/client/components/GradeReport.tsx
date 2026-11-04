@@ -34,6 +34,7 @@ import { GAP_TYPE_META, cardFront } from '@/client/components/GapCards';
 import { MOCK_LEVEL_LABEL } from '@/shared/sd';
 import { mockKindInfo, stageLabel } from '@/shared/mock-kinds';
 import { cn } from '@/lib/utils';
+import { useStoryBankEnabled } from '@/client/lib/integrations';
 
 const VERDICT_META: Record<MockVerdict, { label: string; className: string }> = {
   below: { label: 'Below level', className: 'border-red-500/40 bg-red-500/10 text-red-300' },
@@ -211,6 +212,7 @@ export function GradeReport({
   storyBank?: StoryBankStatus;
 }) {
   const { conceptLabel } = mockKindInfo(kind);
+  const forgeOn = useStoryBankEnabled();
   const verdict = VERDICT_META[grade.verdict];
   const signals = { nailed: [] as string[], weak: [] as string[], missing: [] as string[] };
   for (const o of grade.conceptObservations) signals[o.signal].push(conceptLabel(o.concept));
@@ -262,17 +264,20 @@ export function GradeReport({
               </li>
             ))}
           </ul>
-          <div className="flex flex-wrap gap-x-4 gap-y-1">
-            {grade.storyGaps.map((g) => (
-              <Link
-                key={g.concept}
-                to={`/stories?competency=${encodeURIComponent(g.concept)}`}
-                className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-              >
-                Forge a {conceptLabel(g.concept).toLowerCase()} story
-              </Link>
-            ))}
-          </div>
+          {/* The forge (and its route) exist only with the optional story bank configured. */}
+          {forgeOn && (
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {grade.storyGaps.map((g) => (
+                <Link
+                  key={g.concept}
+                  to={`/stories?competency=${encodeURIComponent(g.concept)}`}
+                  className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                >
+                  Forge a {conceptLabel(g.concept).toLowerCase()} story
+                </Link>
+              ))}
+            </div>
+          )}
           {storyCaptureUrl() && (
             <a
               href={storyCaptureUrl()}
@@ -280,7 +285,7 @@ export function GradeReport({
               rel="noreferrer"
               className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:underline"
             >
-              Or capture them in resume-builder (Interview → Capture) <ExternalLink className="h-3.5 w-3.5" />
+              Or capture them in your story bank <ExternalLink className="h-3.5 w-3.5" />
             </a>
           )}
         </section>

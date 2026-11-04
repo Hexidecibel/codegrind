@@ -19,6 +19,7 @@ import { PatternsPage } from '@/client/pages/PatternsPage';
 import { SetupWizard } from '@/client/components/setup/SetupWizard';
 import { getSetupState } from '@/client/lib/api';
 import type { SetupState } from '@/shared/types';
+import { IntegrationsContext, integrationsFrom } from '@/client/lib/integrations';
 
 /**
  * The first-run gate.
@@ -72,53 +73,56 @@ function App() {
   // first run: the thing you just installed, not a modal that could belong to
   // anything.
   return (
-    <BrowserRouter>
-      <Layout>
-        {setup?.needed && !finished ? (
-          <SetupWizard state={setup} onDone={() => setFinished(true)} />
-        ) : (
-          <Routes>
-            {/* Home — today's next step and this week — is the landing page.
-                /today renders it too: today-flow returns there (?query, #debrief). */}
-            <Route path="/" element={<Navigate to="/home" replace />} />
-            <Route path="/home" element={<HomePage />} />
-            <Route path="/today" element={<HomePage />} />
-            {/* Practice → Drills: Recognize, Envelope, Concept rep, Story forge. */}
-            <Route path="/practice" element={<PracticePage />} />
-            <Route path="/grind" element={<GrindPage />} />
-            <Route path="/recognize" element={<RecognizePage />} />
-            <Route path="/envelope" element={<EnvelopePage />} />
-            {/* Phase H3: the daily concept rep, and the AI-systems track. */}
-            <Route path="/concept" element={<ConceptPage />} />
-            <Route path="/concepts" element={<ConceptTrackPage />} />
-            <Route path="/concepts/:concept" element={<ConceptLessonPage />} />
-            {/* Phase H4: the story forge. */}
-            <Route path="/stories" element={<StoriesPage />} />
-            <Route path="/manual" element={<WorkspacePage />} />
-            <Route path="/progress" element={<ProgressPage />} />
-            <Route path="/study" element={<StudyPage />} />
-            {/* The code shape of each pattern (+ "write it from memory"). */}
-            <Route path="/patterns" element={<PatternsPage />} />
-            {/* Mock interviews. /mock is the start card, /mock/:id one interview
-                or its grade — a link that survives a reload. */}
-            <Route path="/mock" element={<MockPage />} />
-            <Route path="/mock/:id" element={<MockPage />} />
-            {/* The config screen the wizard used to be the only way to reach.
-                It is a normal route, gated by nothing: once `needed` is false
-                the wizard never renders again, and a model or a key you cannot
-                change from the browser is one you change with curl. */}
-            <Route path="/settings" element={<SettingsPage />} />
-            {/* The manual. Deliberately a plain route with no gate and no data
-                fetch of its own: it is the page you send someone to when the
-                app is confusing them, which includes when it is misconfigured
-                and every other page is showing an error. */}
-            <Route path="/help" element={<HelpPage />} />
-            {/* Study replaced the pattern library; keep old bookmarks alive. */}
-            <Route path="/library" element={<Navigate to="/study" replace />} />
-          </Routes>
-        )}
-      </Layout>
-    </BrowserRouter>
+    <IntegrationsContext.Provider value={integrationsFrom(setup)}>
+      <BrowserRouter>
+        <Layout>
+          {setup?.needed && !finished ? (
+            <SetupWizard state={setup} onDone={() => setFinished(true)} />
+          ) : (
+            <Routes>
+              {/* Home — today's next step and this week — is the landing page.
+                  /today renders it too: today-flow returns there (?query, #debrief). */}
+              <Route path="/" element={<Navigate to="/home" replace />} />
+              <Route path="/home" element={<HomePage />} />
+              <Route path="/today" element={<HomePage />} />
+              {/* Practice → Drills: Recognize, Envelope, Concept rep (+ Story forge). */}
+              <Route path="/practice" element={<PracticePage />} />
+              <Route path="/grind" element={<GrindPage />} />
+              <Route path="/recognize" element={<RecognizePage />} />
+              <Route path="/envelope" element={<EnvelopePage />} />
+              {/* Phase H3: the daily concept rep, and the AI-systems track. */}
+              <Route path="/concept" element={<ConceptPage />} />
+              <Route path="/concepts" element={<ConceptTrackPage />} />
+              <Route path="/concepts/:concept" element={<ConceptLessonPage />} />
+              {/* Phase H4: the story forge. Only with the optional story bank
+                  configured: saving to it is the forge's whole output. */}
+              {integrationsFrom(setup).storyBank && <Route path="/stories" element={<StoriesPage />} />}
+              <Route path="/manual" element={<WorkspacePage />} />
+              <Route path="/progress" element={<ProgressPage />} />
+              <Route path="/study" element={<StudyPage />} />
+              {/* The code shape of each pattern (+ "write it from memory"). */}
+              <Route path="/patterns" element={<PatternsPage />} />
+              {/* Mock interviews. /mock is the start card, /mock/:id one interview
+                  or its grade — a link that survives a reload. */}
+              <Route path="/mock" element={<MockPage />} />
+              <Route path="/mock/:id" element={<MockPage />} />
+              {/* The config screen the wizard used to be the only way to reach.
+                  It is a normal route, gated by nothing: once `needed` is false
+                  the wizard never renders again, and a model or a key you cannot
+                  change from the browser is one you change with curl. */}
+              <Route path="/settings" element={<SettingsPage />} />
+              {/* The manual. Deliberately a plain route with no gate and no data
+                  fetch of its own: it is the page you send someone to when the
+                  app is confusing them, which includes when it is misconfigured
+                  and every other page is showing an error. */}
+              <Route path="/help" element={<HelpPage />} />
+              {/* Study replaced the pattern library; keep old bookmarks alive. */}
+              <Route path="/library" element={<Navigate to="/study" replace />} />
+            </Routes>
+          )}
+        </Layout>
+      </BrowserRouter>
+    </IntegrationsContext.Provider>
   );
 }
 

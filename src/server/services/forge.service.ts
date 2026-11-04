@@ -11,6 +11,10 @@
 //             'draft' (baseRev; a 409 refetches and re-appends), then mint a
 //             "2-minute retell" drill card                                    free
 //
+// OPTIONAL: all of this is off unless CODEGRIND_STORY_BANK_URL is set
+// (story-bank.storyBankEnabled). Off, the routes 404, Today never schedules a
+// forge day, and nothing here makes a request.
+//
 // resume-builder is the owner of the story bank. This service never edits or
 // removes an existing story, never writes without baseRev, and never writes
 // on anything but the save click. The draft is the candidate's own words:
@@ -48,7 +52,9 @@ import { runForgeTurn } from './llm.forge.js';
 import { STORY_FORGE_ANCHOR, ensureStoryForgeAnchor, insertGap } from './mock.store.js';
 import {
   CANDIDATE_KNOWN_FACTS,
-  DEFAULT_STORY_BANK_URL,
+  STORY_BANK_OFF,
+  storyBankBase,
+  storyBankEnabled,
   gapCompetencies,
   normalizeBank,
   renderStoryForGrader,
@@ -78,7 +84,10 @@ function today(now: Date): string {
 // -----------------------------------------------------------------------------
 
 function rbBase(): string {
-  return (process.env.CODEGRIND_STORY_BANK_URL || DEFAULT_STORY_BANK_URL).replace(/\/+$/, '');
+  const base = storyBankBase();
+  // Callers are gated already (routes, cachedOpenGaps); this is the last line.
+  if (!base) throw new ForgeError(`The story forge is off: ${STORY_BANK_OFF}.`, 404);
+  return base;
 }
 
 /** resume-builder's install dir, for its own bin/backup. */
@@ -123,17 +132,18 @@ export function setForgeDepsForTest(d: Partial<typeof deps>): void {
 /** The whole stories.json, untouched, with its revision. */
 export async function readRawBank(): Promise<{ raw: Record<string, unknown>; rev: string }> {
   let res: Response;
+  const base = rbBase();
   try {
-    res = await deps.fetchImpl(`${rbBase()}/api/data/read?file=stories.json`, {
+    res = await deps.fetchImpl(`${base}/api/data/read?file=stories.json`, {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       cache: 'no-store',
     });
   } catch (err) {
-    throw new ForgeError(`resume-builder is unreachable (${err instanceof Error ? err.message.slice(0, 100) : err}).`, 502);
+    throw new ForgeError(`The story bank is unreachable (${err instanceof Error ? err.message.slice(0, 100) : err}).`, 502);
   }
-  if (!res.ok) throw new ForgeError(`resume-builder answered ${res.status} reading the story bank.`, 502);
+  if (!res.ok) throw new ForgeError(`The story bank answered ${res.status} on read.`, 502);
   const rev = res.headers.get('X-Data-Rev');
-  if (!rev) throw new ForgeError('resume-builder sent no X-Data-Rev; refusing to write without a revision.', 502);
+  if (!rev) throw new ForgeError('The story bank sent no X-Data-Rev; refusing to write without a revision.', 502);
   const raw = (await res.json()) as Record<string, unknown>;
   if (!raw || !Array.isArray(raw.stories)) throw new ForgeError('stories.json has no stories array.', 502);
   return { raw, rev };
@@ -142,18 +152,19 @@ export async function readRawBank(): Promise<{ raw: Record<string, unknown>; rev
 /** POST the whole file with baseRev. 409 = stale. */
 async function writeRawBank(data: Record<string, unknown>, baseRev: string): Promise<'ok' | 'conflict'> {
   let res: Response;
+  const base = rbBase();
   try {
-    res = await deps.fetchImpl(`${rbBase()}/api/data/write`, {
+    res = await deps.fetchImpl(`${base}/api/data/write`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file: 'stories.json', data, baseRev }),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch (err) {
-    throw new ForgeError(`resume-builder is unreachable (${err instanceof Error ? err.message.slice(0, 100) : err}).`, 502);
+    throw new ForgeError(`The story bank is unreachable (${err instanceof Error ? err.message.slice(0, 100) : err}).`, 502);
   }
   if (res.status === 409) return 'conflict';
-  if (!res.ok) throw new ForgeError(`resume-builder refused the write (${res.status}).`, 502);
+  if (!res.ok) throw new ForgeError(`The story bank refused the write (${res.status}).`, 502);
   return 'ok';
 }
 
@@ -256,6 +267,8 @@ function noteGaps(raw: Record<string, unknown>, now: number): void {
 
 /** Open gaps as last read; null when never read. Kicks a background refresh when stale. Never throws. */
 export function cachedOpenGaps(now = Date.now()): number | null {
+  // Off: never read, never scheduled (isForgeDayNow).
+  if (!storyBankEnabled()) return null;
   // Never from a test run: the suite must not reach a real resume-builder.
   if ((!gapCache || now - gapCache.at > GAP_CACHE_MS) && !gapRefreshing && !process.env.VITEST) {
     gapRefreshing = true;
@@ -547,6 +560,7 @@ export function behavioralLoopDays(now = new Date()): number | null {
 
 /** Is today's concept step a story-forge session? Never throws. */
 export function isForgeDayNow(repDoneToday: boolean, now = new Date()): boolean {
+  if (!storyBankEnabled()) return false;
   try {
     return forgeDay({
       date: today(now),

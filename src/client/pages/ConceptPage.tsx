@@ -19,6 +19,7 @@ import { todayStepFrom } from '@/client/lib/today-flow';
 import { TodayNextBar } from '@/client/components/TodayNextBar';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
+import { useStoryBankEnabled } from '@/client/lib/integrations';
 
 const STATE_LABEL: Record<ConceptLearningState, string> = { new: 'new', learning: 'learning', known: 'known' };
 const STATE_CLASS: Record<ConceptLearningState, string> = {
@@ -89,6 +90,7 @@ function RepResult({ rep }: { rep: ConceptRepView }) {
 
 export function ConceptPage() {
   const location = useLocation();
+  const storyBank = useStoryBankEnabled();
   const todayStep = todayStepFrom(location.search);
   const [day, setDay] = useState<ConceptToday | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -174,9 +176,11 @@ export function ConceptPage() {
           <Link to="/concepts" className="text-sm text-muted-foreground underline underline-offset-4">
             AI-systems track
           </Link>
-          <Link to="/stories" className="text-sm text-muted-foreground underline underline-offset-4">
-            Story forge
-          </Link>
+          {storyBank && (
+            <Link to="/stories" className="text-sm text-muted-foreground underline underline-offset-4">
+              Story forge
+            </Link>
+          )}
         </header>
 
         {todayStep && <TodayNextBar here={todayStep} screenPath="/concept" refreshKey={day?.doneToday ?? 0} />}

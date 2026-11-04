@@ -242,7 +242,7 @@ function PlanPreview({
           </p>
         ) : (
           <p className="text-xs text-amber-300">
-            Story bank unavailable ({bank.error ?? 'resume-builder did not answer'}). The mock still runs; the grade
+            Story bank unavailable ({bank.error ?? 'it did not answer'}). The mock still runs; the grade
             will judge stories on the transcript alone.
           </p>
         ))}
@@ -257,51 +257,59 @@ function ProjectPicker({ value, onChange }: { value: DdProjectChoice; onChange: 
     let live = true;
     getDeepDiveProjects()
       .then((d) => live && setData(d))
-      .catch(() => live && setData({ options: [], errors: ['resume-builder did not answer'] }));
+      .catch(() => live && setData({ options: [], errors: ['your projects could not be loaded'] }));
     return () => {
       live = false;
     };
   }, []);
+  // Nothing to pick from and nothing wrong: no story bank is configured, so the
+  // one-liner is the whole picker.
+  const typedOnly = !!data && data.options.length === 0 && data.errors.length === 0;
+  useEffect(() => {
+    if (typedOnly && value.source !== 'typed') onChange({ source: 'typed', text: '' });
+  }, [typedOnly, value.source, onChange]);
   const key = value.source === 'typed' ? 'typed' : `${value.source}:${value.id ?? ''}`;
   const stories = data?.options.filter((o) => o.source === 'story') ?? [];
   const resume = data?.options.filter((o) => o.source === 'resume') ?? [];
   return (
     <label className="block space-y-1.5">
       <span className="text-sm font-medium">Project</span>
-      <select
-        value={key}
-        onChange={(e) => {
-          const v = e.target.value;
-          if (v === 'typed') onChange({ source: 'typed', text: value.text ?? '' });
-          else {
-            const [source, ...rest] = v.split(':');
-            onChange({ source: source as 'story' | 'resume', id: rest.join(':') });
-          }
-        }}
-        className="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-      >
-        <option value="story:">{data ? 'Pick a project…' : 'Loading your projects…'}</option>
-        {stories.length > 0 && (
-          <optgroup label="Story bank">
-            {stories.map((o) => (
-              <option key={o.id} value={`story:${o.id}`}>
-                {o.title}
-                {o.where ? ` — ${o.where}` : ''}
-              </option>
-            ))}
-          </optgroup>
-        )}
-        {resume.length > 0 && (
-          <optgroup label="Master resume">
-            {resume.map((o) => (
-              <option key={o.id} value={`resume:${o.id}`}>
-                {o.title.length > 110 ? `${o.title.slice(0, 107)}…` : o.title} ({o.where})
-              </option>
-            ))}
-          </optgroup>
-        )}
-        <option value="typed">Type a one-liner…</option>
-      </select>
+      {!typedOnly && (
+        <select
+          value={key}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === 'typed') onChange({ source: 'typed', text: value.text ?? '' });
+            else {
+              const [source, ...rest] = v.split(':');
+              onChange({ source: source as 'story' | 'resume', id: rest.join(':') });
+            }
+          }}
+          className="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+        >
+          <option value="story:">{data ? 'Pick a project…' : 'Loading your projects…'}</option>
+          {stories.length > 0 && (
+            <optgroup label="Story bank">
+              {stories.map((o) => (
+                <option key={o.id} value={`story:${o.id}`}>
+                  {o.title}
+                  {o.where ? ` — ${o.where}` : ''}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {resume.length > 0 && (
+            <optgroup label="Master resume">
+              {resume.map((o) => (
+                <option key={o.id} value={`resume:${o.id}`}>
+                  {o.title.length > 110 ? `${o.title.slice(0, 107)}…` : o.title} ({o.where})
+                </option>
+              ))}
+            </optgroup>
+          )}
+          <option value="typed">Type a one-liner…</option>
+        </select>
+      )}
       {value.source === 'typed' && (
         <input
           value={value.text ?? ''}
@@ -312,7 +320,7 @@ function ProjectPicker({ value, onChange }: { value: DdProjectChoice; onChange: 
         />
       )}
       <span className="block text-xs text-muted-foreground">
-        The interviewer gets only this line; the grader checks every claim against your story bank and master resume.
+        The interviewer gets only this line{typedOnly ? '.' : '; the grader checks every claim against your story bank and master resume.'}
         {data?.errors.length ? ` (${data.errors.join('; ')})` : ''}
       </span>
     </label>

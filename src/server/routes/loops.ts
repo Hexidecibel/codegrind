@@ -5,25 +5,26 @@
 //   POST   /api/loops             {company, date, rounds[], postingId?, postingTitle?}
 //   PUT    /api/loops/:id         same body
 //   DELETE /api/loops/:id
-//   GET    /api/loops/postings    resume-builder's job postings, for the link
-//                                 picker. A down resume-builder is
-//                                 {available: false, postings: []}, never a 500.
+//   GET    /api/loops/postings    the optional story-bank companion's job
+//                                 postings, for the link picker. Down is
+//                                 {available: false, postings: []}, never a 500;
+//                                 not configured is that with no request.
 
 import { Hono } from 'hono';
 import { nanoid } from 'nanoid';
 import { deleteLoop, insertLoop, listLoops, updateLoop } from '../services/db.js';
 import { parseLoopBody, type JobPosting, type LoopsResponse, type PostingsResponse } from '../../shared/loops.js';
-import { DEFAULT_STORY_BANK_URL } from '../services/story-bank.js';
+import { storyBankBase } from '../services/story-bank.js';
 import { errorBody } from '../services/explain.service.js';
 
 export const loopsRoutes = new Hono();
 
 const POSTINGS_TIMEOUT_MS = 2500;
 
-/** resume-builder's postings file, same host as the story bank. */
-export function postingsUrl(): string {
-  const base = (process.env.CODEGRIND_STORY_BANK_URL || DEFAULT_STORY_BANK_URL).replace(/\/+$/, '');
-  return `${base}/api/data/read?file=job-postings.json`;
+/** The companion's postings file, same host as the story bank; null when the integration is off. */
+export function postingsUrl(): string | null {
+  const base = storyBankBase();
+  return base ? `${base}/api/data/read?file=job-postings.json` : null;
 }
 
 /** Whatever resume-builder sent → JobPosting[]. Never throws. */
@@ -39,8 +40,10 @@ export function normalizePostings(raw: unknown): JobPosting[] {
 }
 
 export async function fetchPostings(fetchImpl: typeof fetch = fetch): Promise<PostingsResponse> {
+  const url = postingsUrl();
+  if (!url) return { postings: [], available: false };
   try {
-    const res = await fetchImpl(postingsUrl(), { signal: AbortSignal.timeout(POSTINGS_TIMEOUT_MS) });
+    const res = await fetchImpl(url, { signal: AbortSignal.timeout(POSTINGS_TIMEOUT_MS) });
     if (!res.ok) return { postings: [], available: false };
     return { postings: normalizePostings(await res.json()), available: true };
   } catch {

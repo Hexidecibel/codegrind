@@ -57,6 +57,7 @@ import {
   reviewLadderPhrase,
 } from '@/client/lib/help-facts';
 import { cn } from '@/lib/utils';
+import { useStoryBankEnabled } from '@/client/lib/integrations';
 import { MOCK_MINUTES, MOCK_TURN_CAP, estimateMockCost } from '@/shared/mock';
 
 /** The start card's number, so Help and the Mock page cannot disagree. */
@@ -161,6 +162,7 @@ function Bullets({ children }: { children: ReactNode }) {
 // -----------------------------------------------------------------------------
 
 export function HelpPage() {
+  const storyBank = useStoryBankEnabled();
   const { hash } = useLocation();
 
   // Deep links from the contextual hints arrive as `/help#numbers`. The router
@@ -229,7 +231,7 @@ export function HelpPage() {
               no topic or difficulty picking, a scheduler reads your history and
               chooses. This is the place to live in. <strong>Pick a problem</strong>:
               choose a topic and difficulty yourself. <strong>Drills</strong>:
-              Recognize, Envelope, Concept rep and Story forge.
+              {storyBank ? 'Recognize, Envelope, Concept rep and Story forge.' : 'Recognize, Envelope and Concept rep.'}
             </Term>
             <Term label="Mock">
               A system-design interview over chat, graded at Senior, Staff or

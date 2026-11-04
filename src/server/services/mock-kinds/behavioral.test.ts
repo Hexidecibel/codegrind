@@ -2,7 +2,7 @@
 // mock-kinds/behavioral — the spec: who sees what, the schemas, the coercers
 // =============================================================================
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { BEHAVIORAL_SPEC, buildBehavioralContext, coerceQuestions, coerceStoryGaps } from './behavioral.js';
 import { MOCK_KIND_SPECS } from './index.js';
 import { MOCK_KIND_INFO, anyConceptLabel } from '../../../shared/mock-kinds.js';
@@ -39,6 +39,10 @@ const downFetch = (async () => {
 async function prep(fetchImpl = okFetch, requested?: unknown): Promise<MockPrep> {
   return BEHAVIORAL_SPEC.prepare!({ level: 'staff', requested, history: [], recentQuestionIds: [], fetchImpl, rand: () => 0.5 });
 }
+
+// The story bank is opt-in; these tests are the "on" install unless they say otherwise.
+beforeEach(() => vi.stubEnv('CODEGRIND_STORY_BANK_URL', 'http://127.0.0.1:9410'));
+afterEach(() => vi.unstubAllEnvs());
 
 describe('the behavioral kind', () => {
   it('is registered on both sides, with intro → q1..q4 → wrap and ~12 competencies', () => {
@@ -81,6 +85,16 @@ describe('who sees the stories', () => {
     expect(g.indexOf('UNCONFIRMED-TEXT')).toBeGreaterThan(g.indexOf('OPEN QUESTIONS (NOT facts'));
     expect(g).toContain('CAVEAT-TEXT');
     expect(p.plan!.storyBank).toMatchObject({ loaded: true, stories: 1, confirmed: 1 });
+  });
+
+  it('off (no story bank configured): plans without a bank, never fetches, reports no bank status', async () => {
+    vi.stubEnv('CODEGRIND_STORY_BANK_URL', '');
+    const spy = vi.fn(okFetch);
+    const p = await prep(spy as unknown as typeof fetch);
+    expect(p.plan!.items).toHaveLength(4);
+    expect(p.plan!.storyBank).toBeUndefined();
+    expect(p.graderContext).toMatch(/^STORY BANK: NONE/);
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('starts without a bank when resume-builder is down', async () => {

@@ -269,3 +269,13 @@ suite('POST /api/setup/seed — the guards that run before any money is spent', 
     expect(mocks.generateAndStore).not.toHaveBeenCalled();
   });
 });
+
+suite('optional integrations', () => {
+  it('the story bank is off unless CODEGRIND_STORY_BANK_URL is set', async () => {
+    vi.stubEnv('CODEGRIND_STORY_BANK_URL', '');
+    expect((await state()).integrations).toEqual({ storyBank: false });
+    vi.stubEnv('CODEGRIND_STORY_BANK_URL', 'http://127.0.0.1:9410');
+    expect((await state()).integrations).toEqual({ storyBank: true });
+    vi.unstubAllEnvs();
+  });
+});

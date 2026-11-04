@@ -83,6 +83,7 @@ import {
 import { humanize } from '@/client/lib/format';
 import { Button } from '@/client/components/ui/button';
 import { cn } from '@/lib/utils';
+import { useStoryBankEnabled } from '@/client/lib/integrations';
 
 function longDate(date: string): string {
   const [y, m, d] = date.split('-').map(Number);
@@ -556,6 +557,7 @@ function DayDetails({
 }) {
   const [open, setOpen] = useState(() => stepsOpenByDefault(state));
   const canEndEarly = !state.endedEarly && state.current !== null && state.current !== 'debrief';
+  const storyBank = useStoryBankEnabled();
   return (
     <div className="space-y-4 border-t border-border pt-2">
       <button
@@ -627,7 +629,7 @@ function DayDetails({
             <Link to="/patterns" className={quietLink}>
               <Shapes className="h-3.5 w-3.5" aria-hidden /> Pattern shapes
             </Link>
-            {!state.refresh.on && (
+            {!state.refresh.on && storyBank && (
               <Link to="/stories" className={quietLink} title="Draft a behavioral story by voice">
                 <Mic className="h-3.5 w-3.5" aria-hidden /> Story forge
               </Link>

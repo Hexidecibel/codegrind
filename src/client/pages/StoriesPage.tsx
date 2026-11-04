@@ -8,7 +8,7 @@
 //   /stories?session=<id>        a forge session: one question per turn, answered
 //                                by dictation; the coach pushes back and rewrites
 //                                the STAR draft; "Save to story bank" appends it
-//                                to resume-builder as a DRAFT — on that click only.
+//                                to the story bank as a DRAFT — on that click only.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -105,7 +105,7 @@ function Setup({ onStarted }: { onStarted: (s: ForgeSessionView) => void }) {
           </select>
         </label>
         {!opts.bank.loaded && (
-          <p className="text-xs text-amber-300">Story bank unavailable ({opts.bank.error}). You can still forge; saving needs resume-builder.</p>
+          <p className="text-xs text-amber-300">Story bank unavailable ({opts.bank.error}). You can still forge; saving needs the story bank.</p>
         )}
         <p className="text-xs text-muted-foreground">
           One question at a time: situation → your role → what YOU did → obstacles → result with a number → what you&apos;d
@@ -299,7 +299,7 @@ function Session({ id, onClose }: { id: string; onClose: () => void }) {
               {s.cardId !== null && (
                 <p className="text-xs text-foreground/80">A 2-minute retell card joins your drill cards tomorrow.</p>
               )}
-              <p className="text-xs text-foreground/80">Review it and confirm it in resume-builder before you rely on it.</p>
+              <p className="text-xs text-foreground/80">Review it and confirm it in your story bank before you rely on it.</p>
             </div>
           ) : (
             open && (
@@ -309,7 +309,7 @@ function Session({ id, onClose }: { id: string; onClose: () => void }) {
                   Save to story bank (as a draft)
                 </Button>
                 <p className="text-xs text-muted-foreground">
-                  Appends a NEW story with status “draft” to resume-builder after a backup. Nothing existing is changed; open
+                  Appends a NEW story with status “draft” to your story bank after a backup. Nothing existing is changed; open
                   questions stay open questions.
                 </p>
               </div>

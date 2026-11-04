@@ -8,7 +8,7 @@
 // version, never touches an existing story, never saves twice; the retell
 // card; and the Today alternation.
 
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { Hono } from 'hono';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -90,6 +90,10 @@ const rbFetch = vi.fn(async (url: string, init?: RequestInit) => {
   return new Response('nope', { status: 404 });
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 afterAll(() => {
   vi.useRealTimers();
   db.close();
@@ -97,6 +101,8 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  // The integration is opt-in; every test here is the "on" install unless it says otherwise.
+  vi.stubEnv('CODEGRIND_STORY_BANK_URL', 'http://127.0.0.1:9410');
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
   fake.runForgeTurn.mockReset();
@@ -338,5 +344,29 @@ describe('Today: the concept step alternates with the story forge', () => {
     };
     expect(deriveSteps({ ...base, quick: true }).steps.find((s) => s.id === 'concept')).toMatchObject({ status: 'skipped', label: 'Story forge' });
     expect(deriveSteps({ ...base, skips: ['concept'] as never[] }).steps.find((s) => s.id === 'concept')!.status).toBe('skipped');
+  });
+});
+
+describe('off: CODEGRIND_STORY_BANK_URL unset', () => {
+  beforeEach(() => {
+    vi.stubEnv('CODEGRIND_STORY_BANK_URL', '');
+    // The gap cache still says 2 open gaps (outer beforeEach): the switch must win over it.
+  });
+
+  it('every forge route is a 404 and nothing reaches the companion', async () => {
+    expect((await app.request('/api/forge/options')).status).toBe(404);
+    expect((await post('/api/forge/start', { competency: 'influence-without-authority' })).status).toBe(404);
+    expect((await post('/api/forge/x/save', { confirm: true })).status).toBe(404);
+    expect(rbFetch).not.toHaveBeenCalled();
+    expect(backups).toEqual([]);
+  });
+
+  it('Today never schedules a forge day and never reads the bank', async () => {
+    expect(svc.cachedOpenGaps()).toBeNull();
+    expect(svc.isForgeDayNow(false, NOW)).toBe(false);
+    const t = await (await app.request('/api/today')).json();
+    const s = t.steps.find((x: { id: string }) => x.id === 'concept');
+    expect(s.label).toBe('Concept rep');
+    expect(rbFetch).not.toHaveBeenCalled();
   });
 });
