@@ -1,332 +1,294 @@
 # codegrind
 
-An AI-coached interview-prep trainer that runs on your own machine. It writes you a
-problem, **proves the problem is solvable before it serves it**, runs your answer in a
-locked-down container, and then tells you what you actually did wrong — not "wrong
-answer", but which pattern you missed and what your complexity really was.
+**A self-hosted interview-prep trainer that writes its own coding problems, proves each one is solvable before serving it, runs your code in a locked-down container, and coaches you on the pattern you missed.**
 
-One user, one SQLite file, no accounts and no cloud. Every model call is one you
-triggered, so an idle instance costs nothing. Point it at Claude, or at a model you
-already run yourself — in which case there is no API key anywhere in the system.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![Node 20 | 22](https://img.shields.io/badge/node-20%20%7C%2022-339933) ![Tests: 1,773](https://img.shields.io/badge/tests-1%2C773%20passing-brightgreen)
 
-MIT licence · Node 20 or 22 · Docker · SQLite · JavaScript, Python and Go
+![A banked problem on the solve surface: the statement on the left, the editor and the sample-test results on the right](docs/assets/solve.png)
 
-<!-- One full grind loop, recorded against a real instance: the banked problem,
-     the plan-your-attack gate, the solution typed in, Run going green on the
-     samples, Submit, and the coaching brief arriving underneath the results.
-     ~15s, no audio. The still underneath it is the frame that matters — the
-     pattern the coach names and how to recognise it next time. -->
+One user, one SQLite file, no accounts, no cloud services. Every model call is one you triggered, so an idle instance costs nothing. It runs against Claude, or against an OpenAI-compatible model you host yourself, in which case there is no API key anywhere in the system.
 
-![The grind loop: a problem, a submission, and the coaching brief that follows](docs/images/grind-loop.gif)
-
-![The coaching brief after an accepted submit: the pattern named, how to recognise it next time, and your complexity next to the optimal](docs/images/grind-loop.png)
+React · Hono · TypeScript · SQLite · Docker · JavaScript, Python and Go
 
 ---
 
-## Why this is not a chat window with a code box next to it
+## What it does
 
-**The model does not get to decide what the right answer is.** Every generated problem
-ships with a reference solution, and that reference is *executed in the sandbox* before
-the problem is stored. Its output becomes the `expected` value for each test. Tests the
-reference errors on are dropped; a problem with too few survivors is thrown away and
-regenerated. This exists because of one specific and extremely common model failure — a
-perfectly correct reference paired with hand-authored expected values that disagree with
-it. A problem stored that way is unsolvable, is served silently, and fails in the one way
-you cannot diagnose, because it looks exactly like your own mistake. Running the
-reference makes the problem self-consistent by construction. It is also why a fresh
-generate takes 15–30 seconds rather than 5: you are paying for two extra sandbox runs.
+You open **Today** and get a guided session: clear the review pile, explain one system-design concept out loud, solve two adaptive coding problems, run one mock interview, then read a short debrief.
 
-**It runs on hardware you own, for free.** Claude, or any OpenAI-compatible endpoint —
-llama.cpp, llama-swap, vLLM, Ollama, LM Studio — with **no API key at all** in the normal
-local case. The setup wizard does not take your word for it: it fires one real forced
-tool call at the model you picked, times it, and refuses to store a model that answers in
-prose instead. Ten of this app's eleven model calls are forced tool calls, so that is the
-only check worth running.
+- **Coding problems are generated, verified, then banked.** The model writes a problem and a reference solution. The server runs that reference in the sandbox and uses its output as the expected answer for every test. A problem whose reference cannot pass its own tests is never stored.
+- **Your code runs in a throwaway container** with no network, a read-only filesystem, no capabilities, and memory, PID, CPU and wall-clock caps.
+- **The coach names the pattern, not the answer.** After a submit you get the pattern you should have recognised, how to spot it next time, your complexity next to the optimal, and one thing to fix.
+- **It remembers you.** An 18-topic skill tree with real prerequisites, a tier ladder you climb only with distinct, hint-free solves, spaced repetition per topic, and a review queue that re-serves the exact problem you struggled with, days later, with the hint button gone.
+- **Mock interviews in four formats:** system design, behavioral, live coding and project deep-dive. Each one is graded per stage, and every fact the interviewer had to hand you becomes a self-graded drill card on a spaced schedule.
+- **Drills for the rest of the loop:** a no-code Recognize drill (read a statement, pick the pattern), back-of-the-envelope math reps, concept reps graded against hand-written rubrics, and a voice-first coach for drafting STAR stories.
+- **Interview loops.** Enter a company's interview date and round types. Reviews are never scheduled past it, everything open is pulled due 1-2 days before, and the daily mock rotates toward the rounds you will face.
 
-**It remembers you, which is the thing a chat window cannot do.** An 18-topic skill tree
-with a real prerequisite graph. A tier ladder where one credit is *one distinct problem
-solved with zero hints* and three credits clear a tier. Spaced repetition per topic. And
-a review queue that re-serves the exact problem you needed help on, days later, **cold** —
-same problem, no variation, Hint button gone.
+<table>
+<tr>
+<td width="68%"><img src="docs/assets/progress.png" alt="Progress: the prerequisite skill tree with reached and locked topics"></td>
+<td width="32%"><img src="docs/assets/phone-today.png" alt="Today on a phone: a Pattern Refresh day, the phone session of short drills, and the finished steps"></td>
+</tr>
+<tr>
+<td><sub>Progress: the prerequisite skill tree, tiers and counters.</sub></td>
+<td><sub>The phone layout: an installable PWA for the steps you can do away from a keyboard.</sub></td>
+</tr>
+</table>
 
-**It coaches the pattern, not the answer.** The brief after a submit names the pattern you
-should have recognised, puts your complexity next to the optimal, and gives you one thing
-to fix. There is a predict-before-solve gate that takes your stated approach and
-complexity up front, so the coach can compare what you *thought* your code did against
-what it demonstrably did.
+---
 
-**Nothing runs when you are not there.** No background jobs, no warming, no timers. And
-the scheduler that decides which problem you see next — the part that runs on every
-single problem — makes **zero** model calls. That is what lets it be adaptive per problem
-without being expensive per problem.
+## How it works
 
-"Show me the answer" is always available and never refused. It is recorded rather than
-blocked: a revealed problem simply earns no tier credit.
+```mermaid
+flowchart LR
+  subgraph Browser
+    UI["React + Vite SPA<br/>Monaco (desktop), CodeMirror (phone)"]
+  end
+
+  subgraph Server["Hono server (one Node process)"]
+    R["routes /api/*"]
+    SCH["scheduler + today + study order<br/>pure, deterministic, no model calls"]
+    BANK["bank.service<br/>generate, canonicalize, store"]
+    LLM["llm.service + feature prompts<br/>say WHAT they want"]
+    CLI["llm.client<br/>decides WHO answers"]
+    SBX["sandbox.service"]
+    DB[("SQLite, WAL<br/>one file")]
+    LEDGER["ai_usage ledger<br/>one priced row per call"]
+  end
+
+  subgraph Models
+    ANT["Anthropic API"]
+    OAI["OpenAI-compatible endpoint<br/>llama.cpp, vLLM, Ollama, LM Studio"]
+  end
+
+  subgraph Docker["Docker, one container per run"]
+    RUN["bin/run-submission<br/>--network none --read-only --cap-drop=ALL"]
+    H["per-language harness<br/>JS, Python, Go"]
+  end
+
+  UI -- "fetch /api/*" --> R
+  R --> SCH
+  R --> BANK
+  R --> LLM
+  R --> SBX
+  SCH --> DB
+  BANK --> LLM
+  BANK --> SBX
+  BANK --> DB
+  LLM --> CLI
+  CLI --> ANT
+  CLI --> OAI
+  CLI --> LEDGER
+  LEDGER --> DB
+  SBX --> RUN --> H
+```
+
+A fresh problem goes through this pipeline before anyone sees it:
+
+```mermaid
+flowchart TD
+  A["Scheduler picks an intent<br/>(review, warm-up, reinforce, variation, level-up, new-pattern)"] --> B{"Banked problem<br/>for this slot?"}
+  B -- yes --> S["Serve it (a database read, free)"]
+  B -- no --> G["Forced tool call: emit_problem<br/>statement, tests, reference solution"]
+  G --> C["Run the reference on the sample tests<br/>and the hidden tests, in the sandbox"]
+  C --> D["Drop tests the reference errors on.<br/>Its output becomes expected for the rest."]
+  D --> E{"At least 1 sample<br/>and 4 hidden survive?"}
+  E -- no --> F{"Attempt < 3?"}
+  F -- yes --> G
+  F -- no --> X["Fail loudly<br/>(nothing unverified is served)"]
+  E -- yes --> V["Check the worked examples against<br/>the reference, fix any that disagree"]
+  V --> W["Store as canonicalized, then serve"]
+```
+
+---
+
+## Engineering decisions
+
+These are the choices that shape the system, with what each one costs.
+
+### The model never decides what the right answer is
+
+The most common failure when a model writes coding problems is a correct reference solution paired with hand-written expected values that disagree with it. A problem stored that way is unsolvable, and it fails in the one way a learner cannot diagnose: it looks exactly like their own mistake.
+
+So expected values are never taken from the model. `canonicalize` (in `bank.service.ts`) runs the generated reference against every sample and hidden test in the real sandbox, drops any test the reference errors on, and adopts the reference's actual output as `expected` for the rest. If fewer than 1 sample or 4 hidden tests survive, the problem is discarded and regenerated, up to 3 attempts. The worked examples in the statement are then checked against the reference too, and rewritten if they disagree. Every stored problem is self-consistent by construction: its reference passes its own tests.
+
+**Cost:** two extra sandbox runs per generation, so a fresh problem takes roughly 15-30 seconds on Claude instead of about 5. A banked problem is served instantly.
+
+**When the sandbox itself is down,** retrying would only burn generation calls, so the languages part ways. JavaScript stores the problem flagged `canonicalized = 0`, which keeps it out of every future bank read. Every other language throws. Minting a problem whose expected values no real run can reproduce is worse than failing loudly. The same rule is why an unfinished language (Java has a registry entry but no harness) is offered nowhere: every language picker derives availability from whether `test-harness/<lang>/Dockerfile` exists.
+
+### Sandbox isolation
+
+Every run, yours and the ones the server does to verify its own problems, executes in a fresh container:
+
+```
+timeout -k 3 <limit> docker run --rm --network none --read-only --cap-drop=ALL \
+  --security-opt no-new-privileges --memory=<cap> --cpus=1 --pids-limit=<cap> \
+  --tmpfs /tmp -v <work dir>:/work:ro <runner image> ...
+```
+
+| | JavaScript | Python | Go |
+|---|---|---|---|
+| memory | 256 MB | 256 MB | 512 MB |
+| PIDs | 128 | 128 | 256 |
+| wall clock | 12 s | 12 s | 30 s |
+| `/tmp` | noexec | noexec | exec (a compiler has to run its binary) |
+
+There is no fallback that runs submitted code in the server process. An infinite loop is a non-event: the outer `timeout` kills the container and you get a `timeout` verdict. Go nests its own budgets (per test 2 s, suite 10 s, compile 10 s) strictly inside the container's, so a hang still reports "3 of 8 passed, then this one hung" instead of an opaque kill.
+
+Three details that came from real failures:
+
+- **One equality fixture for three hand-written comparators.** Each runner has its own `deepEqual` and serializer. `test-harness/conformance/equality-cases.json` pins NaN and infinity sentinels, `-0`, float tolerance and key order, and `bin/build-runner-image` deletes any image that disagrees with it instead of publishing it.
+- **Orphan reaping by label, not image.** If the runner script is SIGKILLed, its container survives. `bin/reap-runners` runs on a 5-minute timer and filters on a `codegrind.runner` label, because Docker resolves `ancestor=<tag>` to an image ID at query time, and a rebuild would hide exactly the containers that need reaping.
+- **Hidden expected values never reach the browser.** They are stripped from the response, not just from the UI, and re-attached server-side when you ask the tutor why a test failed.
+
+**What this is not:** containers share the host kernel. This protects against your own runaway loops and a generated solution doing something silly, not against hostile code. Running it also requires Docker-group access, which is root-equivalent on the host. See [Security](#security).
+
+### An idle instance costs nothing
+
+No background jobs, no warming on a timer, no model call that you did not cause. The only timer in the deployment reaps orphaned containers and never touches a model.
+
+The part that runs most often is free by design. The scheduler that picks every problem (`scheduler.service.ts`) imports no model client: it scores candidates from SQLite state and draws one with a seeded PRNG. The Today routine and the Study reading order are pure functions too. The one model call in the session path, a per-sitting plan, only nudges a score and falls back to a default if it fails.
+
+| action | model calls |
+|---|---|
+| a banked problem | 0 (a database read) |
+| Run against the sample tests | 0 |
+| a fresh problem | 1 (up to 3 on retries), plus 2 sandbox runs |
+| Submit | 1 coaching call |
+| a question to the tutor | 1 |
+| first-run seeding | 8 by default, 12 at most (a server-side ceiling) |
+
+Every call passes through one choke point (`llm.client`) that writes a priced row to an `ai_usage` table, and the Today header shows spend for the day and the month. Automatic reviews (card grading, step reviews, the auto debrief) sit behind one "AI reviews" switch.
+
+Calls are routed by role, not by feature. On Claude the defaults are Sonnet for generation and coaching, Haiku for short forced-tool checks (hints, plans, card grading), and Opus for the tutor chat, which is one call per question you actually ask. Of the 23 call sites, 22 are forced tool calls with a JSON Schema as the response contract; the tutor is the only prose call.
+
+### Bring your own model, with no failover
+
+`llm.service` and the feature prompts say what they want; `llm.client` is the only file that knows who answers. The OpenAI-compatible provider was added as one branch there, and no call site changed.
+
+The setup wizard does not take an endpoint on trust. It lists what `GET /v1/models` advertises, then fires one real forced tool call at the chosen model and times it. A model that answers in prose instead of calling the tool is refused on the spot, usually with the fix named (for llama.cpp, starting it with `--jinja`), rather than failing later inside a 30-second generate. A deny list keeps a router from handing work to a model id you never want touched.
+
+There is deliberately no failover. If a local endpoint is down, calls fail and name the endpoint and model; they never quietly become billed Claude calls. The tutor defaults to the workhorse's provider for the same reason, so a local install stays local.
+
+### No cloud, one SQLite file
+
+The whole state of the app is one SQLite file in WAL mode: problem bank, attempts, skill state, review queues, mocks, drill cards, lessons, settings and the spend ledger. There are no accounts and no external services beyond the model you point it at. Backups are `bin/backup-db` (an online SQLite backup, not `cp`), and migrations are versioned and run by `bin/migrate`.
+
+The tradeoffs are accepted on purpose: it is single-user, it has no authentication of its own, and the database must live on a local filesystem (SQLite locking breaks on NFS and mergerfs).
+
+### Language is a property of the problem, not the submission
+
+A problem's expected values were produced by running its reference in one language, so its tests are bound to that language. `POST /api/run` and `POST /api/submit` carry only `{problemId, code}`; the server reads the language from the problem. Grading Python against JavaScript-derived answers is not unlikely, it is unrepresentable.
+
+Skill state, tiers and the review queue fork per language and start cold, because a tier means three distinct hint-free solves at that difficulty and you have not done that in Go yet. Every language-partitioned database accessor takes `language` as a required leading parameter, so a missed call site is a compile error rather than a silent cross-language read.
+
+### Progress you cannot game
+
+A tier credit is one **distinct** problem solved with **zero** hints; three credits clear a tier (easy, medium, hard, expert). Credits are deduplicated by problem ID, which closed a real exploit where re-submitting a passing solution walked a topic up for free. This replaced a solve-rate score that, under daily use, collapsed to a coin flip.
+
+"Show me the answer" is always available and never refused. The reveal is written to a ledger before the solution is returned, so the next submit counts as assisted whatever the client does, and that problem earns no tier credit.
 
 ---
 
 ## Quickstart
 
-**You need [Docker](https://docs.docker.com/get-started/get-docker/) and npm.** That is the
-whole prerequisite list — your submissions run in per-language sandbox containers, so Docker
-is not optional. Nothing else needs installing, and there is nothing to configure first.
+You need **Docker** (your account able to reach the daemon) and **Node 20 or 22**. Not Node 24: `better-sqlite3` is ABI-pinned and crashes under it, and `bin/setup` detects that and tells you what to run.
 
-```
-git clone git@github.com:Hexidecibel/codegrind.git
+```bash
+git clone https://github.com/Hexidecibel/codegrind.git
 cd codegrind
 bin/setup
 ```
 
-That is the whole thing. There is no file to edit first — no `.env` to fill in, no API key
-on disk. `bin/setup` checks what it needs, installs, builds, migrates, builds the sandbox
-images, starts the server, and tells you where to go:
+There is no file to edit first. `bin/setup` checks Node, Docker and disk, writes `.env`, installs, builds, migrates, builds the three sandbox images, starts the server and prints the URL:
 
 ```
 codegrind setup  /home/you/src/codegrind
 
   ✓ node v22.22.0
   ✓ docker 29.1.3
-  ✓ disk 540 GB free on /var/lib/docker
+  ✓ disk 620 GB free on /var/lib/docker
   ✓ .env written (port 9416, data /home/you/src/codegrind/data)
   · installing dependencies (npm, a minute or two the first time)…
   ✓ dependencies installed
   · building the client (typecheck + bundle; Monaco makes this the slow part)…
   ✓ client built
   · preparing the database…
-  ✓ database ready — schema v3, 0 problems, 0 attempts, 0 lessons, 0 settings
-  ✓ runner images: javascript python go (already done)
+  ✓ database ready — schema v4, 0 problems, 0 attempts, 0 lessons, 0 settings
+  ✓ runner images: javascript python go
   · starting the server…
   ✓ listening on http://localhost:9416
 
   → open http://localhost:9416 to finish setup
-    It will ask which model should write your problems, then stock the bank.
-
-    bin/status  how it is doing      bin/stop   stop the server
-    bin/logs    tail the log         bin/setup  safe to run again
 ```
 
-On a machine that has not built the sandbox images before, that images line instead reads
-`· building sandbox images: javascript python go (first time only; several minutes)…` and
-takes a few minutes. The three finished images measure about 650 MB together; `bin/setup`
-insists on 3 GB free because the build needs layer scratch on top. A re-run afterwards
-skips everything unchanged and finishes in about half a second — it is meant to be re-run.
+The first image build takes several minutes; the finished images are about 650 MB, and setup wants 3 GB free for build scratch. Re-running it skips everything unchanged.
 
-The browser then walks you through three steps and a summary: **pick who writes the
-problems**, pick a language, optionally stock the bank with 8 starter problems — then a
-Ready screen naming the two models you just chose, which drops you into a live session.
-The first step is skipped entirely when the install can already work.
+The browser then asks **which model writes your problems** (an Anthropic key, checked against Anthropic and stored in the database, never in `.env`; or an OpenAI-compatible base URL, usually with no key), a language, and whether to stock the bank with 8 starter problems.
 
-```
-bin/setup                 # everything, then start the server
-bin/setup --port 9500     # bind somewhere else (writes it to .env)
-bin/setup --no-start      # prepare everything, start nothing
-bin/setup --force         # redo the install and the build even if unchanged
-bin/setup --check         # preflight only: report, change nothing
+```bash
+bin/setup --port 9500     # bind elsewhere (written to .env)
+bin/setup --check         # preflight only, change nothing
+bin/status                # health, bank size, sandbox images
+bin/logs                  # tail the server log
+bin/stop                  # stop the server
 ```
 
-### What you need first
+## Configuration
 
-| | |
-|---|---|
-| **Node 20 or 22** | **Not Node 24.** `better-sqlite3` is ABI-pinned and hard-crashes under it. `bin/setup` detects this and tells you what to run. |
-| **Docker** | Daemon reachable, and your account in the `docker` group — that group is root-equivalent on the host, so read [Security](#security) before you add yourself to it. There is no fallback that runs your code in-process. |
-| **~3 GB free disk** | Where Docker stores images. The finished images are about 650 MB; the rest is layer scratch during the build. `bin/setup` hard-stops below 3 GB and warns below 6. |
-| **A free port** | 9416 by default. `bin/setup --port 9500` moves it. |
-| **Something to write the problems** | An **Anthropic key** *or* an **OpenAI-compatible endpoint** you already run. Asked for **in the browser**, not before `bin/setup`. A key is stored in the database, never in `.env`; a local endpoint usually needs no key at all. |
+Nothing is required. The wizard covers model choice and Settings can change it later; the environment can pin any of it for a deploy, field by field. See [`.env.example`](.env.example) for the full list with explanations.
 
-Nothing else. No secret manager, no external services.
+| variable | default | purpose |
+|---|---|---|
+| `PORT`, `HOST` | `9416`, `127.0.0.1` | where the server binds. Keep the loopback host. |
+| `DATA_DIR` | `./data` | the SQLite file and sandbox scratch |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5` | workhorse model on Claude |
+| `ANTHROPIC_CHAT_MODEL` | `claude-opus-5` | tutor model on Claude |
+| `CODEGRIND_PROVIDER` | `anthropic` | or `openai-compatible` |
+| `CODEGRIND_ENDPOINT`, `CODEGRIND_MODEL` | none | base URL including `/v1`, and the exact model id |
+| `CODEGRIND_CHAT_PROVIDER`, `CODEGRIND_CHAT_MODEL` | match the workhorse | run the tutor somewhere else |
+| `CODEGRIND_MODEL_DENY` | empty | comma-separated model ids never to call |
+| `CODEGRIND_MAX_OUTPUT_TOKENS` | `8000` | output cap for a local endpoint (`0` removes it) |
 
-### Which model writes your problems
+## Testing
 
-The first wizard screen offers two paths, and neither of them is a text box you can get
-subtly wrong.
-
-- **Claude.** Paste an Anthropic key. It is checked against Anthropic with a `models.list`
-  call — which costs nothing and is the only thing that distinguishes a typo from a
-  revoked key — and then kept in this machine's SQLite database, never in `.env`. Best
-  quality; a few cents an hour.
-- **Your own model.** Type the base URL including the `/v1` segment, press Models, and
-  pick from what that server actually advertises in `GET /v1/models`. No key in the normal
-  case; there is a collapsed field for the rare endpoint behind a gateway that wants a
-  bearer token. Slower, and free.
-
-Either way the choice is *proved before it is stored*, and the two paths prove different
-things because different things go wrong. The local path gets the harder test: a genuine
-forced tool call against the model you picked, timed, so the screen can tell you roughly
-how long one generated problem will take. A model that answers in prose is refused right
-there with a message naming the likely fix — usually llama.cpp started without `--jinja` —
-rather than failing three screens later inside a 30-second generate. Nothing is stored
-when the check fails.
-
-Two roles are routed independently: the **workhorse** (generation, hints, session plans,
-primers, lessons, coaching) and the **tutor** (the chat behind `POST /api/ask`). The tutor
-defaults to matching the workhorse's *provider*, so a local install stays local and no
-bill appears that nobody agreed to. On the Claude path the two models differ on purpose —
-the coach runs on the larger one, because that is one call per question you actually ask.
-There is no failover: an endpoint that is down fails loudly and names itself, rather than
-quietly becoming a Claude call. All of it is changeable later from **Settings**, and a
-deploy can pin any of it from the environment.
-
----
-
-## The daily loop
-
-Three tabs are the loop, and a fourth is the interview.
-
-**Grind** — the main event. Press start and the app plans a sitting, then serves one
-problem at a time. It picks each one from an intent — `warm-up`, `reinforce`, `variation`,
-`level-up`, `new-pattern` or `review` — and tells you which and why. You write code, hit
-Run against the sample tests (free, no model call), then Submit against the hidden tests,
-which grades you, records the attempt, and streams back a coaching brief. Ask follow-up
-questions inline. Hidden expected values are stripped on the wire, not merely hidden in
-the UI.
-
-**Study** — a reading track alongside the grind: lessons and pattern primers ordered
-against your actual mastery, including slots generated from your own recurring mistakes.
-Lesson prose is shared across languages; only the code snippets are translated.
-
-**Reflect** — what you have actually done. Skill tree, tier ladder, mistake ledger, an
-84-day activity heatmap and trend charts.
-
-![Reflect: the curriculum bar, the prerequisite skill tree with locked and reached topics, and the counters underneath](docs/images/reflect.png)
-
-**Mock** — a system-design interview over chat. The interviewer moves you through seven
-stages, breaks off to teach whenever you ask ("wait, explain X", or **Teach me**) and then
-resumes, and at the end grades every stage at Senior, Staff (the default) or Principal
-and hands you a drill list. Every fact or reasoning move the interviewer had to hand you
-is recorded as a gap — a **fact** (a cheap fix, weighed lightly) or a **skill** (a practice
-area) — and becomes a drill card on the Mock tab that comes back now → +2d → +5d → +10d
-until you get it; you grade yourself, so drilling never calls the model. It runs on the workhorse model with the conversation cached;
-`bin/mock-dry-run --dry-run` prints what a mock costs without spending anything.
-
-(**Manual** lets you pick a topic and difficulty yourself. **Settings** shows how you are
-currently routed and lets you change it. The **?** beside it is the in-app manual.)
-
----
-
-## Languages, and one idea
-
-> **Language is a property of the problem, not of the submission.**
-
-A problem's `expected` values were produced by running its reference solution, so its test
-data is bound to the language that produced it. Therefore `POST /api/run` and
-`POST /api/submit` carry only `{problemId, code}` — no language. The server reads
-`problem.language`. Handing Python source to the JavaScript harness is not unlikely, it is
-*unrepresentable*.
-
-The bank, your skill state, tiers, unlocks and review queue all fork per language and
-start cold, deliberately: a tier means three distinct problems solved at that difficulty
-with zero hints, and you have not done that in Go. Your streak and lessons-read count stay
-global. Nothing is deleted by switching, and switching changes what gets served **next**,
-never what is on screen.
-
-**JavaScript, Python and Go are wired up end to end. Java is not.** It is in the language
-registry and has no `test-harness/java/`, so nothing could run a Java submission — and so
-it is offered nowhere a language can be chosen. The wizard, both pickers, `PUT
-/api/settings` and `POST /api/setup/seed` all derive that from the harness directory not
-existing rather than from a list somebody maintains, which means the day the harness lands
-they all start offering it with no further edit. See
-[docs/adding-a-language.md](docs/adding-a-language.md) for what finishing it involves.
-
----
-
-## Security
-
-Read this before you run it, and especially before you put it anywhere.
-
-**codegrind is single-user and has no authentication of its own.** There are no accounts,
-no login and no session cookie — the API is open to whoever can reach it. `HOST` defaults
-to `127.0.0.1` and it should stay that way. **Do not set `HOST=0.0.0.0`** and do not
-publish it on a network unless you have put your own authentication in front of it; the
-one deployment that is exposed sits behind a separate gate at the reverse proxy. A
-loopback bind is also not the whole story: it keeps other *machines* out, but every
-browser on your own machine is already inside it, which is why the shipped cross-origin
-policy refuses foreign origins outright rather than merely withholding response headers.
-
-**Your code is contained.** Every submission — yours, and the runs the app does to verify
-its own problems — executes in a throwaway Docker container with no network, a read-only
-root filesystem, all capabilities dropped, `no-new-privileges`, a memory cap, a PID cap, a
-CPU cap and a hard external timeout. There is no fallback that runs submitted code in the
-server process. An infinite loop is a non-event: the timeout kills the container and you
-get a `timeout` verdict. This is genuinely the point of the design, and it is why the
-sandbox is a hard requirement rather than an option.
-
-**But containment is not virtualization.** A container shares the host kernel. Treat this
-as protection against your own runaway loops and against a generated reference solution
-doing something silly — not as a place to detonate hostile code you were handed.
-
-**Running it requires Docker-group membership, which is root-equivalent on the host.**
-`bin/run-submission` never prefixes `sudo` and cannot: it is spawned from the server
-process with no TTY, so a password prompt would have nobody to answer it. The account
-running the server has to reach the Docker daemon directly. That is a real privilege grant
-and worth a deliberate decision, not a copy-paste.
-
----
-
-## Architecture, briefly
-
-```
-browser (React + Vite, Monaco on desktop / CodeMirror on mobile)
-   │  fetch /api/*
-Hono server (single process, tsx)
-   │
-   ├── scheduler.service   free, deterministic: what to serve next
-   ├── llm.service         generate, coach, hint, plan, lessons — says WHAT it wants
-   │    └── llm.client     …and this is the only file that knows WHO answers:
-   │                       Anthropic, or an OpenAI-compatible endpoint
-   ├── bank.service        generate → canonicalize → store
-   ├── sandbox.service ──► bin/run-submission ──► docker run --network none --read-only
-   └── db.ts               one SQLite file, WAL
+```bash
+npx vitest run     # 1,773 tests in 108 files, about 8 seconds
+npx tsc -b         # typecheck
+bin/build          # typecheck, bundle and precompress into dist/
 ```
 
-A language is described in four places, each owning a different kind of fact —
-`src/shared/languages.ts` (presentation), `bin/lib/languages.sh` (Docker),
-`src/server/services/llm.language.ts` (prompts), `test-harness/<lang>/` (the harness).
-`src/shared/languages.test.ts` is what makes a half-added language fail loudly.
+The suite is hermetic by rule: no live database, no network, no model calls, no Docker. That keeps it fast enough to run on every save, and it means it proves nothing about the sandbox images. Those have their own gates: `bin/build-runner-image --selftest` checks each runner against the shared equality fixture, and `bin/smoke-e2e`, `bin/smoke-python`, `bin/smoke-go` and `bin/smoke-isolation` exercise the real containers and the language partition. `bin/dry-run-generate` scores a model on one generation attempt, by the stage that failed, without storing anything.
+
+## Project layout
+
+```
+src/
+  client/          React app: pages, components, hooks (desktop, phone and PWA)
+  server/
+    routes/        Hono routes, one file per area (submit, session, today, mock, ...)
+    services/      scheduler, bank, sandbox, LLM seam (llm.client + providers), db and migrations
+  shared/          types and pure logic used by both sides (Today, envelope math, loops, ...)
+test-harness/      one Docker runner per language, plus the shared equality fixture
+bin/               setup, start/stop/status/logs, backups, migrations, smoke tests, model dry runs
+deploy/            systemd units: the server and the 5-minute container reaper
+docs/              how-it-works, architecture, operations, troubleshooting, adding a language
+```
 
 Read next:
 
-- **[docs/how-it-works.md](docs/how-it-works.md)** — the conceptual guide, and the place to
-  start. How a problem is written and then *verified*, how the scheduler picks without
-  spending anything, what the sandbox enforces, what a submit actually does, and what each
-  of those costs.
-- **[docs/architecture.md](docs/architecture.md)** — the code map: the request path, the
-  LLM seam, the data model, how `settings` works, the client structure.
-- **[docs/operations.md](docs/operations.md)** — every `bin/` script, backups and restores,
-  migrations, systemd.
-- **[docs/troubleshooting.md](docs/troubleshooting.md)** — the failure modes and their
-  fixes.
-- **[docs/adding-a-language.md](docs/adding-a-language.md)** — the contract for a fourth
-  language, as a checklist.
+- [docs/how-it-works.md](docs/how-it-works.md): the conceptual guide. Generation and verification, the scheduler, the sandbox, what a submit does, and what each step costs.
+- [docs/architecture.md](docs/architecture.md): the code map. Request paths, the LLM seam, the data model, settings, the client.
+- [docs/operations.md](docs/operations.md): every `bin/` script, backups, migrations, running as a service.
+- [docs/troubleshooting.md](docs/troubleshooting.md): failure modes and fixes.
+- [docs/adding-a-language.md](docs/adding-a-language.md): the contract for a fourth language, as a checklist.
 
-## Development
+## Security
 
-```
-export PATH="$HOME/.nvm/versions/node/v22.22.0/bin:$PATH"   # or nvm use 22
-npx vitest run       # the whole suite: no database, no network, no docker
-npx tsc -b           # typecheck
-bin/build            # typecheck + bundle + precompress into dist/
-```
+**codegrind is single-user and has no authentication.** The API is open to whoever can reach it. `HOST` defaults to `127.0.0.1`; do not bind it to `0.0.0.0` or publish it without your own authentication in front. Because every browser on your machine is already on loopback, the server also refuses any request carrying a foreign `Origin` outright, rather than only withholding CORS headers.
 
-The suite is hermetic, and that is a property rather than a habit: nothing in it imports
-`db.ts` at module scope against the live database, nothing calls a model, nothing runs
-Docker. It is fast enough to run on every save — and it is also why it proves nothing
-about the sandbox images. That is what `bin/build-runner-image --selftest` and the
-`bin/smoke-*` scripts are for; an image that disagrees with the shared equality fixture is
-deleted rather than published.
+Submitted code is contained as described above, but a container is not a VM. Running the server requires Docker-group membership, which is root-equivalent on the host; make that a deliberate decision.
 
-### Three rules for contributors
-
-1. **Every language-partitioned db accessor takes `language` as a required, leading,
-   non-defaulted parameter.** An optional one would turn every missed call site into a
-   silent cross-language read that looks perfectly correct on a JavaScript-only machine.
-   Required means a missed site is a compile error. (`getProblem(id)` is the exception —
-   the id carries its own language.)
-2. **The API key never goes in `.env`.** See
-   [docs/troubleshooting.md](docs/troubleshooting.md).
-3. **Never put the database on mergerfs, NFS or NTFS.** SQLite's locking breaks there and
-   it corrupts. NVMe/ext4 only.
-
-## Licence
+## License
 
 MIT. See [LICENSE](LICENSE).
