@@ -180,7 +180,8 @@ describe('options and start', () => {
     expect(input.seed).toMatch(/OPEN QUESTIONS \(NOT facts/);
     expect(input.seed).toContain('Eight versions; maps deferred.');
     expect(input.seedConfirmed).toBe('');
-    expect(input.knownFacts).toMatch(/NEVER-?|NO live customers/);
+    expect(input.knownFacts).toMatch(/^CONFIRMED FACTS ABOUT THE CANDIDATE/);
+    expect(input.knownFacts).toMatch(/Only facts the candidate has confirmed go into a story/);
     expect(await (await post('/api/forge/start', { competency: 'nope' })).status).toBe(400);
   });
 });

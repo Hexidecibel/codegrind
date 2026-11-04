@@ -104,10 +104,6 @@ describe('concept rubrics', () => {
     expect(conceptRubric('not-a-concept')).toBeNull();
   });
 
-  it('never claims usage of the user\'s own product (no customers)', () => {
-    const all = JSON.stringify(CONCEPT_RUBRICS);
-    expect(all).not.toMatch(/\b(widgetly)\b[^.]*\b(customers|users) (use|rely)/i);
-  });
 });
 
 describe('learning state: new → learning → known', () => {

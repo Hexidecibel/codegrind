@@ -21,6 +21,7 @@ import { GAP_CARD_GRADES, type GapCardGrade } from '../../shared/gap-cards.js';
 import { clipAtBoundary } from '../../shared/clip.js';
 import { structured } from './llm.client.js';
 import { cutToolCallFraming, type CallMeta, type ToolSpec } from './llm.types.js';
+import { CANDIDATE_PROFILE, type CandidateProfile } from './candidate-profile.js';
 
 const str = (x: unknown, max = 600): string =>
   typeof x === 'string' ? clipAtBoundary(x.trim().replace(/[ \t]+/g, ' '), max) : '';
@@ -136,12 +137,17 @@ export async function runConceptGrade(input: ConceptGradeInput): Promise<{ resul
 // AI-systems track lessons
 // -----------------------------------------------------------------------------
 /**
- * The candidate's REAL experience, the only material a lesson may tie to
- * (user-supplied 2026-10-21). Phrased as "you could draw on…" in lessons; never
- * embellished. widgetly has NO live customers — never claim usage.
+ * The candidate's REAL experience, the only material a lesson may tie to. From
+ * the local candidate profile (candidate-profile.ts). Phrased as "you could
+ * draw on…" in lessons; never embellished. With none recorded, drawOn stays
+ * empty. Pure.
  */
-export const CANDIDATE_EXPERIENCE = `THE CANDIDATE'S OWN WORK (the only facts you may use about them):
-- (none recorded)`;
+export function renderOwnWork(profile: CandidateProfile): string {
+  if (!profile.ownWork.length) return "THE CANDIDATE'S OWN WORK: none recorded. Leave drawOn empty.";
+  return ["THE CANDIDATE'S OWN WORK (the only facts you may use about them):", ...profile.ownWork.map((w) => `- ${w}`)].join('\n');
+}
+
+export const CANDIDATE_EXPERIENCE = renderOwnWork(CANDIDATE_PROFILE);
 
 export const CONCEPT_LESSON_SYSTEM = `You write one lesson in an "AI systems" study track for a senior engineer preparing for Staff system-design interviews at AI- and agent-focused companies. They have built some LLM systems but have not had to explain these concepts under interview pressure. The lesson is read once, in about five minutes, and must leave them able to explain the concept out loud.
 

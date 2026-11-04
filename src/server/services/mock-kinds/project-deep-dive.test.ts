@@ -15,7 +15,7 @@ import {
   resolveProject,
 } from './project-deep-dive.js';
 import { MockPrepError } from './types.js';
-import { normalizeBank } from '../story-bank.js';
+import { CANDIDATE_KNOWN_FACTS, normalizeBank } from '../story-bank.js';
 
 const bank = normalizeBank({
   stories: [{ id: 's1', title: 'Plugin system', employer: 'Acme', status: 'confirmed', situation: 's', task: 't', action: 'a', result: 'r', numbers: [], caveats: [], unconfirmed: [], fits: [], doesNotFit: [] }],
@@ -40,8 +40,8 @@ describe('the deep-dive spec', () => {
       expect(DEEP_DIVE_INTERVIEWER_SYSTEM).toContain(`- ${s}:`);
     }
     expect(DEEP_DIVE_INTERVIEWER_SYSTEM).toMatch(/NEVER INVENT/);
-    expect(DEEP_DIVE_GRADE_SYSTEM).toMatch(/not a "migration"/);
-    expect(DEEP_DIVE_GRADE_SYSTEM).toMatch(/NO live customers/);
+    expect(DEEP_DIVE_GRADE_SYSTEM).toContain(CANDIDATE_KNOWN_FACTS);
+    expect(DEEP_DIVE_GRADE_SYSTEM).toMatch(/Only facts the candidate has confirmed go into a story/);
     expect(DEEP_DIVE_GRADE_SYSTEM).toMatch(/NEVER CREDIT UNVERIFIED CLAIMS/);
     expect(DEEP_DIVE_SPEC.rubric('staff')).toMatch(/dd-failure-honesty/);
   });

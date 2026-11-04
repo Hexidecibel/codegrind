@@ -40,6 +40,7 @@ import {
 } from '../../shared/behavioral-questions.js';
 import type { MockPlan, StoryBankStatus } from '../../shared/mock.js';
 import type { ConceptSignal } from '../../shared/sd.js';
+import { CANDIDATE_PROFILE, type CandidateProfile } from './candidate-profile.js';
 
 /** The one switch for the whole story-bank integration. */
 export const STORY_BANK_URL_ENV = 'CODEGRIND_STORY_BANK_URL';
@@ -535,11 +536,21 @@ export function renderResumeForGrader(r: ResumeResult): string {
     .join('\n');
 }
 
+const CONFIRMED_ONLY = 'Only facts the candidate has confirmed go into a story. Anything else is an open question until they confirm it.';
+
 /**
- * Facts the user has CONFIRMED about their own history (2026-10-21), for every
- * prompt that judges or shapes a story (the deep-dive grader, the story forge).
- * Short on purpose: each line exists because a model got it wrong.
+ * Facts the user has CONFIRMED about their own history, for every prompt that
+ * judges or shapes a story (the deep-dive grader, the story forge). They come
+ * from the local candidate profile (candidate-profile.ts), never from the code:
+ * each line exists because a model got that candidate's history wrong. Pure.
  */
-export const CANDIDATE_KNOWN_FACTS = `CONFIRMED FACTS ABOUT THE CANDIDATE (from the candidate; override anything that contradicts them):
-- No other confirmed facts recorded.
-- Only facts the candidate has confirmed go into a story. Anything else is an open question until they confirm it.`;
+export function renderKnownFacts(profile: CandidateProfile): string {
+  if (!profile.knownFacts.length) return `CONFIRMED FACTS ABOUT THE CANDIDATE: none recorded. ${CONFIRMED_ONLY}`;
+  return [
+    'CONFIRMED FACTS ABOUT THE CANDIDATE (from the candidate; override anything that contradicts them):',
+    ...profile.knownFacts.map((f) => `- ${f}`),
+    `- ${CONFIRMED_ONLY}`,
+  ].join('\n');
+}
+
+export const CANDIDATE_KNOWN_FACTS = renderKnownFacts(CANDIDATE_PROFILE);

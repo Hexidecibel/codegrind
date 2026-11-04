@@ -3,7 +3,13 @@
 // =============================================================================
 import { describe, it, expect } from 'vitest';
 import { EMIT_FORGE_TURN_TOOL, FORGE_SYSTEM, coerceForgeTurn, renderForgeInput } from './llm.forge.js';
-import { CANDIDATE_KNOWN_FACTS } from './story-bank.js';
+import { CANDIDATE_KNOWN_FACTS, renderKnownFacts } from './story-bank.js';
+
+const FACTS = renderKnownFacts({
+  systemDesignNotes: '',
+  knownFacts: ['Acme was a NEW product, not a migration.', 'widgetly has NO live customers.'],
+  ownWork: [],
+});
 
 describe('the forge prompt', () => {
   it('states the never-invent rule and the pushback kinds', () => {
@@ -20,7 +26,7 @@ describe('the forge prompt', () => {
       competency: 'conflict',
       seed: 'OPEN QUESTIONS (NOT facts …):\n  - who disagreed',
       seedConfirmed: '',
-      knownFacts: CANDIDATE_KNOWN_FACTS,
+      knownFacts: FACTS,
       turns: [
         { role: 'coach', content: 'What was the situation?' },
         { role: 'you', content: 'we disagreed about tenancy' },
@@ -29,13 +35,18 @@ describe('the forge prompt', () => {
       maxTurns: 12,
     });
     expect(text).toContain('Competency the story is for: conflict (Conflict & disagreement)');
-    expect(text).toMatch(/Acme was a NEW multi-tenant SaaS product/);
-    expect(text).toMatch(/widgetly has NO live customers/);
-    expect(text).toMatch(/Projects X and Y are NOT the candidate's projects/);
+    expect(text).toContain('CONFIRMED FACTS ABOUT THE CANDIDATE (from the candidate; override anything that contradicts them):');
+    expect(text).toContain('- Acme was a NEW product, not a migration.\n- widgetly has NO live customers.\n- Only facts the candidate has confirmed');
     expect(text).toMatch(/OPEN QUESTIONS are not facts/);
     expect(text).toContain('COACH: What was the situation?\nCANDIDATE: we disagreed about tenancy');
     expect(text.trim().split('\n').pop()).toMatch(/^Remember: nothing goes into the draft that the candidate did not say/);
     expect(renderForgeInput({ competency: 'conflict', seed: '', seedConfirmed: '', knownFacts: '', turns: [], answers: 11, maxTurns: 12 })).toMatch(/nearly spent/);
+  });
+
+  it('with no local profile, the facts block names nobody and keeps the confirmed-only rule', () => {
+    expect(CANDIDATE_KNOWN_FACTS).toBe(
+      'CONFIRMED FACTS ABOUT THE CANDIDATE: none recorded. Only facts the candidate has confirmed go into a story. Anything else is an open question until they confirm it.'
+    );
   });
 
   it('is a strict tool with `say` last as the leak sink', () => {
