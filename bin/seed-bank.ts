@@ -131,7 +131,7 @@ async function main(): Promise<void> {
   // The environment still wins field by field, so a systemd deploy is unaffected.
   hydrateProviderConfig();
   // A key stored by the first-run wizard lives in the settings table, not in
-  // .env — `bin/inject` truncates .env on every deploy, so a pasted key there
+  // .env — a secrets hook may truncate .env on every deploy, so a pasted key there
   // would be destroyed. hydrate() publishes it into the environment for the
   // SDK, and does nothing at all when the environment already has one.
   hydrate();

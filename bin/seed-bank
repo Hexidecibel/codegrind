@@ -12,7 +12,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_DIR}"
 
-# ANTHROPIC_API_KEY lives in .env (materialized from .cush-secrets by bin/inject);
+# ANTHROPIC_API_KEY lives in .env (or the database, via the first-run wizard);
 # systemd hands it to the SERVICE, but a CLI run gets nothing unless it reads the
 # file itself. Without this the whole seed aborts on the first call with
 # "ANTHROPIC_API_KEY not set" — which is at least loud, but it aborts after the

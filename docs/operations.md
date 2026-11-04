@@ -225,11 +225,10 @@ systemd, and on a laptop there is no reason to install units at all.
 
 Both wait for health on `$PORT` from `.env`, not a literal 9416.
 
-`bin/deploy`'s first step runs whatever `CG_INJECT` points at — by default a `.env`
-materializer that exists only on the author's machine. If that file is not executable the
+`bin/deploy`'s first step runs an optional pre-deploy secrets hook: whatever `CG_INJECT`
+points at, if it is executable. If that file is not executable the
 step prints one line and carries on: it is not a failure and not a dependency. Nothing
-else in the repo reads it. (`.cush-secrets` in the repo root belongs to that same tooling
-and carries a header saying a fresh install neither needs nor uses it.)
+else in the repo reads it.
 
 ### The three units
 

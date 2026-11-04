@@ -6,7 +6,7 @@
 //
 //   1. `ANTHROPIC_API_KEY` in the environment. This is how the author's own
 //      instance runs — systemd hands it to the service, materialized from
-//      Infisical by cush-tools' `bin/inject`.
+//      a secrets manager by a pre-deploy hook.
 //   2. A row in the `settings` table, written by the first-run wizard.
 //
 // **THE ENVIRONMENT ALWAYS WINS.** That ordering is not a preference, it is the
@@ -15,8 +15,8 @@
 // can shadow it.
 //
 // WHY NOT `.env`. The obvious place to put a key the user pastes is `.env`, and
-// it is the one place it must never go. `bin/inject` rewrites that file with
-// O_TRUNC from `.cush-secrets` on every deploy AND on every `cd` into the
+// it is the one place it must never go. a secrets hook may rewrite that file with
+// O_TRUNC on every deploy or on every `cd` into the
 // directory (direnv), so a hand-added key there is destroyed silently and at an
 // unpredictable moment — the app simply stops working with no edit to blame.
 // The `settings` table is the store the plan always intended for this

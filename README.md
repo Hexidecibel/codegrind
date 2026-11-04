@@ -2,7 +2,7 @@
 
 **A self-hosted interview-prep trainer that writes its own coding problems, proves each one is solvable before serving it, runs your code in a locked-down container, and coaches you on the pattern you missed.**
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![Node 20 | 22](https://img.shields.io/badge/node-20%20%7C%2022-339933) ![Tests: 1,773](https://img.shields.io/badge/tests-1%2C773%20passing-brightgreen)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![Node 20 | 22](https://img.shields.io/badge/node-20%20%7C%2022-339933) ![Tests: Vitest](https://img.shields.io/badge/tests-vitest-brightgreen)
 
 ![A banked problem on the solve surface: the statement on the left, the editor and the sample-test results on the right](docs/assets/solve.png)
 
@@ -249,8 +249,8 @@ Nothing is required. The wizard covers model choice and Settings can change it l
 | `CODEGRIND_CHAT_PROVIDER`, `CODEGRIND_CHAT_MODEL` | match the workhorse | run the tutor somewhere else |
 | `CODEGRIND_MODEL_DENY` | empty | comma-separated model ids never to call |
 | `CODEGRIND_MAX_OUTPUT_TOKENS` | `8000` | output cap for a local endpoint (`0` removes it) |
-| `CODEGRIND_RB_DIR` | empty | resume-builder's install dir, used for its `bin/backup` before story-forge writes. Unset skips the backup. |
-| `VITE_STORY_CAPTURE_URL` | empty | build-time: URL of your resume-builder, linked from the behavioral grade report. Unset hides the link. |
+| `CODEGRIND_RB_DIR` | empty | optional: install dir of the external story-bank app (the one behind `CODEGRIND_STORY_BANK_URL`), whose `bin/backup` runs before story-forge saves a draft. Unset skips the backup. |
+| `VITE_STORY_CAPTURE_URL` | empty | build-time: URL of your own story-capture app (a folder-backed story-bank service), linked from the behavioral grade report. Unset hides the link. |
 
 ## Testing
 

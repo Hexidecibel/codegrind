@@ -37,9 +37,9 @@ hydrateProviderConfig();
 
 // Publish a wizard-stored API key into the environment before any route can
 // need one. Does NOTHING when ANTHROPIC_API_KEY is already set — the deploy's
-// key always wins — so an existing systemd + Infisical install is untouched.
+// key always wins — so an existing systemd + secrets-manager install is untouched.
 // See services/apikey.service.ts for why the key is not, and must not be, in
-// .env: bin/inject truncates that file on every deploy and every `cd`.
+// .env: a secrets hook may truncate that file on every deploy and every `cd`.
 const bootKey = hydrateApiKey();
 
 const app = new Hono();

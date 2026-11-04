@@ -2,7 +2,7 @@
 // story-bank — the candidate's interview stories, read from resume-builder
 // =============================================================================
 // The behavioral mock's GRADER judges story choice and fidelity against the
-// story bank the user keeps in resume-builder (same host, port 9410). This file
+// story bank the user keeps in a separate companion service ("resume-builder", optional; default http://127.0.0.1:9410). This file
 // fetches it, renders it for the grader, maps each story's free-text `fits[]`
 // onto the mock's competencies with a keyword table (no model call), and plans
 // which four competencies a mock asks about.
@@ -25,7 +25,7 @@
 //
 // The base URL is a code default with an environment override
 // (CODEGRIND_STORY_BANK_URL, set with `Environment=` in the unit — NOT .env,
-// which cush-tools' inject truncates to the secrets manifest).
+// which a secrets hook may truncate).
 
 import {
   BQ_COMPETENCIES,

@@ -29,12 +29,12 @@
 # a script that is broken.
 #
 # NOTHING HERE NEEDS A FILE EDITED FIRST. There is no API key in .env and there
-# must never be one: `bin/inject` (the author's secret tooling) rewrites that
+# must never be one: an external secrets hook (if you use one) may rewrite that
 # file with O_TRUNC on every deploy and every `cd`, so a key written there dies
 # silently. The key is asked for in the browser and stored in the database. See
 # src/server/services/apikey.service.ts.
 #
-# NO cush-tools, NO Infisical, NO 1Password REQUIRED. If bin/inject happens to
+# No external secrets tooling is required. If an optional bin/inject hook happens to
 # be present it is used to refresh .env; if it is not, that is not a failure and
 # not even a warning.
 
@@ -168,7 +168,7 @@ fi
 # 4. .env and the port
 # =============================================================================
 # An existing .env is NEVER rewritten. On the author's machine it is materialized
-# from Infisical by cush-tools and rewriting it would destroy real configuration;
+# from a secrets manager and rewriting it would destroy real configuration;
 # on anybody else's it is theirs.
 ENV_FILE="${REPO_DIR}/.env"
 ENV_CREATED=0

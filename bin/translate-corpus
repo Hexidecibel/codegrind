@@ -31,7 +31,7 @@ cg_require_node
 
 # The service gets its env from systemd's EnvironmentFile; a CLI run has to load
 # it itself (PORT, HOST, DATA_DIR, and ANTHROPIC_API_KEY if you keep one there).
-# bin/setup writes this file; on the author's box cush-tools' bin/inject
+# bin/setup writes this file; if you use a secrets hook, it
 # rewrites it. Absent is fine — a wizard-configured install keeps its key and
 # its provider rows in the database, and the .ts entrypoint hydrates both.
 if [[ -f "$REPO/.env" ]]; then

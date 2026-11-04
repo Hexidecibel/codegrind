@@ -8,8 +8,8 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
-# The author's secret tooling. Optional by design — see below — and overridable
-# so a checkout that has it somewhere else does not have to edit this script.
+# Optional pre-deploy secrets hook (materializes .env). Optional by design — see
+# below — and overridable with CG_INJECT. Skipped when not present.
 INJECT="${CG_INJECT:-${HOME}/local/src/cush-tools/bin/inject}"
 
 # Native modules like better-sqlite3 compile against the ABI of whatever Node
@@ -21,11 +21,11 @@ INJECT="${CG_INJECT:-${HOME}/local/src/cush-tools/bin/inject}"
 source "$REPO/bin/lib/node.sh"
 cg_require_node
 
-echo "==> Materializing .env via cush-tools inject"
+echo "==> Running optional pre-deploy secrets hook"
 if [[ -x "$INJECT" ]]; then
-  "$INJECT" --no-prompt || echo "    (inject non-fatal; continuing)"
+  "$INJECT" --no-prompt || echo "    (hook non-fatal; continuing)"
 else
-  echo "    (inject not found at $INJECT; skipping)"
+  echo "    (no hook at $INJECT; skipping)"
 fi
 
 # AFTER inject, because inject rewrites this file. PORT is read the same way
