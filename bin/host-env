@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# =============================================================================
+# bin/host-env — host-local env vars for codegrind.service, kept in a drop-in
+# =============================================================================
+# Settings that only apply to this machine (an optional integration's URL, say)
+# go in a systemd drop-in so they survive every deploy and never touch git.
+# See bin/install-units for why drop-ins are the place for them.
+#
+#   bin/host-env                          list the vars set in drop-ins
+#   bin/host-env set NAME KEY=VALUE ...   write codegrind.service.d/NAME.conf
+#   bin/host-env unset NAME               remove that drop-in
+#
+# Changes take effect on the next restart (bin/restart or bin/deploy).
+# Don't put secrets here: drop-ins are world-readable. Secrets go in .env.
+set -euo pipefail
+
+DIR=/etc/systemd/system/codegrind.service.d
+
+case "${1:-list}" in
+  list)
+    grep -H '^Environment=' "$DIR"/*.conf 2>/dev/null || echo "(no host-local env vars)"
+    ;;
+  set)
+    name="${2:?usage: bin/host-env set NAME KEY=VALUE ...}"; shift 2
+    [[ $# -gt 0 ]] || { echo "usage: bin/host-env set NAME KEY=VALUE ..." >&2; exit 1; }
+    [[ "$name" =~ ^[a-z0-9-]+$ ]] || { echo "NAME must be lowercase letters, digits, dashes" >&2; exit 1; }
+    body="[Service]"$'\n'
+    for kv in "$@"; do
+      [[ "$kv" =~ ^[A-Z_][A-Z0-9_]*=.+$ ]] || { echo "bad KEY=VALUE: $kv" >&2; exit 1; }
+      body+="Environment=${kv}"$'\n'
+    done
+    sudo mkdir -p "$DIR"
+    printf '%s' "$body" | sudo tee "$DIR/$name.conf" >/dev/null
+    sudo systemctl daemon-reload
+    echo "wrote $DIR/$name.conf; restart to apply (bin/restart)"
+    ;;
+  unset)
+    name="${2:?usage: bin/host-env unset NAME}"
+    sudo rm -f "$DIR/$name.conf"
+    sudo systemctl daemon-reload
+    echo "removed $DIR/$name.conf; restart to apply (bin/restart)"
+    ;;
+  *)
+    echo "usage: bin/host-env [list | set NAME KEY=VALUE ... | unset NAME]" >&2; exit 1
+    ;;
+esac

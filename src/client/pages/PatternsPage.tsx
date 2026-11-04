@@ -18,7 +18,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, Check, Eye, Loader2, Mic, PencilLine, Shapes, Sparkles, X, Zap } from 'lucide-react';
+import { AlertTriangle, ArrowRight, BookOpen, Check, Eye, Loader2, Mic, PencilLine, Shapes, Sparkles, X, Zap } from 'lucide-react';
 import { useIsPhone } from '@/client/hooks/useMediaQuery';
 import {
   PATTERN_SHAPES,
@@ -381,6 +381,13 @@ function PatternCard({
       )}
 
       <div className="flex flex-wrap gap-2 pt-1">
+        {practiceTopicOf(p) && (
+          <Button asChild size="sm" variant="outline" className="gap-1.5">
+            <Link to={`/study?topic=${encodeURIComponent(practiceTopicOf(p)!)}`}>
+              <BookOpen className="h-3.5 w-3.5" /> Learn this
+            </Link>
+          </Button>
+        )}
         {practiceTopicOf(p) && (
           <Button asChild size="sm" variant="outline" className="gap-1.5">
             <Link to={practiceHref(practiceTopicOf(p), 'easy', p.id)}>
