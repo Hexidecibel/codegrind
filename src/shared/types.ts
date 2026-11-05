@@ -396,6 +396,49 @@ export interface StudyFeedResponse {
   warming: boolean;
   /** True only if nothing more can ever be served. */
   exhausted: boolean;
+  /**
+   * The feed in coach order, one entry per position. An entry is either a
+   * served lesson (its id is in `lessons`) or a `stub`: a FIX lesson that has
+   * not been written yet and is only ever written on an explicit click
+   * (POST /study/lesson/:id/write). Older servers omit it; clients then fall
+   * back to `lessons`.
+   */
+  items?: StudyFeedItem[];
+}
+
+/** Why the coach put a lesson here (see server coach.brain.ts). */
+export type StudyIntent = 'fix' | 'due' | 'pre-read' | 'push' | 'ladder';
+
+/** The problem set to practise after reading: Grind `?topic=&tag=`. */
+export interface StudyPractice {
+  topic: Topic;
+  difficulty: Difficulty;
+  tag?: string;
+  reviewProblemId?: string;
+}
+
+/** A not-yet-written FIX lesson: rendered as a "write this lesson" card. */
+export interface StudyStub {
+  lessonId: string;
+  topic: Topic;
+  title: string;
+  kind: LessonKind;
+  tag?: string;
+}
+
+export interface StudyFeedItem {
+  lessonId: string;
+  /** One line, e.g. "Because you slipped on search boundaries". */
+  reason: string;
+  intent: StudyIntent;
+  /** Present only for an unwritten lesson. */
+  stub?: StudyStub;
+  practice: StudyPractice;
+}
+
+/** POST /api/study/lesson/:id/write. */
+export interface StudyWriteResponse {
+  lesson: Lesson;
 }
 
 /** POST /api/study/read body. */

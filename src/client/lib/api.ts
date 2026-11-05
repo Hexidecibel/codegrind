@@ -26,6 +26,7 @@ import type {
   Prediction,
   Primer,
   StudyFeedResponse,
+  StudyWriteResponse,
   StudyIndexResponse,
   StudyReadResponse,
   ReflectResponse,
@@ -506,11 +507,25 @@ export function getPrimer(topic: string): Promise<Primer> {
  * and watch `warming` to decide whether to render a skeleton for the next card.
  */
 export function getStudyFeed(
-  opts: { after?: string; limit?: number } = {},
+  opts: { after?: string; limit?: number; seen?: string[] } = {},
 ): Promise<StudyFeedResponse> {
   const qs = new URLSearchParams({ limit: String(opts.limit ?? 3) });
   if (opts.after) qs.set('after', opts.after);
+  // Ids already on screen, so a feed that re-anchors at the top (its `after`
+  // was read meanwhile) skips them instead of re-serving the same stubs.
+  if (opts.seen?.length) qs.set('seen', opts.seen.slice(-50).join(','));
   return request<StudyFeedResponse>(`/api/study/feed?${qs.toString()}`);
+}
+
+/**
+ * POST /api/study/lesson/:id/write — write one fix lesson. This is the ONLY
+ * call that spends AI on a fix lesson, and only ever from an explicit click.
+ */
+export function writeLesson(lessonId: string): Promise<StudyWriteResponse> {
+  return request<StudyWriteResponse>(
+    `/api/study/lesson/${encodeURIComponent(lessonId)}/write`,
+    { method: 'POST' },
+  );
 }
 
 /** GET /api/study/jump/:topic — reposition the feed to a topic. */

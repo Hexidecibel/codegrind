@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -11,9 +12,11 @@ import {
   Sparkles,
   HelpCircle,
   Check,
+  Loader2,
+  PenLine,
 } from 'lucide-react';
-import type { Lesson, LessonKind } from '@/shared/types';
-import { markLessonRead } from '@/client/lib/api';
+import type { Lesson, LessonKind, StudyPractice, StudyStub } from '@/shared/types';
+import { markLessonRead, writeLesson } from '@/client/lib/api';
 import { humanize } from '@/client/lib/format';
 import { cn } from '@/lib/utils';
 
@@ -74,7 +77,40 @@ const KIND_STYLES: Record<
  * control here is the quiet "still fuzzy" button, which re-queues the lesson
  * server-side and is deliberately easy to ignore.
  */
-export function LessonCard({ lesson }: { lesson: Lesson }) {
+/** Grind link for "practise this next". Grind reads the params from Phase 3. */
+export function practiceHref(p: StudyPractice): string {
+  const qs = new URLSearchParams({ topic: p.topic });
+  if (p.tag) qs.set('tag', p.tag);
+  return `/grind?${qs.toString()}`;
+}
+
+/** The coach's one-line "why this is here", above the title. */
+function ReasonChip({ reason }: { reason: string }) {
+  return (
+    <p className="mt-3 text-xs font-medium text-muted-foreground">{reason}</p>
+  );
+}
+
+function PracticeLink({ practice }: { practice: StudyPractice }) {
+  return (
+    <Link
+      to={practiceHref(practice)}
+      className="study-accent inline-flex min-h-9 pointer-coarse:min-h-11 items-center rounded-md px-2.5 py-1.5 text-xs font-medium text-violet-300 transition-colors hover:bg-accent hover:text-foreground"
+    >
+      Practice this →
+    </Link>
+  );
+}
+
+export function LessonCard({
+  lesson,
+  reason,
+  practice,
+}: {
+  lesson: Lesson;
+  reason?: string;
+  practice?: StudyPractice;
+}) {
   const [fuzzy, setFuzzy] = useState(false);
   const style = KIND_STYLES[lesson.kind] ?? KIND_STYLES.concept;
   const Icon = style.icon;
@@ -111,7 +147,9 @@ export function LessonCard({ lesson }: { lesson: Lesson }) {
         )}
       </div>
 
-      <h2 className="mt-3 text-xl font-bold leading-snug sm:text-2xl">
+      {reason && <ReasonChip reason={reason} />}
+
+      <h2 className={cn('text-xl font-bold leading-snug sm:text-2xl', reason ? 'mt-1' : 'mt-3')}>
         {lesson.title}
       </h2>
 
@@ -135,7 +173,8 @@ export function LessonCard({ lesson }: { lesson: Lesson }) {
         </div>
       )}
 
-      <div className="mt-4 flex justify-end">
+      <div className={cn('mt-4 flex items-center', practice ? 'justify-between' : 'justify-end')}>
+        {practice && <PracticeLink practice={practice} />}
         <button
           type="button"
           onClick={markFuzzy}
@@ -155,6 +194,98 @@ export function LessonCard({ lesson }: { lesson: Lesson }) {
             </>
           )}
         </button>
+      </div>
+    </article>
+  );
+}
+
+/**
+ * A FIX lesson the coach wants you to read but that is not written yet.
+ * Writing it costs one AI call, so it happens only when this button is
+ * pressed; nothing about showing the card spends anything.
+ */
+export function LessonStubCard({
+  stub,
+  reason,
+  practice,
+  onWritten,
+}: {
+  stub: StudyStub;
+  reason?: string;
+  practice?: StudyPractice;
+  onWritten: (lesson: Lesson) => void;
+}) {
+  const [writing, setWriting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const style = KIND_STYLES[stub.kind] ?? KIND_STYLES.mistake;
+  const Icon = style.icon;
+
+  const write = async () => {
+    if (writing) return;
+    setWriting(true);
+    setError(null);
+    try {
+      const res = await writeLesson(stub.lessonId);
+      onWritten(res.lesson);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not write the lesson');
+      setWriting(false);
+    }
+  };
+
+  return (
+    <article
+      className={cn(
+        'rounded-xl border border-dashed bg-gradient-to-b to-transparent px-4 py-5 sm:px-6 sm:py-6',
+        style.rule,
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span
+          className={cn(
+            'study-accent inline-flex items-center gap-1.5 rounded-md px-2 py-1 font-semibold',
+            style.chip,
+          )}
+        >
+          <Icon className="h-3.5 w-3.5" />
+          {style.label}
+        </span>
+        <span className="text-muted-foreground">{humanize(stub.topic)}</span>
+      </div>
+
+      {reason && <ReasonChip reason={reason} />}
+
+      <h2 className={cn('text-xl font-bold leading-snug sm:text-2xl', reason ? 'mt-1' : 'mt-3')}>
+        {stub.title}
+      </h2>
+
+      <p className="mt-2 max-w-[68ch] text-sm leading-relaxed text-muted-foreground">
+        Not written yet. One short lesson aimed at exactly this slip, grounded in
+        the problem where it happened.
+      </p>
+
+      {error && <p className="mt-3 text-sm text-destructive-foreground">{error}</p>}
+
+      <div className={cn('mt-4 flex flex-wrap items-center gap-2', practice ? 'justify-between' : 'justify-start')}>
+        <button
+          type="button"
+          onClick={() => void write()}
+          disabled={writing}
+          className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border px-3 text-sm transition-colors hover:bg-accent disabled:opacity-70"
+        >
+          {writing ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin text-violet-400" />
+              Writing…
+            </>
+          ) : (
+            <>
+              <PenLine className="h-4 w-4" />
+              Write this lesson (1 AI call)
+            </>
+          )}
+        </button>
+        {practice && <PracticeLink practice={practice} />}
       </div>
     </article>
   );

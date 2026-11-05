@@ -1405,6 +1405,29 @@ export function getDueReview(language: Language): DueReview | null {
   };
 }
 
+const dueReviewsStmt = db.prepare(`
+  SELECT r.problemId AS problemId, r.dueAt AS dueAt, p.topic AS topic,
+         p.difficulty AS difficulty, p.title AS title
+  FROM review_queue r
+  JOIN problems p ON p.id = r.problemId
+  WHERE p.language = ? AND r.clearedAt IS NULL AND r.dueAt <= ?
+  ORDER BY r.dueAt ASC
+  LIMIT ?
+`);
+
+export interface DueReviewRow {
+  problemId: string;
+  dueAt: string;
+  topic: Topic;
+  difficulty: Difficulty;
+  title: string;
+}
+
+/** Every due, un-cleared review item in this language, earliest first (for the coach brain). */
+export function getDueReviews(language: Language, limit = 10): DueReviewRow[] {
+  return dueReviewsStmt.all(language, new Date().toISOString(), limit) as DueReviewRow[];
+}
+
 const reviewDueCountStmt = db.prepare(`
   SELECT COUNT(*) AS n
   FROM review_queue r
@@ -2021,14 +2044,23 @@ export function getGlobalDailyActivity(days = 84): DailyActivityRow[] {
 }
 
 const taggedAttemptsStmt = db.prepare(`
-  SELECT mistakeTags, createdAt FROM attempts
-  WHERE language = ? AND mistakeTags IS NOT NULL
-  ORDER BY createdAt ASC
+  SELECT a.mistakeTags AS mistakeTags, a.createdAt AS createdAt, a.pattern AS pattern,
+         a.problemId AS problemId, p.topic AS topic, p.title AS title
+  FROM attempts a
+  LEFT JOIN problems p ON p.id = a.problemId
+  WHERE a.language = ? AND a.mistakeTags IS NOT NULL
+  ORDER BY a.createdAt ASC
 `);
 
 export interface TaggedAttemptRow {
   mistakeTags: string[];
   createdAt: string;
+  /** The attempt's pattern column (the coach's name for it). */
+  pattern?: string;
+  problemId?: string;
+  /** The problem's topic, or the attempt pattern when the problem is gone. */
+  topic?: string;
+  problemTitle?: string;
 }
 
 /**
@@ -2037,7 +2069,14 @@ export interface TaggedAttemptRow {
  * split each tag into recent vs earlier halves ("is this shrinking?").
  */
 export function getTaggedAttempts(language: Language): TaggedAttemptRow[] {
-  const rows = taggedAttemptsStmt.all(language) as Array<{ mistakeTags: string; createdAt: string }>;
+  const rows = taggedAttemptsStmt.all(language) as Array<{
+    mistakeTags: string;
+    createdAt: string;
+    pattern: string | null;
+    problemId: string | null;
+    topic: string | null;
+    title: string | null;
+  }>;
   const out: TaggedAttemptRow[] = [];
   for (const r of rows) {
     let parsed: unknown;
@@ -2048,7 +2087,14 @@ export function getTaggedAttempts(language: Language): TaggedAttemptRow[] {
     }
     if (!Array.isArray(parsed)) continue;
     const tags = parsed.filter((t): t is string => typeof t === 'string' && t.length > 0);
-    if (tags.length) out.push({ mistakeTags: tags, createdAt: r.createdAt });
+    if (!tags.length) continue;
+    const row: TaggedAttemptRow = { mistakeTags: tags, createdAt: r.createdAt };
+    if (r.pattern) row.pattern = r.pattern;
+    if (r.problemId) row.problemId = r.problemId;
+    const topic = r.topic ?? r.pattern;
+    if (topic) row.topic = topic;
+    if (r.title) row.problemTitle = r.title;
+    out.push(row);
   }
   return out;
 }

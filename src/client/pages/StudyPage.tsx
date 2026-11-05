@@ -12,9 +12,15 @@ import {
 } from 'lucide-react';
 import { TOPICS } from '@/shared/types';
 import { patternForTopic, patternHref } from '@/shared/pattern-shapes';
-import type { Lesson, StudyPosition, Topic } from '@/shared/types';
+import type {
+  Lesson,
+  StudyFeedItem,
+  StudyFeedResponse,
+  StudyPosition,
+  Topic,
+} from '@/shared/types';
 import { getStudyFeed, jumpToTopic, markLessonRead } from '@/client/lib/api';
-import { LessonCard } from '@/client/components/LessonCard';
+import { LessonCard, LessonStubCard } from '@/client/components/LessonCard';
 import { StudyIndex } from '@/client/components/StudyIndex';
 import { useLocalStorage } from '@/client/hooks/useLocalStorage';
 import { humanize } from '@/client/lib/format';
@@ -39,6 +45,25 @@ const READ_DWELL_MS = 900;
  *  re-fire on its own — this is what un-sticks the skeleton. */
 const WARM_POLL_MS = 4000;
 
+/** One feed position: a written lesson, or a not-yet-written FIX stub. */
+interface FeedEntry {
+  id: string;
+  lesson?: Lesson;
+  item?: StudyFeedItem;
+}
+
+/** The response in coach order. Older servers send no `items`: lessons only. */
+function toEntries(res: StudyFeedResponse): FeedEntry[] {
+  if (!res.items) return res.lessons.map((l) => ({ id: l.id, lesson: l }));
+  const byId = new Map(res.lessons.map((l) => [l.id, l]));
+  const out: FeedEntry[] = [];
+  for (const item of res.items) {
+    const lesson = byId.get(item.lessonId);
+    if (lesson || item.stub) out.push({ id: item.lessonId, lesson, item });
+  }
+  return out;
+}
+
 /**
  * Study — a continuous, never-ending reading feed over the DSA curriculum.
  *
@@ -49,7 +74,7 @@ const WARM_POLL_MS = 4000;
  * scroll position and fired into the void.
  */
 export function StudyPage() {
-  const [lessons, setLessons] = useState<Lesson[]>([]);
+  const [lessons, setLessons] = useState<FeedEntry[]>([]);
   const [position, setPosition] = useState<StudyPosition | null>(null);
   const [warming, setWarming] = useState(false);
   const [exhausted, setExhausted] = useState(false);
@@ -81,13 +106,14 @@ export function StudyPage() {
     setError(null);
     try {
       const after = lastIdRef.current;
+      const seen = [...seenRef.current];
       const res = await getStudyFeed(
-        after ? { after, limit: PAGE } : { limit: PAGE },
+        after ? { after, limit: PAGE, seen } : { limit: PAGE, seen },
       );
 
       // De-dupe defensively: a warm-poll and a sentinel fire can race, and the
       // server re-anchors on `after`, so overlap is cheap to guard against.
-      const fresh = res.lessons.filter((l: Lesson) => !seenRef.current.has(l.id));
+      const fresh = toEntries(res).filter((l) => !seenRef.current.has(l.id));
       for (const l of fresh) seenRef.current.add(l.id);
       lastFreshRef.current = fresh.length;
       if (fresh.length > 0) {
@@ -243,13 +269,12 @@ export function StudyPage() {
     setError(null);
     try {
       const res = await jumpToTopic(topic);
-      seenRef.current = new Set(res.lessons.map((l: Lesson) => l.id));
-      lastIdRef.current = res.lessons.length
-        ? res.lessons[res.lessons.length - 1].id
-        : null;
-      lastFreshRef.current = res.lessons.length;
+      const entries = toEntries(res);
+      seenRef.current = new Set(entries.map((l) => l.id));
+      lastIdRef.current = entries.length ? entries[entries.length - 1].id : null;
+      lastFreshRef.current = entries.length;
       tailVisibleRef.current = false;
-      setLessons(res.lessons);
+      setLessons(entries);
       setPosition(res.position ?? null);
       setWarming(Boolean(res.warming));
       exhaustedRef.current = Boolean(res.exhausted);
@@ -380,13 +405,34 @@ export function StudyPage() {
       </header>
 
       <div className="mx-auto max-w-3xl space-y-6 px-3 pb-32 pt-4 sm:px-6">
-        {lessons.map((lesson) => (
-          <div key={lesson.id}>
-            <LessonCard lesson={lesson} />
-            {/* Read sentinel: sits just under the card, observed once. */}
-            <div ref={readRef(lesson.id)} className="h-px w-full" aria-hidden />
-          </div>
-        ))}
+        {lessons.map((entry) =>
+          entry.lesson ? (
+            <div key={entry.id}>
+              <LessonCard
+                lesson={entry.lesson}
+                reason={entry.item?.reason}
+                practice={entry.item?.practice}
+              />
+              {/* Read sentinel: sits just under the card, observed once. */}
+              <div ref={readRef(entry.id)} className="h-px w-full" aria-hidden />
+            </div>
+          ) : entry.item?.stub ? (
+            // No read sentinel: an unwritten lesson cannot be read. Once it is
+            // written it swaps in place and gets one like any other.
+            <div key={entry.id}>
+              <LessonStubCard
+                stub={entry.item.stub}
+                reason={entry.item.reason}
+                practice={entry.item.practice}
+                onWritten={(lesson) =>
+                  setLessons((prev) =>
+                    prev.map((e) => (e.id === entry.id ? { ...e, lesson } : e)),
+                  )
+                }
+              />
+            </div>
+          ) : null,
+        )}
 
         {/* Fixed-height skeleton. This is the whole zero-layout-shift trick:
             the space the next lesson will occupy is already reserved, so when

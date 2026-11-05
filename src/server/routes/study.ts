@@ -3,8 +3,10 @@ import {
   TOPICS,
   type Topic,
   type Lesson,
+  type StudyFeedItem,
   type StudyFeedResponse,
   type StudyIndexResponse,
+  type StudyWriteResponse,
   type StudyPosition,
   type StudyReadResponse,
 } from '../../shared/types.js';
@@ -20,6 +22,7 @@ import {
 import { masteryScore } from '../services/curriculum.js';
 import {
   buildStudyState,
+  ensureLesson,
   studyQueue,
   topicOrder,
   trackSlotCount,
@@ -29,6 +32,8 @@ import {
   type StudySlot,
   type StudyQueueState,
 } from '../services/study.service.js';
+import { annotateSlot, coachFeed, type CoachFeedSlot, type CoachState } from '../services/coach.brain.js';
+import { buildCoachState } from '../services/coach.service.js';
 
 export const studyRoutes = new Hono();
 
@@ -58,36 +63,79 @@ function positionFor(slot: StudySlot | undefined, state: StudyQueueState): Study
   return { topic: slot.topic, seq: slot.seq, total: totalFor(slot.topic, state) };
 }
 
+/** Uncached slots that are only ever written on an explicit click. */
+function isStubSource(slot: StudySlot): boolean {
+  return slot.source === 'fix' || slot.source === 'mistake';
+}
+
+/** Comma-separated ids the client already holds (capped). */
+const MAX_SEEN = 50;
+function parseSeen(raw: string | undefined): Set<string> {
+  if (!raw) return new Set();
+  return new Set(
+    raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, MAX_SEEN)
+  );
+}
+
+function itemFor(slot: CoachFeedSlot, stub: boolean): StudyFeedItem {
+  const item: StudyFeedItem = {
+    lessonId: slot.id,
+    reason: slot.reason,
+    intent: slot.intent,
+    practice: { ...slot.then },
+  };
+  if (stub) {
+    item.stub = { lessonId: slot.id, topic: slot.topic, title: slot.title, kind: slot.kind };
+    if (slot.tag) item.stub.tag = slot.tag;
+  }
+  return item;
+}
+
 /**
  * Serve the leading run of ALREADY-CACHED slots, stopping at the first hole we
  * intend to fill so curriculum order is preserved (the client renders a skeleton
  * for that hole). Holes whose generation recently failed are stepped over rather
- * than stalled on forever.
+ * than stalled on forever. An unwritten FIX lesson is not a hole: it is served
+ * as a stub the reader can choose to write (one AI call, on click), so it never
+ * stalls the feed and never costs anything by itself.
  */
 function serveFrom(
   language: Language,
-  queue: StudySlot[],
+  queue: CoachFeedSlot[],
   start: number,
-  limit: number
-): { lessons: Lesson[]; served: StudySlot[]; nextIndex: number } {
+  limit: number,
+  seen: ReadonlySet<string>
+): { lessons: Lesson[]; items: StudyFeedItem[]; served: CoachFeedSlot[]; nextIndex: number } {
   const lessons: Lesson[] = [];
-  const served: StudySlot[] = [];
+  const items: StudyFeedItem[] = [];
+  const served: CoachFeedSlot[] = [];
   let i = start;
 
   for (; i < queue.length; i++) {
-    if (lessons.length >= limit) break;
+    if (items.length >= limit) break;
     const slot = queue[i];
+    if (seen.has(slot.id)) continue; // the client already shows it
     if (!slot.cached) {
+      if (isStubSource(slot)) {
+        items.push(itemFor(slot, true));
+        served.push(slot);
+        continue;
+      }
       if (isSlotFailed(slot)) continue; // don't stall on a dead slot
       break;
     }
     const lesson = getLesson(language, slot.id);
     if (!lesson) continue; // planner/cache raced — skip rather than 500
     lessons.push(lesson);
+    items.push(itemFor(slot, false));
     served.push(slot);
   }
 
-  return { lessons, served, nextIndex: i };
+  return { lessons, items, served, nextIndex: i };
 }
 
 /**
@@ -100,23 +148,29 @@ function serveFrom(
 function buildFeed(
   language: Language,
   state: StudyQueueState,
-  queue: StudySlot[],
+  queue: CoachFeedSlot[],
   start: number,
-  limit: number
+  limit: number,
+  seen: ReadonlySet<string> = new Set()
 ): StudyFeedResponse {
-  const { lessons, served, nextIndex } = serveFrom(language, queue, start, limit);
+  const { lessons, items, served, nextIndex } = serveFrom(language, queue, start, limit, seen);
 
   // Warm the holes ahead BEFORE reading `warming`, but never await any of it.
+  // warmAhead skips fix/mistake slots: those are written only on a click.
   warmAhead(language, queue.slice(Math.max(start, 0)));
 
   const next = queue[nextIndex];
   const warming = !!next && !next.cached && isSlotWarming(next);
 
-  const anchor = served[0] ?? queue[start] ?? next;
+  // Position reads as "where am I in the ladder": prefer a track lesson over a
+  // fix or re-read that happens to sit at the top of the feed.
+  const anchor =
+    served.find((s) => s.source === 'track') ?? served[0] ?? queue[start] ?? next;
   const missingOutlines = TOPICS.filter((t) => !state.outlines.has(t)).length;
 
   return {
     lessons,
+    items,
     position: positionFor(anchor, state),
     warming,
     exhausted: queue.length === 0 && missingOutlines === 0,
@@ -130,10 +184,11 @@ studyRoutes.get('/study/feed', (c) => {
   try {
     const after = c.req.query('after');
     const limit = parseLimit(c.req.query('limit'));
+    const seen = parseSeen(c.req.query('seen'));
 
     const language = getActiveLanguage();
-    const state = buildStudyState(language);
-    const queue = studyQueue(state);
+    const state = buildCoachState(language);
+    const queue = coachFeed(state);
 
     let start = 0;
     if (after) {
@@ -141,7 +196,7 @@ studyRoutes.get('/study/feed', (c) => {
       if (idx >= 0) start = idx + 1;
     }
 
-    return c.json(buildFeed(language, state, queue, start, limit));
+    return c.json(buildFeed(language, state, queue, start, limit, seen));
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     console.error('[study]', message);
@@ -157,8 +212,9 @@ studyRoutes.get('/study/jump/:topic', (c) => {
   }
   try {
     const language = getActiveLanguage();
-    const state = buildStudyState(language);
-    let queue = studyQueue(state);
+    const state: CoachState = buildCoachState(language);
+    const annotate = (s: StudySlot) => annotateSlot(state, s);
+    let queue: CoachFeedSlot[] = studyQueue(state).map(annotate);
 
     // Only the topic's own TRACK counts as "somewhere to jump to" — a
     // personalized slot that happens to be tagged with this topic is not the
@@ -171,7 +227,7 @@ studyRoutes.get('/study/jump/:topic', (c) => {
 
     // Fully read: re-read the topic from the top, then fall back into the
     // normal queue so the feed keeps going past the end of the track.
-    const reread: StudySlot[] = getCachedLessonMeta()
+    const reread: CoachFeedSlot[] = getCachedLessonMeta()
       .filter((m) => m.topic === topic)
       .map((m) => ({
         id: m.id,
@@ -181,11 +237,45 @@ studyRoutes.get('/study/jump/:topic', (c) => {
         title: m.title,
         cached: true,
         source: 'reread' as const,
-      }));
+      }))
+      .map(annotate);
     const seen = new Set(reread.map((s) => s.id));
     queue = [...reread, ...queue.filter((s) => !seen.has(s.id))];
 
     return c.json(buildFeed(language, state, queue, 0, DEFAULT_LIMIT));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[study]', message);
+    return c.json({ error: message }, 500);
+  }
+});
+
+// POST /api/study/lesson/:id/write — write ONE fix lesson, on an explicit
+// click ("Write this lesson (1 AI call)"). The only path that generates a
+// fix/mistake lesson: the prefetcher never does. Already written = returned
+// as-is with no call. Anything that is not a fix/mistake slot the coach
+// currently plans is 404: this is not a general "generate anything" endpoint.
+studyRoutes.post('/study/lesson/:id/write', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const language = getActiveLanguage();
+
+    const existing = getLesson(language, id);
+    if (existing) {
+      const payload: StudyWriteResponse = { lesson: existing };
+      return c.json(payload);
+    }
+
+    const slot = coachFeed(buildCoachState(language)).find((s) => s.id === id);
+    if (!slot || !isStubSource(slot)) {
+      return c.json({ error: `no writable lesson ${id}` }, 404);
+    }
+
+    await ensureLesson(slot);
+    const lesson = getLesson(language, id);
+    if (!lesson) return c.json({ error: 'lesson generation failed, try again' }, 502);
+    const payload: StudyWriteResponse = { lesson };
+    return c.json(payload);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     console.error('[study]', message);

@@ -10,7 +10,7 @@
 // treating study.service as the single entry point.
 
 import { TOPICS, type Topic } from '../../shared/types.js';
-import type { Language } from '../../shared/languages.js';
+import { isLanguage, type Language } from '../../shared/languages.js';
 import { FOUNDATIONAL_START, masteryScore } from './curriculum.js';
 import {
   getAllTrackOutlines,
@@ -232,6 +232,21 @@ export function ensureLesson(slot: StudySlot): Promise<void> {
   if (slot.source === 'track' && slot.seq === 0) return ensurePrimer(slot.topic);
 
   return once(slot.id, async () => {
+    // A coach FIX lesson: `fix:<tag>:<topic|language>`. Only ever reached from
+    // the explicit write route (warmAhead skips fix slots), so this is the one
+    // user-initiated call it costs.
+    if (slot.source === 'fix' && slot.tag) {
+      const scope = slot.id.split(':')[2];
+      const problem = slot.problemId ? getProblem(slot.problemId) : null;
+      const lesson = await generateMistakeLesson(slot.tag, slot.topic, slot.seq, {
+        problemTitle: problem?.title,
+        prompt: problem?.prompt,
+        language: isLanguage(scope) ? scope : undefined,
+      });
+      insertLesson({ ...lesson, id: slot.id, title: slot.title });
+      return;
+    }
+
     if (slot.source === 'mistake' && slot.tag) {
       const problem = slot.problemId ? getProblem(slot.problemId) : null;
       const lesson = await generateMistakeLesson(slot.tag, slot.topic, slot.seq, {
@@ -346,6 +361,9 @@ export function warmAhead(language: Language, queue: StudySlot[], depth = PREFET
   for (const slot of queue) {
     if (warmed >= depth) break;
     if (slot.cached) continue;
+    // Personalized fix lessons cost an AI call each and are written ONLY on an
+    // explicit click (POST /study/lesson/:id/write). Never speculatively.
+    if (slot.source === 'fix' || slot.source === 'mistake') continue;
     if (isSlotFailed(slot)) continue;
     void ensureLesson(slot);
     warmed++;

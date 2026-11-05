@@ -46,11 +46,11 @@ export interface LessonMeta {
 /** A read lesson resurfaces for a re-read once it is this stale. */
 const REREAD_STALE_DAYS = 30;
 /** Caps on the personalized phase so the queue stays a sane length. */
-const MAX_MISTAKE_SLOTS = 5;
+export const MAX_MISTAKE_SLOTS = 5;
 const MAX_WALKTHROUGH_SLOTS = 5;
 const MAX_REREAD_SLOTS = 10;
 /** seq bands for the personalized phase (track lessons are 0..n). */
-const SEQ_MISTAKE = 1000;
+export const SEQ_MISTAKE = 1000;
 const SEQ_WALKTHROUGH = 1100;
 /** How far ahead the prefetcher generates. */
 export const PREFETCH_DEPTH = 3;
@@ -61,7 +61,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Slot — one planned position in the reading order. It may or may not have been
 // written yet (`cached`); the feed only ever serves cached slots.
 // -----------------------------------------------------------------------------
-export type SlotSource = 'track' | 'mistake' | 'walkthrough' | 'reread';
+/**
+ * `fix` = a coach-brain fix lesson (`fix:<tag>:<topic|language>`, see
+ * coach.brain.ts). Like `mistake`, it is only ever written on an explicit
+ * user click (POST /study/lesson/:id/write), never by the prefetcher.
+ */
+export type SlotSource = 'track' | 'mistake' | 'walkthrough' | 'reread' | 'fix';
 
 export interface StudySlot {
   id: string;
@@ -321,7 +326,7 @@ function walkthroughSlots(
   return out;
 }
 
-function rereadSlots(
+export function rereadSlots(
   cached: LessonMeta[],
   reads: StudyReadState[],
   now: number

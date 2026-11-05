@@ -432,27 +432,25 @@ describe('warmAhead — bounded lookahead behind the response', () => {
   });
 
   it('generates at most `depth` slots and skips the ones already cached', async () => {
+    llm.generatePrimer.mockImplementation(async (topic: string) => ({ ...PRIMER, pattern: topic }));
     const queue = [
-      mistakeSlot('off-by-one', 1, { cached: true }),
-      mistakeSlot('wrong-invariant', 1),
-      mistakeSlot('missed-edge-case', 1),
-      mistakeSlot('brute-forced', 1),
+      trackSlot('arrays', 0, { cached: true }),
+      trackSlot('hashing', 0),
+      trackSlot('math', 0),
+      trackSlot('trees', 0),
     ];
 
     svc.warmAhead('javascript', queue, 2);
     await flush();
 
-    expect(llm.generateMistakeLesson).toHaveBeenCalledTimes(2);
-    expect(llm.generateMistakeLesson.mock.calls.map((c) => c[0])).toEqual([
-      'wrong-invariant',
-      'missed-edge-case',
-    ]);
+    expect(llm.generatePrimer.mock.calls.map((c) => c[0])).toEqual(['hashing', 'math']);
   });
 
   it('steps over a recently failed slot and spends the budget on the next one', async () => {
-    const dead = mistakeSlot('off-by-one', 1);
-    const next = mistakeSlot('wrong-invariant', 1);
-    llm.generateMistakeLesson.mockRejectedValueOnce(new Error('api down'));
+    const dead = trackSlot('hashing', 0);
+    const next = trackSlot('math', 0);
+    llm.generatePrimer.mockRejectedValueOnce(new Error('api down'));
+    llm.generatePrimer.mockImplementation(async (topic: string) => ({ ...PRIMER, pattern: topic }));
 
     svc.warmAhead('javascript', [dead], 1);
     await flush();
@@ -461,9 +459,22 @@ describe('warmAhead — bounded lookahead behind the response', () => {
     svc.warmAhead('javascript', [dead, next], 1);
     await flush();
 
-    expect(llm.generateMistakeLesson).toHaveBeenCalledTimes(2);
-    expect(llm.generateMistakeLesson.mock.calls[1][0]).toBe('wrong-invariant');
+    expect(llm.generatePrimer).toHaveBeenCalledTimes(2);
+    expect(llm.generatePrimer.mock.calls[1][0]).toBe('math');
     expect(store.lessons.has(next.id)).toBe(true);
+  });
+
+  it('never prefetches a mistake or fix lesson: those cost a click', async () => {
+    const queue = [
+      mistakeSlot('off-by-one', 1),
+      { ...mistakeSlot('search-boundary', 0), id: 'fix:search-boundary:binary-search', source: 'fix' as const, seq: 1000 },
+      mistakeSlot('duplicates', 1),
+    ];
+
+    svc.warmAhead('javascript', queue, 3);
+    await flush();
+
+    expect(llm.generateMistakeLesson).not.toHaveBeenCalled();
   });
 });
 
@@ -633,5 +644,45 @@ describe('translation warm — one batched call per topic, and only when needed'
     await flush();
 
     expect(llm.translateSnippets).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+describe('ensureLesson — coach fix lessons', () => {
+  it('writes a fix lesson under its own id and title, grounded in the problem', async () => {
+    store.problems.set('p1', { id: 'p1', title: 'Find Peak', prompt: 'find a peak' } as never);
+    llm.generateMistakeLesson.mockResolvedValue(lesson('mistake:search-boundary:1000', { kind: 'mistake', seq: 1000 }));
+    const slot: StudySlot = {
+      ...mistakeSlot('search-boundary', 0),
+      id: 'fix:search-boundary:binary-search',
+      topic: 'binary-search',
+      source: 'fix',
+      seq: 1000,
+      title: 'Fixing search boundaries in binary-search',
+      problemId: 'p1',
+    };
+
+    await svc.ensureLesson(slot);
+
+    expect(llm.generateMistakeLesson).toHaveBeenCalledWith('search-boundary', 'binary-search', 1000, {
+      problemTitle: 'Find Peak',
+      prompt: 'find a peak',
+      language: undefined,
+    });
+    expect(store.lessons.get(slot.id)).toMatchObject({ id: slot.id, title: slot.title });
+  });
+
+  it('passes the language for a language-scoped fix', async () => {
+    llm.generateMistakeLesson.mockResolvedValue(lesson('x', { kind: 'mistake', seq: 1000 }));
+    const slot: StudySlot = {
+      ...mistakeSlot('iteration-idiom', 0),
+      id: 'fix:iteration-idiom:python',
+      source: 'fix',
+      seq: 1000,
+    };
+
+    await svc.ensureLesson(slot);
+
+    expect(llm.generateMistakeLesson.mock.calls[0][3]).toMatchObject({ language: 'python' });
   });
 });
