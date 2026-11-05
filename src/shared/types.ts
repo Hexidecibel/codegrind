@@ -662,6 +662,11 @@ export interface ReflectResponse {
   trend: ReflectTrendPoint[];
   /** Ranked by total count, descending. */
   mistakes: ReflectMistake[];
+  /**
+   * The coach's next lesson to read (top plan step with a read), for the
+   * "Next read" link. Absent when there is nothing to read. Free: no model call.
+   */
+  nextRead?: { lessonId: string; title: string; reason: string } | null;
 }
 
 // -----------------------------------------------------------------------------

@@ -19,7 +19,8 @@
 // clips rather than scrolling.
 
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { AlertTriangle, ArrowRight, BookOpen, Loader2 } from 'lucide-react';
 import { DIFFICULTIES, TOPICS } from '@/shared/types';
 import type { AttemptRecord, ReflectResponse } from '@/shared/types';
 import { getHistory, getReflect } from '@/client/lib/api';
@@ -99,7 +100,7 @@ export function ProgressPage() {
     );
   }
 
-  const { tree, nextUnlock, tiles, activity, trend, mistakes } = data;
+  const { tree, nextUnlock, tiles, activity, trend, mistakes, nextRead } = data;
 
   const accuracy = trend.map((t) => ({
     label: t.title,
@@ -145,6 +146,21 @@ export function ProgressPage() {
           topicsReached={tiles.topicsReached}
           totalTopics={tree.length || TOPICS.length}
         />
+
+        {/* 1b — the coach's next lesson, one tap from here. */}
+        {nextRead && (
+          <Link
+            to={`/study?lesson=${encodeURIComponent(nextRead.lessonId)}`}
+            className="-mt-4 flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-sm transition-colors hover:bg-accent phone:-mt-2"
+          >
+            <BookOpen className="h-4 w-4 shrink-0 text-violet-400" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium">Next read: {nextRead.title}</span>
+              <span className="block truncate text-xs text-muted-foreground">{nextRead.reason}</span>
+            </span>
+            <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+          </Link>
+        )}
 
         {/* 2 — the hero. On a phone the tree is too wide to read; the tier
             ladder below carries the same tiers as bars, so it stands in. */}

@@ -1790,10 +1790,19 @@ export function getLessonReads(): LessonRead[] {
   return rows.map((r) => ({ lessonId: r.lessonId, readAt: r.readAt, fuzzy: r.fuzzy === 1 }));
 }
 
+// TRACK lessons only (seq 0..n). Personalized lessons — mistake:/fix: at
+// SEQ_MISTAKE (1000+), walkthrough: at 1100+ — sit outside a topic's track, so
+// counting their reads let lessonsRead exceed lessonsTotal (trackSlotCount).
+// Both guards on purpose: the seq band is how the planner stores them, the id
+// prefix is what they are.
 const readCountsStmt = db.prepare(`
   SELECT l.topic AS topic, COUNT(*) AS n
   FROM lesson_reads r
   JOIN lessons l ON l.id = r.lessonId
+  WHERE l.seq < 1000
+    AND l.id NOT LIKE 'mistake:%'
+    AND l.id NOT LIKE 'fix:%'
+    AND l.id NOT LIKE 'walkthrough:%'
   GROUP BY l.topic
 `);
 
@@ -1814,7 +1823,7 @@ export function getReadsSince(sinceIso: string): Array<{ lessonId: string; readA
   return readsSinceStmt.all(sinceIso) as Array<{ lessonId: string; readAt: string; title: string | null }>;
 }
 
-/** Per-topic read counts for the jump index. Topics with no reads are absent. */
+/** Per-topic TRACK-lesson read counts (jump index, Reflect). Topics with no reads are absent. */
 export function getLessonReadCounts(): Map<Topic, number> {
   const rows = readCountsStmt.all() as Array<{ topic: string; n: number }>;
   const out = new Map<Topic, number>();

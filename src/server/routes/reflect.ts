@@ -22,6 +22,8 @@ import {
 } from '../services/curriculum.js';
 import { trackSlotCount } from '../services/study.order.js';
 import { practiceStreak } from '../services/today.service.js';
+import { buildCoachState } from '../services/coach.service.js';
+import { coachPlan } from '../services/coach.brain.js';
 import {
   ACTIVITY_DAYS,
   buildActivity,
@@ -36,6 +38,22 @@ import {
 } from '../services/reflect.compute.js';
 
 export const reflectRoutes = new Hono();
+
+/**
+ * The coach's top lesson to read, for Reflect's "Next read" link. DB reads
+ * only (buildCoachState materializes cached primers, a free write); an
+ * unwritten fix is still offered: Study shows its stub, written on a click.
+ * Never fails the page.
+ */
+function nextRead(language: Parameters<typeof buildCoachState>[0]): ReflectResponse['nextRead'] {
+  try {
+    const step = coachPlan(buildCoachState(language)).find((s) => s.read);
+    return step?.read ? { lessonId: step.read.lessonId, title: step.read.title, reason: step.reason } : null;
+  } catch (err) {
+    console.error('[reflect] next read:', err instanceof Error ? err.message : err);
+    return null;
+  }
+}
 
 // GET /api/reflect — the whole progress dashboard in one payload. Everything is
 // derived here (where the curriculum lives) so the client only ever renders.
@@ -139,6 +157,7 @@ reflectRoutes.get('/reflect', (c) => {
       activity,
       trend: computeTrend(getAttemptsByProblem(language)),
       mistakes: splitMistakes(getTaggedAttempts(language)),
+      nextRead: nextRead(language),
     };
 
     return c.json(payload);

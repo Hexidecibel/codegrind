@@ -157,7 +157,8 @@ describe('the concept step on Today', () => {
     await post('/api/concept/grade', { concept: 'idempotency', answer: 'keys' });
     t = await (await app.request('/api/today')).json();
     expect(t.steps[1]).toMatchObject({ status: 'done', result: 'Shaky · idempotency', ok: null });
-    expect(t.current).toBe('problem1');
+    // Next is the coach's read step when it has a lesson to offer, else problem 1.
+    expect(t.current).toBe(t.steps.some((s: { id: string }) => s.id === 'read') ? 'read' : 'problem1');
   });
 
   it('deriveSteps: 30-min day turns it off; a rep already done still counts', () => {
