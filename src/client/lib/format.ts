@@ -19,6 +19,15 @@ const MISTAKE_LABELS: Record<string, string> = {
   'runtime-error': 'Runtime error',
   'syntax-error': 'Syntax error',
   'edge-case-missed': 'Edge case missed',
+  // Slip-level tags — same text as shared/mistake-tags.ts TAG_INFO labels.
+  'misread-input-shape': 'Input shape misread',
+  'bounds-guard-order': 'Grid bounds order',
+  'iteration-idiom': 'Iteration idiom',
+  'pointer-update-order': 'Pointer update order',
+  'search-boundary': 'Search boundaries',
+  'visited-timing': 'Visited timing',
+  'copy-vs-reference': 'Copy vs reference',
+  'recursion-return': 'Recursion return',
 };
 
 /** Humanize a mistake tag with a curated label, falling back to slug titling. */

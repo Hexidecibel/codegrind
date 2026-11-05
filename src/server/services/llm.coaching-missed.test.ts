@@ -394,3 +394,39 @@ describe('a truncated tool call', () => {
     expect(result).toBeNull();
   });
 });
+
+// =============================================================================
+// mistakeTags — the vocabulary grew (slip-level tags); coercion must keep up
+// =============================================================================
+describe('mistake tags', () => {
+  async function coachWithTags(mistakeTags: unknown) {
+    mocks.create.mockReset();
+    mocks.create.mockImplementation(async (body: Record<string, unknown>) => ({
+      model: 'claude-fixture',
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 100, output_tokens: 200, cache_read_input_tokens: 0 },
+      content: [
+        {
+          type: 'tool_use',
+          name: (body.tool_choice as { name?: string } | undefined)?.name,
+          input: { ...REST, missed: [], mistakeTags },
+        },
+      ],
+    }));
+    return llm.coach(PROBLEM, USER_CODE, RESULTS);
+  }
+
+  it('keeps a new slip-level tag and drops an invented one', async () => {
+    const { brief } = await coachWithTags(['search-boundary', 'loop-confusion', 'off-by-one']);
+    expect(brief.mistakeTags).toEqual(['search-boundary', 'off-by-one']);
+  });
+
+  it('tells the model what each tag means and to prefer the most specific', async () => {
+    await coachWithTags([]);
+    const body = mocks.create.mock.calls[0][0] as { system: unknown };
+    const system = JSON.stringify(body.system);
+    expect(system).toMatch(/search-boundary — /);
+    expect(system).toMatch(/visited-timing — /);
+    expect(system).toMatch(/most specific/i);
+  });
+});

@@ -1,4 +1,5 @@
 import { stripExampleSections, stripPatternLeaks, stripTitleLeak } from '../../shared/pattern-leak.js';
+import { TAG_INFO } from '../../shared/mistake-tags.js';
 import {
   TOPICS,
   MISTAKE_TAGS,
@@ -582,6 +583,9 @@ export async function generateProblem(
 // ===========================================================================
 // 2. coach
 // ===========================================================================
+/** One `  - tag — hint` line per vocabulary entry, for the coaching prompt. */
+const MISTAKE_TAG_LINES = MISTAKE_TAGS.map((t) => `  - ${t} — ${TAG_INFO[t].hint}`).join('\n');
+
 /** Per language, and precomputed — same cached-prefix argument as generation. */
 export const COACH_SYSTEM_BY_LANGUAGE: Record<Language, string> = perLanguage(
   (p: LanguageProfile) =>
@@ -598,7 +602,9 @@ Your job: a structured coaching brief focused on INTERVIEW PATTERN MASTERY.
 - patternRecognition: how to RECOGNIZE this pattern in a future problem — the signals/cues an interviewer plants. This is the most valuable part.
 - complexity: the candidate's time & space complexity ("yours") vs the optimal ("optimal"), each as a short string like "O(n^2) time, O(1) space".
 - improvement: one short, direct nudge on how to get better at this pattern.
-- mistakeTags: choose ZERO OR MORE tags describing the recurring failure modes this submission shows, chosen ONLY from this fixed vocabulary: ${MISTAKE_TAGS.join(', ')}. Return an EMPTY array if the solution was clean. Do NOT invent tags outside this list.
+- mistakeTags: choose ZERO OR MORE tags describing the recurring failure modes this submission shows, chosen ONLY from this fixed vocabulary (tag — what it means):
+${MISTAKE_TAG_LINES}
+  Prefer the MOST SPECIFIC tag that fits: a binary-search lo/hi mistake is search-boundary, not off-by-one; a grid indexed before its bounds check is bounds-guard-order, not runtime-error. Use edge-case-missed only when no specific tag fits. Return an EMPTY array if the solution was clean. Do NOT invent tags outside this list.
 - calibration: ONLY when the candidate provided a pre-solve prediction (given below). Write one short sentence comparing their PREDICTED approach/time/space against what their code ACTUALLY does — name the gap plainly (e.g. "You predicted O(n) but your nested scan is O(n^2)"). If they were right, affirm it briefly. If no prediction was provided, return an empty string.
 
 The CANDIDATE'S SUBMISSION is shown to you with a "   7 | " line-number gutter that the app added — it is NOT part of their code. Never copy the gutter into a quote or a fix; quote the code that follows it.
@@ -1659,8 +1665,13 @@ export async function generateMistakeLesson(
   tag: string,
   topic: Topic,
   seq: number,
-  ground: { problemTitle?: string; prompt?: string } = {}
+  ground: { problemTitle?: string; prompt?: string; language?: string } = {}
 ): Promise<Lesson> {
+  const hint = TAG_INFO[tag as keyof typeof TAG_INFO]?.hint;
+  const meaning = hint ? `\n\nThat tag means: ${hint}.` : '';
+  const langLine = ground.language
+    ? `\n\nThis slip is about the ${ground.language} language itself, not one topic: show the ${ground.language} idiom to use and the one to avoid.`
+    : '';
   const grounding = ground.problemTitle
     ? `The most recent time it bit them was on "${ground.problemTitle}":
 
@@ -1682,7 +1693,7 @@ Use that as the concrete example.`
     messages: [
       {
         role: 'user',
-        content: `This reader keeps making the same mistake: "${tag}" (most often while working ${topic} problems).
+        content: `This reader keeps making the same mistake: "${tag}" (most often while working ${topic} problems).${meaning}${langLine}
 
 ${grounding}
 

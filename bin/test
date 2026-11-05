@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Run the test suite under the same Node the service runs (see lib/node.sh —
+# better-sqlite3 hard-crashes under a mismatched ABI, so a raw `npx vitest`
+# from a shell with the wrong default Node is not a valid test run).
+#
+#   bin/test                  Full: typecheck (tsc -b) + every vitest file.
+#                             Takes a shared job slot via ~/.claude/bin/job-slot
+#                             when that helper exists (max 3 heavy jobs per box).
+#   bin/test --fast FILE...   Inner TDD loop: ONLY the given test files (or the
+#                             tests related to the given source files). No
+#                             typecheck, no slot. Seconds.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+# shellcheck source=lib/node.sh
+source "$REPO/bin/lib/node.sh"
+cg_require_node
+
+if [[ "${1:-}" == "--fast" ]]; then
+  shift
+  if [[ $# -eq 0 ]]; then
+    echo "usage: bin/test --fast FILE..." >&2
+    exit 2
+  fi
+  tests=()
+  sources=()
+  for f in "$@"; do
+    case "$f" in
+      *.test.ts|*.test.tsx) tests+=("$f") ;;
+      *) sources+=("$f") ;;
+    esac
+  done
+  if [[ ${#tests[@]} -gt 0 ]]; then
+    npx vitest run "${tests[@]}"
+  fi
+  if [[ ${#sources[@]} -gt 0 ]]; then
+    npx vitest related --run "${sources[@]}"
+  fi
+  exit 0
+fi
+
+run_full() {
+  echo "==> Typecheck (tsc -b)"
+  npx tsc -b
+  echo "==> vitest (full suite)"
+  npx vitest run
+}
+
+SLOT="${HOME}/.claude/bin/job-slot"
+if [[ -x "$SLOT" && "${CG_TEST_IN_SLOT:-0}" != "1" ]]; then
+  # Re-enter this script inside the slot so the slot covers both steps.
+  exec "$SLOT" --kind test --name "codegrind test" -- env CG_TEST_IN_SLOT=1 "$REPO/bin/test"
+fi
+run_full

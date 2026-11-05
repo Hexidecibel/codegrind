@@ -310,6 +310,17 @@ export const MISTAKE_TAGS = [
   'runtime-error',
   'syntax-error',
   'edge-case-missed',
+  // Slip-level tags (2026-11). APPEND ONLY: stored attempts and cached
+  // `mistake:<tag>:n` lessons name these strings, so never reorder or rename.
+  // Per-tag labels, hints and home topics live in ./mistake-tags.ts.
+  'misread-input-shape',
+  'bounds-guard-order',
+  'iteration-idiom',
+  'pointer-update-order',
+  'search-boundary',
+  'visited-timing',
+  'copy-vs-reference',
+  'recursion-return',
 ] as const;
 export type MistakeTag = (typeof MISTAKE_TAGS)[number];
 
