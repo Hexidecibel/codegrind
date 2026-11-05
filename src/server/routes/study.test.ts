@@ -101,6 +101,25 @@ describe('GET /study/feed', () => {
     const body = (await res.json()) as StudyFeedResponse;
     expect(body.items?.some((i) => i.lessonId === 'fix:search-boundary:binary-search')).toBe(false);
   });
+
+  it('?start= opens at a planned lesson (an unwritten fix stays a stub)', async () => {
+    const res = await studyRoutes.request('/study/feed?limit=3&start=fix:search-boundary:binary-search');
+    const body = (await res.json()) as StudyFeedResponse;
+    expect(body.items?.[0]).toMatchObject({ lessonId: 'fix:search-boundary:binary-search', stub: { tag: 'search-boundary' } });
+    expect(mocks.ensureLesson).not.toHaveBeenCalled();
+  });
+
+  it('?start= starts at a later planned lesson, skipping what is ahead of it', async () => {
+    const res = await studyRoutes.request('/study/feed?limit=3&start=arrays:0');
+    const body = (await res.json()) as StudyFeedResponse;
+    expect(body.items?.[0]?.lessonId).toBe('arrays:0');
+  });
+
+  it('?start= with an unknown id falls back to the normal feed', async () => {
+    const res = await studyRoutes.request('/study/feed?limit=3&start=nope:9');
+    const body = (await res.json()) as StudyFeedResponse;
+    expect(body.items?.[0]?.lessonId).toBe('fix:search-boundary:binary-search');
+  });
 });
 
 describe('POST /study/lesson/:id/write', () => {

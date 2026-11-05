@@ -20,6 +20,8 @@ const PHONE_STEPS: ReadonlySet<TodayStepId> = new Set<TodayStepId>([
   'recall',
   'recognize',
   'concept',
+  // Reading a lesson is studying: the phone's.
+  'read',
   'debrief',
 ]);
 

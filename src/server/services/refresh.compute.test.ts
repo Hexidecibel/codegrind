@@ -141,3 +141,11 @@ describe('deriveRefreshSteps', () => {
     expect(mixedTopicsFor('2026-10-29')).toEqual(a);
   });
 });
+
+describe('the coach read step (Phase 4)', () => {
+  it('is hidden on refresh days, mixed day included', () => {
+    for (const day of [1, 2, 8, 9]) {
+      expect(deriveRefreshSteps(input({ day })).steps.map((s) => s.id)).not.toContain('read');
+    }
+  });
+});

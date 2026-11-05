@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   LayoutList,
@@ -24,6 +24,8 @@ import { LessonCard, LessonStubCard } from '@/client/components/LessonCard';
 import { StudyIndex } from '@/client/components/StudyIndex';
 import { useLocalStorage } from '@/client/hooks/useLocalStorage';
 import { humanize } from '@/client/lib/format';
+import { todayStepFrom } from '@/client/lib/today-flow';
+import { TodayNextBar } from '@/client/components/TodayNextBar';
 import { cn } from '@/lib/utils';
 
 /** How many lessons to pull per append. Small = the server has less to have
@@ -84,6 +86,14 @@ export function StudyPage() {
   const [indexOpen, setIndexOpen] = useState(false);
   const [dim, setDim] = useLocalStorage<boolean>('codegrind.study.dim', false);
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  // Opened from Today (`?from=today&step=read`): captured once, so dropping
+  // `?lesson=` after boot does not lose the "Next: …" bar.
+  const [todayStep] = useState(() => todayStepFrom(location.search));
+  /** Bumped on each recorded read, so the Today bar re-checks the step. */
+  const [readCount, setReadCount] = useState(0);
+  /** `?lesson=<id>`: the first fetch opens AT this lesson, then it is spent. */
+  const startRef = useRef<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const tailRef = useRef<HTMLDivElement | null>(null);
@@ -107,8 +117,10 @@ export function StudyPage() {
     try {
       const after = lastIdRef.current;
       const seen = [...seenRef.current];
+      const start = after ? null : startRef.current;
+      startRef.current = null;
       const res = await getStudyFeed(
-        after ? { after, limit: PAGE, seen } : { limit: PAGE, seen },
+        after ? { after, limit: PAGE, seen } : start ? { start, limit: PAGE, seen } : { limit: PAGE, seen },
       );
 
       // De-dupe defensively: a warm-poll and a sentinel fire can race, and the
@@ -204,9 +216,12 @@ export function StudyPage() {
               io.unobserve(entry.target);
               // Fire-and-forget: a failed mark just means the lesson
               // resurfaces later, which is a survivable outcome.
-              void markLessonRead(id).catch(() => {
-                markedRef.current.delete(id);
-              });
+              void markLessonRead(id).then(
+                () => setReadCount((n) => n + 1),
+                () => {
+                  markedRef.current.delete(id);
+                },
+              );
             }, READ_DWELL_MS);
             timers.set(id, handle);
           } else {
@@ -308,10 +323,19 @@ export function StudyPage() {
       requested && (TOPICS as readonly string[]).includes(requested)
         ? (requested as Topic)
         : null;
+    const lesson = searchParams.get('lesson')?.trim() || null;
     if (topic) {
       setSearchParams({}, { replace: true });
       void jump(topic);
     } else {
+      // `?lesson=<id>` (Today's read step): open at that lesson. Only that
+      // param is dropped; `from`/`step` stay so a refresh keeps the Today bar.
+      if (lesson) {
+        startRef.current = lesson;
+        const next = new URLSearchParams(searchParams);
+        next.delete('lesson');
+        setSearchParams(next, { replace: true });
+      }
       void loadMore();
     }
   }, [searchParams, setSearchParams, jump, loadMore]);
@@ -405,6 +429,7 @@ export function StudyPage() {
       </header>
 
       <div className="mx-auto max-w-3xl space-y-6 px-3 pb-32 pt-4 sm:px-6">
+        {todayStep && <TodayNextBar here={todayStep} screenPath="/study" refreshKey={readCount} />}
         {lessons.map((entry) =>
           entry.lesson ? (
             <div key={entry.id}>

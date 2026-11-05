@@ -1,11 +1,14 @@
 // =============================================================================
 // today — the guided daily routine, as the client sees it
 // =============================================================================
-// One local day = six steps, in order:
+// One local day = up to seven steps, in order:
 //
 //   warmup    clear the due pile: mock drill cards + Envelope ×5 + due review-queue problems
 //   concept   one concept rep (Phase H3): explain one SD / AI-systems concept out
 //             loud, graded against its rubric; teach-first when the concept is new
+//   read      one coding lesson the coach brain picks (coach.brain coachPlan);
+//             done once any lesson is read today. Absent when there is nothing
+//             to read; never part of a refresh day, the streak or readiness
 //   problem1  an adaptive grind problem (Minimal editor, predict-before-solve)
 //   problem2  another one
 //   mock      one mock interview; the kind rotates daily over MOCK_KINDS
@@ -25,7 +28,7 @@ import type { PatternId } from './pattern-shapes.js';
 import type { Topic as TopicId } from './types.js';
 
 /** A normal day's steps, in order. */
-export const TODAY_STEPS = ['warmup', 'concept', 'problem1', 'problem2', 'mock', 'debrief'] as const;
+export const TODAY_STEPS = ['warmup', 'concept', 'read', 'problem1', 'problem2', 'mock', 'debrief'] as const;
 /**
  * A Pattern Refresh day (days 1-8): one pattern, re-learned from its shape,
  * written from memory, practised (named), plus a cold review of yesterday's
@@ -39,6 +42,7 @@ export const MIXED_STEPS = ['warmup', 'mixed1', 'mixed2', 'mixed3', 'recognize',
 export const ALL_STEP_IDS = [
   'warmup',
   'concept',
+  'read',
   'problem1',
   'problem2',
   'mock',
@@ -72,6 +76,7 @@ export const QUICK_OFF_STEPS: readonly TodayStepId[] = ['concept', 'problem2', '
 export const TODAY_STEP_LABEL: Readonly<Record<TodayStepId, string>> = {
   warmup: 'Warm-up',
   concept: 'Concept rep',
+  read: 'One lesson',
   problem1: 'Problem 1',
   problem2: 'Problem 2',
   mock: 'Mock interview',

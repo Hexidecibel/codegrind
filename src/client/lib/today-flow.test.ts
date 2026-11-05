@@ -76,6 +76,12 @@ describe('carry-forward (Phase F)', () => {
     expect(carryInto({ stepNotes: {} }, null)).toBeNull();
   });
 
+  it('the read step takes no carry (no step writes one for a lesson)', () => {
+    expect(carryInto({ stepNotes: { warmup: note('w', 'Name the invariant first.') } }, 'read')).toBeNull();
+    // ...and Problem 1 still gets the warm-up's carry with the read step between them
+    expect(carryInto({ stepNotes: { warmup: note('w', 'Name the invariant first.') } }, 'problem1')?.text).toBe('Name the invariant first.');
+  });
+
   it('renders the prompt block in step order, and nothing at all without notes', () => {
     expect(renderCarryBlock([])).toBe('');
     const block = renderCarryBlock(

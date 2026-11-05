@@ -42,7 +42,9 @@ import {
   type RefreshProgress,
 } from './refresh.compute.js';
 import * as pstore from './patterns.store.js';
-import { getActiveLanguage, getAttemptsByProblem, getProblem, getTaggedAttempts, listLoops } from './db.js';
+import { getActiveLanguage, getAttemptsByProblem, getProblem, getReadsSince, getTaggedAttempts, listLoops } from './db.js';
+import { buildCoachState } from './coach.service.js';
+import { coachPlan } from './coach.brain.js';
 import type { Language } from '../../shared/languages.js';
 import { biasKinds, loopCountdown, type LoopCountdown } from '../../shared/loops.js';
 import { computeReadiness } from './readiness.compute.js';
@@ -75,7 +77,7 @@ function forgeStep(now: Date): { day: boolean; doneToday: number; last: { title:
   return { day: isForgeDayNow(todayConcept(now).doneToday > 0, now), ...f };
 }
 import * as store from './today.store.js';
-import type { DerivedSteps } from './today.compute.js';
+import type { DeriveInput, DerivedSteps } from './today.compute.js';
 import { runDebrief, type DebriefInput } from './llm.debrief.js';
 
 export class TodayError extends Error {
@@ -245,6 +247,7 @@ export function getToday(now = new Date()): TodayState {
       quick: row.quick,
       concept: todayConcept(now),
       forge: forgeStep(now),
+      read: readStep(language, dayStart),
       finalReview: nextLoop?.isFinalReviewDay ? { company: nextLoop.company, daysLeft: nextLoop.daysLeft } : null,
     });
   }
@@ -279,6 +282,23 @@ export function getToday(now = new Date()): TodayState {
     patternRecallDue: recallDue,
     warmupDue: { cards: cardsDue, reviews: row.quick ? 0 : reviewsDue },
   };
+}
+
+/**
+ * The read step's input: the coach brain's top step that has a lesson, plus
+ * today's read receipts. Reads tables only — the brain is pure and generates
+ * nothing, so loading Today never writes a lesson. Never throws: a broken read
+ * step must not break the day (it just disappears).
+ */
+function readStep(language: Language, dayStart: string): DeriveInput['read'] {
+  try {
+    const reads = getReadsSince(dayStart);
+    const step = coachPlan(buildCoachState(language)).find((s) => s.read) ?? null;
+    return { step, readToday: reads.length, lastTitle: reads[0]?.title ?? null };
+  } catch (err) {
+    console.error('[today] read step:', err instanceof Error ? err.message : err);
+    return undefined;
+  }
 }
 
 const safeCount = (fn: () => number): number => {

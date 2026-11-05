@@ -513,10 +513,12 @@ export function getPrimer(topic: string, opts: { cachedOnly?: boolean } = {}): P
  * and watch `warming` to decide whether to render a skeleton for the next card.
  */
 export function getStudyFeed(
-  opts: { after?: string; limit?: number; seen?: string[] } = {},
+  opts: { after?: string; start?: string; limit?: number; seen?: string[] } = {},
 ): Promise<StudyFeedResponse> {
   const qs = new URLSearchParams({ limit: String(opts.limit ?? 3) });
   if (opts.after) qs.set('after', opts.after);
+  // Open AT this lesson (Today's read step links /study?lesson=<id>).
+  else if (opts.start) qs.set('start', opts.start);
   // Ids already on screen, so a feed that re-anchors at the top (its `after`
   // was read meanwhile) skips them instead of re-serving the same stubs.
   if (opts.seen?.length) qs.set('seen', opts.seen.slice(-50).join(','));

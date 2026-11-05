@@ -16,15 +16,24 @@ export interface TodayLink {
   carry: { from: string; text: string } | null;
 }
 
-/** Where each noted thing sits in the day (recognize rides with the warm-up). */
-const NOTE_ORDER: Readonly<Record<StepNoteId, number>> = { warmup: 0, recognize: 0.5, concept: 1, problem1: 2, problem2: 3, mock: 4 };
+const stepIndex = (id: TodayStepId) => (TODAY_STEPS as readonly TodayStepId[]).indexOf(id);
+/** Where each noted thing sits in the day (recognize rides with the warm-up). From TODAY_STEPS, so a new step cannot skew it. */
+const NOTE_ORDER: Readonly<Record<StepNoteId, number>> = {
+  warmup: stepIndex('warmup'),
+  recognize: stepIndex('warmup') + 0.5,
+  concept: stepIndex('concept'),
+  problem1: stepIndex('problem1'),
+  problem2: stepIndex('problem2'),
+  mock: stepIndex('mock'),
+};
 
 /** The carry from the latest note BEFORE `step`, or null. Pure. */
 export function carryInto(state: Pick<TodayState, 'stepNotes'>, step: TodayStepId | null): TodayLink['carry'] {
   if (step === null || !state.stepNotes) return null;
   // A Pattern Refresh step: its notes target a normal day's steps, so no carry.
-  const at = (TODAY_STEPS as readonly TodayStepId[]).indexOf(step);
-  if (at < 0) return null;
+  const at = stepIndex(step);
+  // The read step is a lesson, not practice: no step's carry is written for it.
+  if (at < 0 || step === 'read') return null;
   let best: TodayLink['carry'] = null;
   for (const id of STEP_NOTE_IDS) {
     const n = state.stepNotes[id];

@@ -21,6 +21,7 @@ import {
   type DeriveInput,
   type TodayAttemptRow,
 } from './today.compute.js';
+import { MIXED_STEPS, QUICK_OFF_STEPS, REFRESH_STEPS } from '../../shared/today.js';
 
 const TZ = 'America/Los_Angeles';
 const DAY_START = '2026-10-21T07:00:00.000Z'; // local midnight, PDT
@@ -426,5 +427,103 @@ describe('deriveSteps — 30-min day (Phase H2)', () => {
   it('says when the warm-up is a final review', () => {
     const d = deriveSteps(input({ cardsDue: 3, finalReview: { company: 'Acme', daysLeft: 2 } }));
     expect(d.steps[0].detail).toMatch(/^Final review before Acme \(in 2 days\)/);
+  });
+});
+
+describe('deriveSteps — the coach read step (Phase 4)', () => {
+  const pick = (over: { cached?: boolean } = {}) => ({
+    reason: 'Because you slipped on search boundaries',
+    read: { lessonId: 'fix:search-boundary:binary-search', title: 'Search boundaries', cached: over.cached ?? true },
+  });
+
+  it('no read input (or nothing to read) = no read step', () => {
+    expect(deriveSteps(input()).steps.map((s) => s.id)).not.toContain('read');
+    expect(deriveSteps(input({ read: { step: null, readToday: 0 } })).steps.map((s) => s.id)).not.toContain('read');
+    expect(deriveSteps(input({ read: { step: { reason: 'Due for a re-solve' }, readToday: 0 } })).steps.map((s) => s.id)).not.toContain('read');
+  });
+
+  it('todo: sits after the concept rep, is current once the concept is done, links to the lesson', () => {
+    const d = deriveSteps(input({ read: { step: pick(), readToday: 0 } }));
+    expect(d.steps.map((s) => s.id)).toEqual(['warmup', 'concept', 'read', 'problem1', 'problem2', 'mock', 'debrief']);
+    const read = d.steps.find((s) => s.id === 'read')!;
+    expect(read.status).toBe('current');
+    expect(d.current).toBe('read');
+    expect(read.label).toBe('One lesson');
+    expect(read.href).toBe('/study?lesson=fix%3Asearch-boundary%3Abinary-search&from=today&step=read');
+    expect(read.detail).toBe('Because you slipped on search boundaries · Search boundaries');
+    expect(d.steps).toHaveLength(7);
+  });
+
+  it('an unwritten fix lesson still links to it (Learn shows the stub; written on click only)', () => {
+    const d = deriveSteps(input({ read: { step: pick({ cached: false }), readToday: 0 } }));
+    expect(d.steps.find((s) => s.id === 'read')!.href).toContain('lesson=fix%3Asearch-boundary');
+  });
+
+  it('done once any lesson is read today, even with nothing left to pick', () => {
+    const d = deriveSteps(input({ read: { step: pick(), readToday: 2, lastTitle: 'Two pointers' } }));
+    const read = d.steps.find((s) => s.id === 'read')!;
+    expect(read.status).toBe('done');
+    expect(read.result).toBe('Read 2 lessons · Two pointers');
+    expect(read.ok).toBe(true);
+    expect(d.current).toBe('problem1');
+    expect(d.completed).toBe(3);
+    const none = deriveSteps(input({ read: { step: null, readToday: 1 } }));
+    expect(none.steps.find((s) => s.id === 'read')!.status).toBe('done');
+  });
+
+  it('skipped by hand moves the day on; doing it overrides the skip', () => {
+    const d = deriveSteps(input({ skips: ['read'], read: { step: pick(), readToday: 0 } }));
+    expect(status(d)).toMatchObject({ concept: 'done', read: 'skipped', problem1: 'current' });
+    expect(deriveSteps(input({ skips: ['read'], read: { step: pick(), readToday: 1 } })).steps.find((s) => s.id === 'read')!.status).toBe('done');
+  });
+
+  it('does not change the other steps: same statuses and current with the step done', () => {
+    const cases: Partial<DeriveInput>[] = [
+      {},
+      { cardsDue: 2 },
+      { concept: undefined },
+      { attempts: [att('a', '2026-10-21T15:00:00Z')] },
+      { skips: ['problem1', 'mock'] },
+      { endedEarly: true },
+      { quick: true },
+    ];
+    for (const c of cases) {
+      const without = deriveSteps(input(c));
+      const withRead = deriveSteps(input({ ...c, read: { step: pick(), readToday: 1 } }));
+      expect(withRead.current).toBe(without.current);
+      expect(withRead.steps.filter((s) => s.id !== 'read')).toEqual(without.steps);
+    }
+  });
+
+  it('a todo read step is a normal step in sequence: it waits behind the warm-up and concept', () => {
+    expect(deriveSteps(input({ cardsDue: 1, read: { step: pick(), readToday: 0 } })).current).toBe('warmup');
+    expect(deriveSteps(input({ concept: undefined, read: { step: pick(), readToday: 0 } })).current).toBe('concept');
+  });
+
+  it('stays on a 30-min day (not in QUICK_OFF_STEPS); end day early sweeps it', () => {
+    expect(status(deriveSteps(input({ quick: true, read: { step: pick(), readToday: 0 } }))).read).toBe('current');
+    expect(status(deriveSteps(input({ endedEarly: true, read: { step: pick(), readToday: 0 } }))).read).toBe('skipped');
+  });
+
+  it('hidden on refresh days: no refresh or mixed day has a read step', () => {
+    expect(REFRESH_STEPS).not.toContain('read');
+    expect(MIXED_STEPS).not.toContain('read');
+    expect(QUICK_OFF_STEPS).not.toContain('read');
+  });
+
+  it('a read alone is not practice: it never earns the debrief by itself', () => {
+    const d = deriveSteps(input({ concept: undefined, endedEarly: true, read: { step: pick(), readToday: 1 } }));
+    const due = pendingReviews({
+      enabled: true,
+      steps: d.steps,
+      warmupActivity: 0,
+      recognizeDone: false,
+      mockOpen: false,
+      hasDebrief: false,
+      noted: [],
+      failures: {},
+      now: Date.parse('2026-10-21T20:00:00Z'),
+    } as unknown as PendingReviewsInput);
+    expect(due).not.toContain('debrief');
   });
 });

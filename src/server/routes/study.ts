@@ -183,17 +183,32 @@ function buildFeed(
 studyRoutes.get('/study/feed', (c) => {
   try {
     const after = c.req.query('after');
+    const startId = c.req.query('start')?.trim();
     const limit = parseLimit(c.req.query('limit'));
     const seen = parseSeen(c.req.query('seen'));
 
     const language = getActiveLanguage();
     const state = buildCoachState(language);
-    const queue = coachFeed(state);
+    let queue = coachFeed(state);
 
     let start = 0;
     if (after) {
       const idx = queue.findIndex((s) => s.id === after);
       if (idx >= 0) start = idx + 1;
+    } else if (startId) {
+      // `?start=<lessonId>` (Today's read step links here): open AT that
+      // lesson. Planned = start there (an unwritten fix is served as its stub,
+      // never written). Not planned but written (already read) = re-read it
+      // first, then the normal queue. Unknown = the normal resume.
+      const idx = queue.findIndex((s) => s.id === startId);
+      if (idx >= 0) start = idx;
+      else {
+        const meta = getCachedLessonMeta().find((m) => m.id === startId);
+        if (meta) {
+          const slot = annotateSlot(state, { ...meta, cached: true, source: 'reread' });
+          queue = [slot, ...queue];
+        }
+      }
     }
 
     return c.json(buildFeed(language, state, queue, start, limit, seen));

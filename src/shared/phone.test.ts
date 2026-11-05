@@ -16,7 +16,7 @@ function day(ids: readonly TodayStepId[], status: Partial<Record<TodayStepId, To
 describe('stepPlace', () => {
   it('sorts every step id', () => {
     const phone = ALL_STEP_IDS.filter((id) => stepPlace(id, 'system-design') === 'phone');
-    expect(phone).toEqual(['warmup', 'concept', 'mock', 'relearn', 'recall', 'recognize', 'debrief']);
+    expect(phone).toEqual(['warmup', 'concept', 'read', 'mock', 'relearn', 'recall', 'recognize', 'debrief']);
   });
 
   it('sends a coding mock to the iPad, and every other kind to the phone', () => {
@@ -28,22 +28,26 @@ describe('stepPlace', () => {
 describe('phoneNext', () => {
   it('a normal day: warm-up, then the concept, then past both problems to the mock', () => {
     expect(phoneNext(day(TODAY_STEPS), 'behavioral')?.id).toBe('warmup');
-    const after = day(TODAY_STEPS, { warmup: 'done', concept: 'done' });
+    const after = day(TODAY_STEPS, { warmup: 'done', concept: 'done', read: 'done' });
     expect(after.find((s) => s.status === 'current')?.id).toBe('problem1');
     expect(phoneNext(after, 'behavioral')?.id).toBe('mock');
   });
 
+  it('the read step is the phone\'s: offered after the concept rep', () => {
+    expect(phoneNext(day(TODAY_STEPS, { warmup: 'done', concept: 'done' }), 'coding')?.id).toBe('read');
+  });
+
   it('a coding mock is skipped over, and a locked debrief is not offered', () => {
-    expect(phoneNext(day(TODAY_STEPS, { warmup: 'done', concept: 'done' }), 'coding')).toBeNull();
+    expect(phoneNext(day(TODAY_STEPS, { warmup: 'done', concept: 'done', read: 'done' }), 'coding')).toBeNull();
   });
 
   it('an unlocked debrief is offered', () => {
-    const d = day(TODAY_STEPS, { warmup: 'done', concept: 'done', problem1: 'done', problem2: 'done', mock: 'skipped', debrief: 'todo' });
+    const d = day(TODAY_STEPS, { warmup: 'done', concept: 'done', read: 'done', problem1: 'done', problem2: 'done', mock: 'skipped', debrief: 'todo' });
     expect(phoneNext(d, 'coding')?.id).toBe('debrief');
   });
 
   it('a mock in progress stays the next one', () => {
-    expect(phoneNext(day(TODAY_STEPS, { warmup: 'done', concept: 'done', mock: 'in-progress' }), 'system-design')?.id).toBe('mock');
+    expect(phoneNext(day(TODAY_STEPS, { warmup: 'done', concept: 'done', read: 'done', mock: 'in-progress' }), 'system-design')?.id).toBe('mock');
   });
 
   it('a refresh day: relearn and recall, then recognize past practice and cold', () => {

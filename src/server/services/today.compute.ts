@@ -164,6 +164,19 @@ export interface DeriveInput {
    * (shared/story-forge.forgeDay decides), and what the forge did today.
    */
   forge?: { day: boolean; doneToday: number; last: { title: string; status: string } | null };
+  /**
+   * The coach's read step: the brain's top step that has a lesson to read
+   * (null = nothing to read), and how many lessons were read today. Absent, or
+   * nothing to read and nothing read today = no read step at all. Never
+   * counted by the streak or readiness (those read their own rows).
+   */
+  read?: { step: ReadStepPick | null; readToday: number; lastTitle?: string | null };
+}
+
+/** The slice of a coach-brain CoachStep the read step needs (structural, so this file stays brain-free). */
+export interface ReadStepPick {
+  reason: string;
+  read?: { lessonId: string; title: string; cached: boolean };
 }
 
 export interface DerivedSteps {
@@ -298,6 +311,27 @@ export function warmupEntry(input: WarmupInput, skipped: ReadonlySet<TodayStepId
   };
 }
 
+/**
+ * The read step's entry, or null when there is no step: no input, or nothing
+ * the coach would have you read and nothing read today. Links to the lesson
+ * itself; an unwritten fix lesson opens as Learn's stub (written on click only).
+ */
+export function readEntry(read: DeriveInput['read'], skipped: ReadonlySet<TodayStepId>): BaseEntry | null {
+  if (!read) return null;
+  const lesson = read.step?.read;
+  const done = read.readToday > 0;
+  if (!lesson && !done) return null;
+  return {
+    status: done ? 'done' : skipped.has('read') ? 'skipped' : 'todo',
+    href: lesson ? `/study?lesson=${encodeURIComponent(lesson.lessonId)}&${from('read')}` : `/study?${from('read')}`,
+    detail: lesson ? `${read.step!.reason} · ${lesson.title}` : 'One coding lesson from Learn',
+    result: done
+      ? `Read ${read.readToday === 1 ? '1 lesson' : `${read.readToday} lessons`}${read.lastTitle ? ` · ${read.lastTitle}` : ''}`
+      : null,
+    ok: done ? true : null,
+  };
+}
+
 /** Every step's state for the day. Pure. */
 export function deriveSteps(input: DeriveInput): DerivedSteps {
   const skipped = new Set(input.skips);
@@ -333,6 +367,12 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
     result: repDone && rep.last ? `${rep.last.grade === 'got' ? 'Got' : rep.last.grade === 'shaky' ? 'Shaky' : 'Missed'} · ${rep.last.label}${rep.doneToday > 1 ? ` · ${rep.doneToday} reps` : ''}` : null,
     ok: repDone && rep.last ? (rep.last.grade === 'got' ? true : rep.last.grade === 'missed' ? false : null) : null,
   });
+
+  // --- read (the coach's one lesson) ------------------------------------------
+  // A normal step in sequence after the concept rep. Done by ANY read today
+  // (Learn's dwell marks it, or "I've read it"); not off on a 30-min day.
+  const read = readEntry(input.read, skipped);
+  if (read) base.set('read', read);
 
   // --- problems ---------------------------------------------------------------
   const problems = newProblemsToday(input);
@@ -399,7 +439,8 @@ export function deriveSteps(input: DeriveInput): DerivedSteps {
 
   // --- current = the first unfinished step ----------------------------------
   let current: TodayStepId | null = null;
-  const steps: TodayStep[] = TODAY_STEPS.map((id) => {
+  // A step with no entry (the read step with nothing to read) is not shown.
+  const steps: TodayStep[] = TODAY_STEPS.filter((id) => base.has(id)).map((id) => {
     const s = base.get(id)!;
     let status: TodayStepStatus = s.status;
     if (id === 'debrief' && status !== 'done' && !mockSettled && !input.endedEarly) {
@@ -594,7 +635,8 @@ export function pendingReviews(input: PendingReviewsInput): AiReviewTarget[] {
   const anyDone =
     input.warmupActivity > 0 ||
     input.recognizeDone ||
-    input.steps.some((s) => s.id !== 'warmup' && s.id !== 'debrief' && s.status === 'done');
+    // A read lesson is not practice: it alone never earns an AI debrief.
+    input.steps.some((s) => s.id !== 'warmup' && s.id !== 'debrief' && s.id !== 'read' && s.status === 'done');
   if (allSettled && anyDone && (!input.hasDebrief || input.debriefStale)) eligible.push('debrief');
 
   const allowed = (t: AiReviewTarget) => {

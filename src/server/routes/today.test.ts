@@ -52,6 +52,10 @@ const post = (url: string, body?: unknown) =>
     body: JSON.stringify(body ?? {}),
   });
 
+function markRead(lessonId: string, at: string) {
+  db.prepare(`INSERT INTO lesson_reads (lessonId, readAt, fuzzy) VALUES (?, ?, 0) ON CONFLICT(lessonId) DO UPDATE SET readAt = excluded.readAt`).run(lessonId, at);
+}
+
 function insertProblem(id: string) {
   db.prepare(
     `INSERT INTO problems (id, title, prompt, examples, constraints, difficulty, topic, pattern, starterCode,
@@ -98,7 +102,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   fake.runDebrief.mockReset();
   review.runStepReview.mockReset();
-  for (const t of ['daily_sessions', 'mock_gaps', 'mock_grades', 'mocks', 'attempts', 'review_queue', 'problems', 'recognize_attempts', 'ai_usage', 'interview_loops', 'card_reviews', 'concept_reps', 'concept_learning']) {
+  for (const t of ['daily_sessions', 'mock_gaps', 'mock_grades', 'mocks', 'attempts', 'review_queue', 'problems', 'recognize_attempts', 'ai_usage', 'interview_loops', 'card_reviews', 'concept_reps', 'concept_learning', 'lesson_reads']) {
     db.prepare(`DELETE FROM ${t}`).run();
   }
   // The pre-Phase-F tests pin click-only behaviour; Phase F's own block turns reviews on.
@@ -116,8 +120,9 @@ describe('GET /api/today', () => {
     expect(body.date).toBe('2026-10-21');
     expect(body.current).toBe('concept');
     expect(body.mockKind).toBe('system-design');
-    expect(body.steps.map((s: { id: string }) => s.id)).toEqual(['warmup', 'concept', 'problem1', 'problem2', 'mock', 'debrief']);
-    expect(body.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'current', 'todo', 'todo', 'todo', 'locked']);
+    // Phase 4: the coach's read step sits after the concept rep.
+    expect(body.steps.map((s: { id: string }) => s.id)).toEqual(['warmup', 'concept', 'read', 'problem1', 'problem2', 'mock', 'debrief']);
+    expect(body.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'current', 'todo', 'todo', 'todo', 'todo', 'locked']);
     expect(body.steps[1].href).toBe('/concept?from=today&step=concept');
     expect(body.readiness.map((a: { id: string }) => a.id)).toEqual(['algos', 'system-design', 'behavioral', 'coding']);
   });
@@ -145,14 +150,16 @@ describe('GET /api/today', () => {
     insertMock('m1', 'graded', '2026-10-21T17:00:00.000Z', 'above');
     insertCard('m1', '2026-10-21T18:00:00.000Z', '2026-10-21T18:00:00.000Z');
     insertRep('2026-10-21T16:05:00.000Z', 'shaky');
+    markRead('arrays:0', '2026-10-21T16:07:00.000Z');
 
     body = await (await app.request('/api/today')).json();
-    expect(body.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'done', 'done', 'done', 'done', 'current']);
+    expect(body.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'done', 'done', 'done', 'done', 'done', 'current']);
     expect(body.steps[0].result).toMatch(/Cleared 1/);
     expect(body.steps[1].result).toBe('Shaky · idempotency');
-    expect(body.steps[2].result).toMatch(/^Passed · Problem p1/);
-    expect(body.steps[3].result).toMatch(/^Failed · Problem p2/);
-    expect(body.steps[4].result).toBe('above level');
+    expect(body.steps[2].result).toMatch(/^Read 1 lesson/);
+    expect(body.steps[3].result).toMatch(/^Passed · Problem p1/);
+    expect(body.steps[4].result).toMatch(/^Failed · Problem p2/);
+    expect(body.steps[5].result).toBe('above level');
     expect(body.attemptedProblemIds).toEqual(['p1', 'p2']);
     expect(body.streak).toBeGreaterThanOrEqual(2);
   });
@@ -180,11 +187,13 @@ describe('GET /api/today/readiness', () => {
 describe('skip and end early', () => {
   it('a skip persists and moves the current step; un-skip restores it', async () => {
     let body = await (await post('/api/today/skip', { step: 'concept' })).json();
+    expect(body.current).toBe('read');
+    body = await (await post('/api/today/skip', { step: 'read' })).json();
     expect(body.current).toBe('problem1');
     body = await (await post('/api/today/skip', { step: 'problem1' })).json();
     expect(body.current).toBe('problem2');
     body = await (await app.request('/api/today')).json();
-    expect(body.steps[2].status).toBe('skipped');
+    expect(body.steps[3].status).toBe('skipped');
     body = await (await post('/api/today/skip', { step: 'problem1', skip: false })).json();
     expect(body.current).toBe('problem1');
   });
@@ -198,7 +207,7 @@ describe('skip and end early', () => {
     const body = await (await post('/api/today/end')).json();
     expect(body.endedEarly).toBe(true);
     expect(body.current).toBe('debrief');
-    expect(body.steps.slice(1, 4).map((s: { status: string }) => s.status)).toEqual(['skipped', 'skipped', 'skipped']);
+    expect(body.steps.slice(1, 5).map((s: { status: string }) => s.status)).toEqual(['skipped', 'skipped', 'skipped', 'skipped']);
   });
 });
 
@@ -583,9 +592,13 @@ describe('Phase H2 — loops, final review, 30-min day', () => {
     const on = await (await post('/api/today/quick', { on: true })).json();
     expect(on.quick).toBe(true);
     // The concept rep is off on a 30-min day (Phase H3), like Problem 2 and the mock.
-    expect(on.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'skipped', 'current', 'skipped', 'skipped', 'todo']);
+    // The read step stays on (not in QUICK_OFF_STEPS).
+    expect(on.steps.map((s: { status: string }) => s.status)).toEqual(['done', 'skipped', 'current', 'todo', 'skipped', 'skipped', 'todo']);
     expect(on.steps[1].detail).toMatch(/^Off today/);
     insertAttempt('qa', 'q1', '2026-10-21T19:00:00.000Z');
+    const mid = await (await app.request('/api/today')).json();
+    expect(mid.current).toBe('read');
+    markRead('arrays:0', '2026-10-21T19:10:00.000Z');
     const after = await (await app.request('/api/today')).json();
     expect(after.current).toBe('debrief');
     const off = await (await post('/api/today/quick', { on: false })).json();
@@ -600,5 +613,33 @@ describe('Phase H2 — loops, final review, 30-min day', () => {
     expect(todaySvc.breadthSlot(NOW)).toEqual({ avoidTopic: 'arrays' });
     await post('/api/today/quick', { on: true });
     expect(todaySvc.breadthSlot(NOW)).toBeNull();
+  });
+});
+
+describe('the coach read step (Phase 4)', () => {
+  it('links to the brain\'s lesson, is done by any read today, and never calls a model or writes a lesson', async () => {
+    const lessonsBefore = (db.prepare('SELECT COUNT(*) AS n FROM lessons').get() as { n: number }).n;
+    let body = await (await app.request('/api/today')).json();
+    const read = body.steps.find((s: { id: string }) => s.id === 'read');
+    expect(read.status).toBe('todo');
+    expect(read.href).toMatch(/^\/study\?lesson=[^&]+&from=today&step=read$/);
+    expect(read.detail.length).toBeGreaterThan(0);
+    // Yesterday's read (local) does not count for today.
+    markRead('arrays:0', '2026-10-21T05:00:00.000Z');
+    body = await (await app.request('/api/today')).json();
+    expect(body.steps.find((s: { id: string }) => s.id === 'read').status).not.toBe('done');
+    markRead('arrays:0', '2026-10-21T18:00:00.000Z');
+    body = await (await app.request('/api/today')).json();
+    expect(body.steps.find((s: { id: string }) => s.id === 'read').status).toBe('done');
+    expect(fake.runDebrief).not.toHaveBeenCalled();
+    expect(review.runStepReview).not.toHaveBeenCalled();
+    expect((db.prepare('SELECT COUNT(*) AS n FROM ai_usage').get() as { n: number }).n).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM lessons').get() as { n: number }).n).toBe(lessonsBefore);
+  });
+
+  it('a read alone does not count toward the streak', async () => {
+    markRead('arrays:0', '2026-10-21T18:00:00.000Z');
+    const body = await (await app.request('/api/today')).json();
+    expect(body.streak).toBe(0);
   });
 });

@@ -1797,6 +1797,23 @@ const readCountsStmt = db.prepare(`
   GROUP BY l.topic
 `);
 
+const readsSinceStmt = db.prepare(`
+  SELECT r.lessonId AS lessonId, r.readAt AS readAt, l.title AS title
+  FROM lesson_reads r
+  LEFT JOIN lessons l ON l.id = r.lessonId
+  WHERE r.readAt >= ?
+  ORDER BY r.readAt DESC
+`);
+
+/**
+ * Lessons whose latest read receipt is at or after `sinceIso` (Today's read
+ * step: local midnight), newest first. A re-read moves a receipt forward, so
+ * re-reading an old lesson counts for today too. Any lesson counts.
+ */
+export function getReadsSince(sinceIso: string): Array<{ lessonId: string; readAt: string; title: string | null }> {
+  return readsSinceStmt.all(sinceIso) as Array<{ lessonId: string; readAt: string; title: string | null }>;
+}
+
 /** Per-topic read counts for the jump index. Topics with no reads are absent. */
 export function getLessonReadCounts(): Map<Topic, number> {
   const rows = readCountsStmt.all() as Array<{ topic: string; n: number }>;

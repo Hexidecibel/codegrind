@@ -189,4 +189,25 @@ describe('phoneSessionItems', () => {
     expect(phoneSessionItems(base).map((i) => i.key)).toEqual(['recognize', 'envelope', 'lesson']);
     expect(phoneSessionItems({ ...base, patternRecallDue: 2 }).map((i) => i.key)).toEqual(['recognize', 'envelope', 'recall', 'lesson']);
   });
+
+  it('one lesson follows the coach read step: its reason, its lesson link', () => {
+    const base = { recognize: null, envelope: null, patternRecallDue: 0 } as unknown as TodayState;
+    expect(phoneSessionItems(base).slice(-1)[0]!.href).toBe('/study');
+    expect(phoneSessionItems(base).slice(-1)[0]!.detail).toBeUndefined();
+    const read: TodayStep = {
+      ...step('read', 'todo'),
+      href: '/study?lesson=fix%3Asearch-boundary%3Abinary-search&from=today&step=read',
+      detail: 'Because you slipped on search boundaries · Search boundaries',
+    };
+    const item = phoneSessionItems({ ...base, steps: [step('warmup', 'done'), read] }).slice(-1)[0]!;
+    expect(item).toMatchObject({ key: 'lesson', label: 'One lesson', href: read.href, detail: read.detail, count: null });
+    expect(phoneSessionItems({ ...base, steps: [{ ...read, status: 'done' }] }).slice(-1)[0]!.count).toBe('read today');
+  });
+
+  it('renders the read step in the day like any other step', () => {
+    const read: TodayStep = { ...step('read', 'current'), label: 'One lesson', detail: 'Because you slipped on search boundaries · Search boundaries' };
+    const html = render(state([step('warmup', 'done'), step('concept', 'done'), read, step('problem1', 'todo')], 'read', 2));
+    expect(html).toContain('One lesson');
+    expect(html).toContain('Because you slipped on search boundaries');
+  });
 });

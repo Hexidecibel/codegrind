@@ -854,10 +854,14 @@ export interface SessionItem {
   href: string;
   /** A small count on the right ("3 due", "2 today"), or null. */
   count: string | null;
+  /** One muted line under the label (the coach's reason for the lesson), if any. */
+  detail?: string;
 }
 
 /** The phone's extras once its steps are done. Never part of the day's count. */
-export function phoneSessionItems(state: Pick<TodayState, 'recognize' | 'envelope' | 'patternRecallDue'>): SessionItem[] {
+export function phoneSessionItems(
+  state: Pick<TodayState, 'recognize' | 'envelope' | 'patternRecallDue'> & Partial<Pick<TodayState, 'steps'>>,
+): SessionItem[] {
   const items: SessionItem[] = [
     {
       key: 'recognize',
@@ -877,7 +881,13 @@ export function phoneSessionItems(state: Pick<TodayState, 'recognize' | 'envelop
   if (state.patternRecallDue > 0) {
     items.push({ key: 'recall', label: 'Pattern recall', icon: Shapes, href: '/patterns?due=1', count: `${state.patternRecallDue} due` });
   }
-  items.push({ key: 'lesson', label: 'One lesson', icon: BookOpen, href: '/study', count: null });
+  // The coach's pick (Today's read step) when there is one: its reason, its lesson.
+  const read = state.steps?.find((s) => s.id === 'read');
+  items.push(
+    read
+      ? { key: 'lesson', label: 'One lesson', icon: BookOpen, href: read.href, count: read.status === 'done' ? 'read today' : null, detail: read.detail }
+      : { key: 'lesson', label: 'One lesson', icon: BookOpen, href: '/study', count: null },
+  );
   return items;
 }
 
@@ -889,11 +899,14 @@ function PhoneSession({ state }: { state: TodayState }) {
         <Smartphone className="h-4 w-4" aria-hidden /> Phone session
       </h2>
       <ul>
-        {items.map(({ key, label, icon: Icon, href, count }) => (
+        {items.map(({ key, label, icon: Icon, href, count, detail }) => (
           <li key={key}>
             <Link to={href} className={cn(phoneRow, 'rounded-lg text-[15px] active:bg-secondary')}>
               <Icon className="h-5 w-5 shrink-0 text-primary" aria-hidden />
-              <span className="flex-1">{label}</span>
+              <span className="min-w-0 flex-1">
+                {label}
+                {detail && <span className="block truncate text-xs text-muted-foreground">{detail}</span>}
+              </span>
               {count && <span className="text-xs tabular-nums text-muted-foreground">{count}</span>}
               <ChevronRight className="h-4 w-4 text-muted-foreground/60" aria-hidden />
             </Link>
