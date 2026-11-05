@@ -274,10 +274,12 @@ export function getHint(
 // Adaptive Grind Mode
 // ---------------------------------------------------------------------------
 /** POST /api/session/start — plan a sitting + serve the first adaptive problem. */
-export function startSession(): Promise<SessionStartResponse> {
+export function startSession(
+  pin: { topic?: string; tag?: string } = {},
+): Promise<SessionStartResponse> {
   return request<SessionStartResponse>('/api/session/start', {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify(pin),
   });
 }
 
@@ -493,9 +495,13 @@ export function getCloseness(): Promise<ClosenessStats> {
 // ---------------------------------------------------------------------------
 // Phase C — retrieval loop, primers
 // ---------------------------------------------------------------------------
-/** GET /api/primer/:topic — per-pattern cheat-sheet card (generates + caches on miss). */
-export function getPrimer(topic: string): Promise<Primer> {
-  return request<Primer>(`/api/primer/${encodeURIComponent(topic)}`);
+/**
+ * GET /api/primer/:topic — per-pattern cheat-sheet card (generates + caches on
+ * miss). `cachedOnly` never generates: a miss rejects (404) instead.
+ */
+export function getPrimer(topic: string, opts: { cachedOnly?: boolean } = {}): Promise<Primer> {
+  const qs = opts.cachedOnly ? '?cached=1' : '';
+  return request<Primer>(`/api/primer/${encodeURIComponent(topic)}${qs}`);
 }
 
 // ---------------------------------------------------------------------------

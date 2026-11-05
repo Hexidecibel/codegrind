@@ -9,7 +9,8 @@ function isTopic(v: unknown): v is Topic {
   return typeof v === 'string' && (TOPICS as readonly string[]).includes(v);
 }
 
-// GET /api/primer/:topic — cached primer, generated + cached on a miss.
+// GET /api/primer/:topic[?cached=1] — cached primer, generated + cached on a miss
+// (unless ?cached=1, which never generates).
 primersRoutes.get('/primer/:topic', async (c) => {
   const topic = c.req.param('topic');
   if (!isTopic(topic)) {
@@ -22,6 +23,9 @@ primersRoutes.get('/primer/:topic', async (c) => {
     const language = getActiveLanguage();
     const cached = getPrimer(language, topic);
     if (cached) return c.json(cached);
+    // `?cached=1`: read-only. Grind's read-first gate asks this way so that
+    // showing a gate can never cost a generation — a miss is a 404, not a call.
+    if (c.req.query('cached') === '1') return c.json({ error: 'primer not cached' }, 404);
 
     // A cold generate authors in the corpus language, so what it stores is the
     // original. Re-reading through the overlay serves the translation when one

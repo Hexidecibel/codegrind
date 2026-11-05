@@ -499,6 +499,29 @@ export function nextIntent(opts: NextIntentOpts): SchedulerIntent {
 }
 
 /**
+ * A pinned first problem (Learn's "Practice this →" → /grind?topic=…): the
+ * best-scoring candidate the normal scorer would build for THAT topic, so the
+ * kind/difficulty still follow the ladder. A topic the scorer has no candidate
+ * for (locked, or a cold start on a non-root) is served as a new pattern at
+ * easy. Never a review and never a sprinkle — the player asked for this topic.
+ */
+export function pinnedIntent(language: Language, topic: Topic): SchedulerIntent {
+  const best = buildCandidates(buildViews(language))
+    .filter((c) => c.topic === topic)
+    .sort((a, b) => b.score - a.score)[0];
+  return toIntent(
+    language,
+    best ?? {
+      kind: 'new-pattern',
+      topic,
+      difficulty: 'easy',
+      score: 1,
+      rationale: `New pattern: ${topic.replace(/-/g, ' ')} — the one you picked to practise.`,
+    }
+  );
+}
+
+/**
  * Phase H2 breadth floor: Problem 2 of the day is the least-seen topic in this
  * language (breadth.compute.pickBreadth), easy until one clean solve, then
  * medium. It outranks a due review on purpose — a review re-solve is the

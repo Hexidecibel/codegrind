@@ -149,7 +149,7 @@ async function submit(
 }
 
 beforeEach(() => {
-  for (const table of ['attempts', 'skill_state', 'review_queue', 'problems', 'revealed_solutions', 'near_miss_holds']) {
+  for (const table of ['attempts', 'skill_state', 'review_queue', 'problems', 'revealed_solutions', 'near_miss_holds', 'lesson_reads']) {
     db.db.prepare(`DELETE FROM ${table}`).run();
   }
   mocks.runTests.mockReset();
@@ -300,6 +300,47 @@ suite('POST /api/submit — hidden tests keep their answers', () => {
     await submit();
     const passedResults = mocks.coach.mock.calls[0][2] as TestResult[];
     expect(passedResults.map((r) => r.expected)).toEqual(['3', '10']);
+  });
+});
+
+suite('POST /api/submit — the 3-min fix offer', () => {
+  const sloppy = () => ({
+    brief: { ...BRIEF, missed: BRIEF.missed.map((m) => ({ ...m })), mistakeTags: ['off-by-one'] },
+    fixes: new Map<number, CoachFix>(),
+  });
+
+  it('offers the fix on the SECOND slip — this submit counts itself', async () => {
+    mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
+    mocks.coach.mockImplementation(async () => sloppy());
+    const first = (await submit()).events.find((e) => e.type === 'coaching');
+    expect(first.fixOffer).toBeUndefined();
+    const second = (await submit()).events.find((e) => e.type === 'coaching');
+    expect(second.fixOffer).toMatchObject({
+      intent: 'fix',
+      tag: 'off-by-one',
+      topic: 'arrays',
+      lessonId: 'fix:off-by-one:arrays',
+    });
+  });
+
+  it('stays quiet once the fix was read after the latest slip', async () => {
+    mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
+    mocks.coach.mockImplementation(async () => sloppy());
+    await submit();
+    await submit();
+    db.markLessonRead('fix:off-by-one:arrays');
+    // Reading is "since the latest slip": a third slip re-offers, so check the
+    // brain's view directly rather than submitting again.
+    const { fixOffer } = await import('../services/coach.brain.js');
+    const { buildCoachState } = await import('../services/coach.service.js');
+    expect(fixOffer(buildCoachState('javascript'), ['off-by-one'], 'arrays')).toBeNull();
+  });
+
+  it('never offers for tags outside the slip vocabulary', async () => {
+    mocks.runTests.mockResolvedValue(sandboxResult('wrong_answer'));
+    await submit();
+    const { events } = await submit();
+    expect(events.find((e) => e.type === 'coaching').fixOffer).toBeUndefined();
   });
 });
 

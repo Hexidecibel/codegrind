@@ -16,7 +16,7 @@
 // pure so it can be tested without a browser.
 
 import type { Language } from '@/shared/languages';
-import type { Problem, SessionPlan, SchedulerWhy, Topic } from '@/shared/types';
+import type { CoachNudge, Problem, SessionPlan, SchedulerWhy, Topic } from '@/shared/types';
 
 /** Everything needed to resume a grind session across a refresh. */
 export interface GrindSnapshot {
@@ -25,6 +25,8 @@ export interface GrindSnapshot {
   problem: Problem;
   why: SchedulerWhy;
   upNext?: string;
+  /** Soft read-first gate for this problem (server grindGate), if any. */
+  readFirst?: CoachNudge;
   solved: number;
   streak: number;
   topics: Topic[];

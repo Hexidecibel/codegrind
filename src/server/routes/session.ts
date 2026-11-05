@@ -25,6 +25,7 @@ import {
   breadthIntent,
   nextIntent,
   peekUpNext,
+  pinnedIntent,
   reviewAllowed,
   sprinkleDue,
   type SchedulerIntent,
@@ -32,6 +33,10 @@ import {
 import { getAdaptiveProblem } from '../services/bank.service.js';
 import { errorBody } from '../services/explain.service.js';
 import { breadthSlot, dailyFocus, todayMissTopics } from '../services/today.service.js';
+import { buildCoachState } from '../services/coach.service.js';
+import { fixTopics, grindGate, toNudge, type CoachState } from '../services/coach.brain.js';
+import type { CoachNudge } from '../../shared/types.js';
+import { tagInfo } from '../../shared/mistake-tags.js';
 
 export const sessionRoutes = new Hono();
 
@@ -79,6 +84,26 @@ function intentToWhy(intent: SchedulerIntent): SchedulerWhy {
   };
 }
 
+// -----------------------------------------------------------------------------
+// Coach adapter (Phase 3). THIN on purpose: nextIntent is untouched. The coach
+// only (a) adds its FIX topics to the same-day missFocus lean, so the existing
+// MISS_FOCUS_BIAS path weighs them, and (b) attaches a read-first gate AFTER
+// the pick. (b) is purely additive — it is computed from the intent, never fed
+// back into it. Deterministic, no model call.
+// -----------------------------------------------------------------------------
+function coachMissFocus(misses: readonly string[], state: CoachState): string[] {
+  return [...new Set([...misses, ...fixTopics(state)])];
+}
+
+function readFirstFor(state: CoachState, intent: SchedulerIntent): CoachNudge | undefined {
+  const step = grindGate(state, intent.topic);
+  return step ? toNudge(step) : undefined;
+}
+
+function isTopic(v: unknown): v is Topic {
+  return typeof v === 'string' && (TOPICS as readonly string[]).includes(v);
+}
+
 // POST /api/session/start — plan the sitting, serve the first adaptive problem.
 sessionRoutes.post('/session/start', async (c) => {
   try {
@@ -89,6 +114,12 @@ sessionRoutes.post('/session/start', async (c) => {
     // re-reading the setting, so flipping the picker mid-sitting cannot serve a
     // problem the plan (and the tier state behind it) was never built for.
     const language = getActiveLanguage();
+
+    // Optional `{ topic?, tag? }`: a pinned first problem (Learn's "Practice
+    // this →"). Read leniently — no body, `{}` or junk all mean "no pin".
+    const body = (await c.req.json().catch(() => null)) as { topic?: unknown; tag?: unknown } | null;
+    const pinned = isTopic(body?.topic) ? body.topic : null;
+    const pinnedTag = pinned && typeof body?.tag === 'string' ? tagInfo(body.tag) : undefined;
 
     // Plan the session arc once (best-effort — fall back to a default plan).
     let plan: SessionPlan;
@@ -101,14 +132,18 @@ sessionRoutes.post('/session/start', async (c) => {
 
     // The last debrief's tomorrowFocus: a light lean, never a pin.
     const focus = dailyFocus();
-    // Today's Recognize / drill-card misses: a smaller same-day lean.
-    const misses = todayMissTopics();
+    // Today's Recognize / drill-card misses: a smaller same-day lean — plus the
+    // coach's current FIX topics (see coachMissFocus).
+    const coach = buildCoachState(language);
+    const misses = coachMissFocus(todayMissTopics(), coach);
     // Phase H2: the day's Problem 2 is the breadth floor's pick.
     const slot = breadthSlot();
     // The first problem of a sitting may always be a review (reviewAllowed).
-    const intent =
-      (slot ? breadthIntent(language, slot.avoidTopic) : null) ??
-      nextIntent({ language, plan, dailyFocus: focus, missFocus: misses, allowReview: true, allowSprinkle: sprinkleDue(0, null) });
+    // A pin outranks all of it: the player asked for this topic.
+    const intent: SchedulerIntent = pinned
+      ? pinnedIntent(language, pinned)
+      : (slot ? breadthIntent(language, slot.avoidTopic) : null) ??
+        nextIntent({ language, plan, dailyFocus: focus, missFocus: misses, allowReview: true, allowSprinkle: sprinkleDue(0, null) });
     const record = await getAdaptiveProblem(intent);
 
     createSession(language, sessionId, plan);
@@ -116,11 +151,15 @@ sessionRoutes.post('/session/start', async (c) => {
     const isSprinkle = intent.kind === 'sprinkle';
     bumpSession(sessionId, intent.topic, isReview, isSprinkle);
 
+    // The tag only colours the "why" line; the pick is the topic's.
+    if (pinnedTag) intent.rationale = `${intent.rationale} Watch for ${pinnedTag.label.toLowerCase()}.`;
+    const readFirst = readFirstFor(coach, intent);
     const payload: SessionStartResponse = {
       sessionId,
       plan,
       problem: toPlayerProblem(record),
       why: intentToWhy(intent),
+      ...(readFirst ? { readFirst } : {}),
       upNext: peekUpNext({
         language,
         plan,
@@ -161,7 +200,8 @@ sessionRoutes.post('/session/:id/next', async (c) => {
     if (typeof skipProblemId === 'string' && skipProblemId) snoozeReview(skipProblemId);
 
     const focus = dailyFocus();
-    const misses = todayMissTopics();
+    const coach = buildCoachState(session.language);
+    const misses = coachMissFocus(todayMissTopics(), coach);
     const slot = breadthSlot();
     const intent = (slot ? breadthIntent(session.language, slot.avoidTopic) : null) ?? nextIntent({
       // The language the sitting STARTED in — see createSession above.
@@ -185,10 +225,12 @@ sessionRoutes.post('/session/:id/next', async (c) => {
     const lastReviewNow = isReview ? servedNow : session.lastReviewServed;
     const lastSprinkleNow = isSprinkle ? servedNow : session.lastSprinkleServed;
 
+    const readFirst = readFirstFor(coach, intent);
     const payload: GrindProblem = {
       sessionId: id,
       problem: toPlayerProblem(record),
       why: intentToWhy(intent),
+      ...(readFirst ? { readFirst } : {}),
       upNext: peekUpNext({
         language: session.language,
         plan: session.plan,

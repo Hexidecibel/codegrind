@@ -6,9 +6,12 @@ import {
   TrendingUp,
   Sparkles,
   Scale,
+  Wrench,
 } from 'lucide-react';
-import type { CoachingBrief } from '@/shared/types';
+import { Link } from 'react-router-dom';
+import type { CoachingBrief, CoachNudge } from '@/shared/types';
 import { humanize, mistakeLabel } from '@/client/lib/format';
+import { learnHref } from '@/client/lib/read-first';
 
 function Section({
   icon,
@@ -45,9 +48,31 @@ export interface CoachPanelProps {
    * unchanged, which is what every other caller (and the tests) get.
    */
   missed?: React.ReactNode;
+  /**
+   * The coach's "3-min fix" offer (server: coach.brain fixOffer) — this submit
+   * repeated a slip. A link to the fix lesson in Learn; nothing is generated
+   * until it is opened and written there.
+   */
+  fixOffer?: CoachNudge;
 }
 
-export function CoachPanel({ brief, missed }: CoachPanelProps) {
+/** "Slipped on off-by-one twice — 3-min fix →" */
+export function FixOfferLink({ offer }: { offer: CoachNudge }) {
+  const label = offer.tag ? mistakeLabel(offer.tag) : humanize(offer.topic);
+  return (
+    <Link
+      to={learnHref(offer)}
+      className="flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm font-medium text-rose-200/90 transition-colors hover:bg-rose-500/15 hover:text-foreground"
+    >
+      <Wrench className="h-4 w-4 shrink-0 text-rose-300" />
+      <span>
+        Slipped on {label.toLowerCase()} twice — 3-min fix →
+      </span>
+    </Link>
+  );
+}
+
+export function CoachPanel({ brief, missed, fixOffer }: CoachPanelProps) {
   return (
     <div className="space-y-5 rounded-xl border border-primary/20 bg-gradient-to-b from-primary/[0.06] to-transparent p-5">
       <div className="flex items-center gap-2">
@@ -56,6 +81,8 @@ export function CoachPanel({ brief, missed }: CoachPanelProps) {
         </div>
         <h2 className="text-base font-bold">Coach</h2>
       </div>
+
+      {fixOffer && <FixOfferLink offer={fixOffer} />}
 
       {/* Calibration — predicted vs actual, surfaced prominently when present */}
       {brief.calibration && (

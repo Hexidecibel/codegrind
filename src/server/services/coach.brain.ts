@@ -24,7 +24,7 @@
 // returned with `cached: false`; the feed shows it as a stub and it is written
 // only on an explicit click (POST /study/lesson/:id/write).
 
-import type { Difficulty, LessonKind, TierLevel, Topic } from '../../shared/types.js';
+import type { CoachNudge, Difficulty, LessonKind, TierLevel, Topic } from '../../shared/types.js';
 import type { Language } from '../../shared/languages.js';
 import { fixTopic, tagInfo } from '../../shared/mistake-tags.js';
 import {
@@ -554,4 +554,26 @@ export function fixOffer(
     return slipStep(c, g);
   }
   return null;
+}
+
+/** Topics of the plan's current FIX steps — Grind leans toward them (missFocus). */
+export function fixTopics(state: CoachState): Topic[] {
+  return [...new Set(coachPlan(state).filter((s) => s.intent === 'fix').map((s) => s.topic))];
+}
+
+/** A step as the wire shape Grind renders (shared CoachNudge). Needs `read`. */
+export function toNudge(step: CoachStep): CoachNudge | undefined {
+  if (!step.read) return undefined;
+  const nudge: CoachNudge = {
+    intent: step.intent,
+    topic: step.topic,
+    reason: step.reason,
+    lessonId: step.read.lessonId,
+    title: step.read.title,
+    kind: step.read.kind,
+    cached: step.read.cached,
+    practice: { ...step.then },
+  };
+  if (step.tag) nudge.tag = step.tag;
+  return nudge;
 }

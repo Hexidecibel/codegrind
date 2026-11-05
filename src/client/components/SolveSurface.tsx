@@ -34,6 +34,7 @@ import type {
   RunResult,
   SubmitResult,
   CoachingBrief,
+  CoachNudge,
   Hint,
   ChatTurn,
   Prediction,
@@ -278,6 +279,8 @@ export function SolveSurface({
   const [runResult, setRunResult] = useState<RunResult | null>(null);
   const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null);
   const [coaching, setCoaching] = useState<CoachingBrief | null>(null);
+  /** The coach's "3-min fix" offer, riding on the coaching event. */
+  const [fixOffer, setFixOffer] = useState<CoachNudge | undefined>(undefined);
   /**
    * Where the coaching half of a submit has got to.
    *
@@ -560,6 +563,7 @@ export function SolveSurface({
     setRunResult(null);
     setSubmitResult(null);
     setCoaching(null);
+    setFixOffer(undefined);
     // The snapshot, the band and the paid-for fixes all belong to the brief for
     // the PREVIOUS problem; keeping any of them would leave a band anchored to
     // line numbers from someone else's code, and a cache keyed by fixIds the
@@ -618,6 +622,7 @@ export function SolveSurface({
     setRunning(true);
     setSubmitResult(null);
     setCoaching(null);
+    setFixOffer(undefined);
     // Run clears the brief, so the bullets it belonged to are gone too — and
     // with them any reason for a band to still be painted, or for a fix keyed
     // by one of its fixIds to still be held.
@@ -658,6 +663,7 @@ export function SolveSurface({
     setRunResult(null);
     setSubmitResult(null);
     setCoaching(null);
+    setFixOffer(undefined);
     // A mock Submit has no coaching half: the interview's grade is the coach.
     setCoachPhase(mockId ? 'idle' : 'pending');
     // Freeze what is being sent. Every anchor in the brief that comes back is
@@ -695,6 +701,7 @@ export function SolveSurface({
             onSubmitted?.(event.result);
           } else {
             setCoaching(event.coaching);
+            setFixOffer(event.fixOffer);
             setCoachPhase('done');
           }
         },
@@ -1118,6 +1125,7 @@ export function SolveSurface({
       {coaching && (
         <CoachPanel
           brief={coaching}
+          fixOffer={fixOffer}
           missed={
             <MissedList
               items={missedViews}

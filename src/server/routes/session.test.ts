@@ -127,7 +127,7 @@ async function next(body?: unknown, raw?: string) {
 }
 
 beforeEach(() => {
-  for (const table of ['attempts', 'skill_state', 'review_queue', 'problems', 'sessions']) {
+  for (const table of ['attempts', 'skill_state', 'review_queue', 'problems', 'sessions', 'lesson_reads']) {
     db.db.prepare(`DELETE FROM ${table}`).run();
   }
   bankProblem(A);
@@ -460,5 +460,77 @@ suite('POST /api/session — a sitting with reviews due AND unseen easys banked'
     const kinds: string[] = [];
     for (let i = 0; i < 8; i++) kinds.push((await next()).json.why.kind);
     expect(kinds.map((k) => (k === 'sprinkle' ? 'S' : 'n')).join(' ')).toBe('n n n S n n n S');
+  });
+});
+
+// =============================================================================
+// Phase 3 — coach adapter: a pinned first problem, and a read-first gate that
+// is purely additive (it rides along with the pick and never moves it).
+// =============================================================================
+suite('POST /api/session/start — pinned topic', () => {
+  async function start(body?: unknown) {
+    vi.mocked(llm.planSession).mockResolvedValue(PLAN);
+    const init: RequestInit = { method: 'POST' };
+    if (body !== undefined) {
+      init.body = JSON.stringify(body);
+      init.headers = { 'Content-Type': 'application/json' };
+    }
+    const res = await app.request('/api/session/start', init);
+    return { status: res.status, json: (await res.json()) as any };
+  }
+
+  it('serves the pinned topic, even over a due review', async () => {
+    setReview(A, ago(DAY), 1);
+    const { status, json } = await start({ topic: 'hashing', tag: 'off-by-one' });
+    expect(status).toBe(200);
+    expect(json.why.topic).toBe('hashing');
+    expect(json.why.kind).not.toBe('review');
+    expect(json.why.text).toMatch(/off-by-one/i);
+    // The review was not consumed by the pin.
+    expect(db.getReviewDueCount('javascript')).toBe(1);
+  });
+
+  it('falls back to a new pattern at easy for a topic the scorer has no candidate for', () => {
+    const intent = scheduler.pinnedIntent('javascript', 'graphs');
+    expect(intent).toMatchObject({ kind: 'new-pattern', topic: 'graphs', difficulty: 'easy' });
+  });
+
+  it('ignores an unknown topic or a missing body (normal pick: the due review)', async () => {
+    setReview(A, ago(DAY), 1);
+    expect((await start({ topic: 'not-a-topic' })).json.why.kind).toBe('review');
+    db.db.prepare('DELETE FROM sessions').run();
+    expect((await start()).json.why.kind).toBe('review');
+  });
+
+  it('attaches readFirst for a never-attempted topic whose skeleton is unread', async () => {
+    const { json } = await start({ topic: 'hashing' });
+    expect(json.readFirst).toMatchObject({ intent: 'pre-read', topic: 'hashing', lessonId: 'hashing:0' });
+    db.markLessonRead('hashing:0');
+    expect((await start({ topic: 'hashing' })).json.readFirst).toBeUndefined();
+  });
+});
+
+suite('POST /api/session/:id/next — readFirst is additive', () => {
+  afterAll(() => {
+    vi.useRealTimers();
+  });
+
+  it('picks the same intent whether or not the gate fires', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-05T12:00:00.000Z'));
+
+    const gated = await next();
+    expect(gated.status).toBe(200);
+    expect(gated.json.readFirst?.lessonId).toBe(`${gated.json.why.topic}:0`);
+
+    // Same state, same clock — only the skeleton read differs.
+    db.markLessonRead(`${gated.json.why.topic}:0`);
+    db.db.prepare('DELETE FROM sessions').run();
+    db.createSession('javascript', SESSION, PLAN);
+    const ungated = await next();
+    expect(ungated.json.readFirst).toBeUndefined();
+    expect(ungated.json.why).toEqual(gated.json.why);
+    expect(ungated.json.upNext).toEqual(gated.json.upNext);
+    vi.useRealTimers();
   });
 });

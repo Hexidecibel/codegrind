@@ -9,8 +9,9 @@ import {
   AlertTriangle,
   RotateCcw,
   Sparkles,
+  BookOpen,
 } from 'lucide-react';
-import type { SubmitResult, Topic, Primer } from '@/shared/types';
+import { TOPICS, type SubmitResult, type Topic, type Primer, type CoachNudge } from '@/shared/types';
 import {
   startSession,
   nextInSession,
@@ -20,7 +21,9 @@ import {
   getSettings,
   getBankStatus,
   getToday,
+  markLessonRead,
 } from '@/client/lib/api';
+import { activeGate, dismissGate, learnHref, pinFromSearch } from '@/client/lib/read-first';
 import { presetToOverrides, type AssistanceSettings } from '@/client/lib/assistance';
 import { isGrindLink, todayStepFrom, type TodayLink } from '@/client/lib/today-flow';
 import { TodayNextBar } from '@/client/components/TodayNextBar';
@@ -96,6 +99,12 @@ function GrindScreen() {
   const todayStep = todayStepFrom(location.search);
   const [todayKey, setTodayKey] = useState(0);
   const todayEntry = useRef(false);
+  // Learn's "Practice this →" lands here as ?topic=&tag=: a pinned first problem.
+  const pinEntry = useRef(false);
+  // Bumped when a read-first gate is dismissed (the dismissal itself lives in
+  // sessionStorage, see read-first.ts) so the card goes away at once.
+  const [, setGateTick] = useState(0);
+  const gate = activeGate(snapshot?.readFirst);
 
   // "N due for review" pill — motivational; the scheduler already serves them first.
   const refreshReviewDue = useCallback(async () => {
@@ -145,10 +154,15 @@ function GrindScreen() {
   }, [advancing]);
 
   // Fetch a pattern primer whenever the scheduler fires a fresh new-pattern intent.
+  // A read-first gate on any OTHER kind of pick reads the primer cache-only:
+  // showing a gate must never cost a generation.
   const whyKind = snapshot?.why.kind;
   const whyTopic = snapshot?.why.topic;
+  const gateTopic = gate?.topic;
   useEffect(() => {
-    if (whyKind !== 'new-pattern' || !whyTopic) {
+    const generating = whyKind === 'new-pattern' && !!whyTopic;
+    const topic = generating ? whyTopic : gateTopic;
+    if (!topic) {
       setPrimer(null);
       setPrimerLoading(false);
       return;
@@ -158,7 +172,7 @@ function GrindScreen() {
     setPrimerLoading(true);
     (async () => {
       try {
-        const p = await getPrimer(whyTopic);
+        const p = await getPrimer(topic, { cachedOnly: !generating });
         if (alive) setPrimer(p);
       } catch {
         if (alive) setPrimer(null);
@@ -169,7 +183,7 @@ function GrindScreen() {
     return () => {
       alive = false;
     };
-  }, [whyKind, whyTopic]);
+  }, [whyKind, whyTopic, gateTopic]);
 
   // On mount, validate the persisted session two ways before resuming it.
   //
@@ -217,17 +231,18 @@ function GrindScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (pin?: { topic: Topic; tag?: string }) => {
     setError(null);
     setStarting(true);
     try {
-      const res = await startSession();
+      const res = await startSession(pin);
       setSnapshot({
         sessionId: res.sessionId,
         plan: res.plan,
         problem: res.problem,
         why: res.why,
         upNext: res.upNext,
+        readFirst: res.readFirst,
         solved: 0,
         streak: 0,
         topics: [res.why.topic],
@@ -258,6 +273,7 @@ function GrindScreen() {
               problem: gp.problem,
               why: gp.why,
               upNext: gp.upNext,
+              readFirst: gp.readFirst,
               topics: uniqueTopics(prev.topics, gp.why.topic),
             }
           : prev,
@@ -300,6 +316,27 @@ function GrindScreen() {
     void refreshReviewDue();
     setTodayKey((k) => k + 1);
   }, [refreshReviewDue]);
+
+  // Entering from Learn ("Practice this →", ?topic=&tag=), once: start a
+  // sitting pinned to that topic — unless the problem on screen already is one.
+  // The params are then dropped with `replace`, like Learn's own ?topic=, so a
+  // refresh resumes rather than re-pinning.
+  useEffect(() => {
+    if (pinEntry.current || resuming || starting || todayStep) return;
+    pinEntry.current = true;
+    const pin = pinFromSearch(location.search, TOPICS);
+    if (!pin) return;
+    navigate('/grind', { replace: true });
+    if (snapshot?.why.topic === pin.topic) return;
+    void start(pin);
+  }, [resuming, starting, todayStep, location.search, navigate, snapshot, start]);
+
+  const closeGate = useCallback((g: CoachNudge, read: boolean) => {
+    dismissGate(g.topic);
+    setGateTick((t) => t + 1);
+    // Best-effort: the read is a lean for the coach, not something to block on.
+    if (read) void markLessonRead(g.lessonId).catch(() => {});
+  }, []);
 
   // Entering from Today, once: no sitting yet → start one (the user clicked
   // Start); a sitting whose problem was already submitted today → serve the
@@ -463,7 +500,15 @@ function GrindScreen() {
               why={snapshot.why}
               upNext={snapshot.upNext}
             />
-            {snapshot.why.kind === 'new-pattern' &&
+            {gate ? (
+              <ReadFirstCard
+                gate={gate}
+                primer={primer}
+                primerLoading={primerLoading}
+                onRead={() => closeGate(gate, true)}
+                onSkip={() => closeGate(gate, false)}
+              />
+            ) : snapshot.why.kind === 'new-pattern' &&
               (primerLoading || primer) && (
                 <div className="shrink-0 border-b border-border bg-background/40 px-4 py-3">
                   {primerLoading ? (
@@ -512,7 +557,7 @@ function GrindScreen() {
         <div className="space-y-3">
           <Button
             size="lg"
-            onClick={start}
+            onClick={() => void start()}
             disabled={starting}
             className="gap-2"
           >
@@ -557,6 +602,63 @@ function GrindScreen() {
             </Link>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The soft read-first gate: the topic's primer, open, above a problem from a
+ * topic you have never attempted. Never blocks the editor — "Skip" is one tap.
+ * With no cached primer it is a link to the topic's lessons in Learn instead
+ * (the gate never triggers a generation).
+ */
+function ReadFirstCard({
+  gate,
+  primer,
+  primerLoading,
+  onRead,
+  onSkip,
+}: {
+  gate: CoachNudge;
+  primer: Primer | null;
+  primerLoading: boolean;
+  onRead: () => void;
+  onSkip: () => void;
+}) {
+  return (
+    <div className="shrink-0 space-y-3 border-b border-border bg-background/40 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-violet-300">
+          <BookOpen className="h-4 w-4" />
+          Read first: {humanize(gate.topic)}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          New to you — a quick read makes this one land.
+        </span>
+      </div>
+      {primerLoading ? (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading the primer…
+        </div>
+      ) : primer ? (
+        <PatternPrimer primer={primer} defaultOpen />
+      ) : (
+        <Link
+          to={learnHref(gate)}
+          className="tap-link text-sm text-violet-300 underline-offset-4 hover:text-foreground hover:underline"
+        >
+          Open {gate.title} in Learn →
+        </Link>
+      )}
+      <div className="flex items-center gap-2">
+        <Button size="sm" onClick={onRead} className="gap-1.5">
+          <CheckCircle2 className="h-4 w-4" /> I&apos;ve read it
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onSkip}>
+          Skip
+        </Button>
       </div>
     </div>
   );

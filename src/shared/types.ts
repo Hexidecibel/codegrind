@@ -417,6 +417,26 @@ export interface StudyPractice {
   reviewProblemId?: string;
 }
 
+/**
+ * One coach step, as Grind sees it (server coach.brain CoachStep, flattened):
+ * the lesson to read and the practice it leads into. Used for the soft
+ * read-first gate before a problem and the post-submit fix offer.
+ */
+export interface CoachNudge {
+  intent: StudyIntent;
+  topic: Topic;
+  tag?: string;
+  /** One line, e.g. "Because you slipped on search boundaries". */
+  reason: string;
+  /** The lesson to read — the id POST /study/read takes. */
+  lessonId: string;
+  title: string;
+  kind: LessonKind;
+  /** False = not written yet; Learn shows it as a stub (written on click only). */
+  cached: boolean;
+  practice: StudyPractice;
+}
+
 /** A not-yet-written FIX lesson: rendered as a "write this lesson" card. */
 export interface StudyStub {
   lessonId: string;
@@ -694,7 +714,16 @@ export type SubmitEvent =
        */
       referenceSolution?: string;
     }
-  | { type: 'coaching'; coaching: CoachingBrief };
+  | {
+      type: 'coaching';
+      coaching: CoachingBrief;
+      /**
+       * The coach's "3-min fix" offer: this submit was the FIX_OFFER_SLIPS-th
+       * slip of the same tag in the window and its fix lesson is unread since.
+       * Deterministic, no model call.
+       */
+      fixOffer?: CoachNudge;
+    };
 
 /** POST /api/reveal — "show me the answer", at the cost of the clean-solve credit. */
 export interface RevealRequest {
@@ -781,6 +810,11 @@ export interface GrindProblem {
   why: SchedulerWhy;
   /** Best-effort short label for the likely next problem (UI peek). */
   upNext?: string;
+  /**
+   * Soft gate: read this before the problem (a topic never attempted whose
+   * skeleton lesson is unread). Purely additive — never changes the pick.
+   */
+  readFirst?: CoachNudge;
 }
 
 /** Response for POST /api/session/start. */
@@ -790,6 +824,11 @@ export interface SessionStartResponse {
   problem: Problem;
   why: SchedulerWhy;
   upNext?: string;
+  /**
+   * Soft gate: read this before the problem (a topic never attempted whose
+   * skeleton lesson is unread). Purely additive — never changes the pick.
+   */
+  readFirst?: CoachNudge;
 }
 
 // -----------------------------------------------------------------------------

@@ -10,6 +10,8 @@ import {
   grindGate,
   fixOffer,
   fixLessonId,
+  fixTopics,
+  toNudge,
   SLIP_WINDOW_DAYS,
   type CoachState,
   type CoachSlip,
@@ -288,5 +290,75 @@ describe('fixOffer', () => {
       reads: [{ lessonId: 'fix:search-boundary:binary-search', readAt: ago(0.5), fuzzy: false }],
     });
     expect(fixOffer(read, ['search-boundary'], 'binary-search')).toBeNull();
+  });
+});
+
+describe('grindGate — Phase 3', () => {
+  it('fires only for a topic with no attempts whose skeleton lesson is unread', () => {
+    // Other topics practised, this one untouched and unread: the gate fires.
+    const other = state({ skills: [{ topic: 'hashing', attempts: 4, mastery: 0.6 }] });
+    expect(grindGate(other, 'arrays')?.read?.lessonId).toBe('arrays:0');
+    // Attempted (even once, even failed) → never gated, read or not.
+    expect(grindGate(state({ skills: [{ topic: 'arrays', attempts: 1, mastery: 0 }] }), 'arrays')).toBeNull();
+    // Skeleton read → no gate, even with zero attempts.
+    const read = state({ reads: [{ lessonId: 'arrays:0', readAt: ago(30), fuzzy: false }] });
+    expect(grindGate(read, 'arrays')).toBeNull();
+    // Reading some OTHER lesson of the topic does not count as the skeleton.
+    const otherLesson = state({
+      outlines: new Map([['arrays', outline(2)]]),
+      reads: [{ lessonId: 'arrays:1', readAt: ago(1), fuzzy: false }],
+    });
+    expect(grindGate(otherLesson, 'arrays')?.read?.lessonId).toBe('arrays:0');
+  });
+});
+
+describe('fixOffer — Phase 3', () => {
+  it('offers on 2 slips of the same tag', () => {
+    const offer = fixOffer(slippedState(), ['search-boundary'], 'binary-search');
+    expect(offer).toMatchObject({ intent: 'fix', tag: 'search-boundary', topic: 'binary-search' });
+  });
+
+  it('does not offer on 1 slip, or when the earlier slip fell outside the window', () => {
+    const one = slippedState({ slips: [slip('search-boundary', 'binary-search', 0.1)] });
+    expect(fixOffer(one, ['search-boundary'], 'binary-search')).toBeNull();
+    const stale = slippedState({
+      slips: [slip('search-boundary', 'binary-search', SLIP_WINDOW_DAYS + 1), slip('search-boundary', 'binary-search', 0.1)],
+    });
+    expect(fixOffer(stale, ['search-boundary'], 'binary-search')).toBeNull();
+  });
+
+  it('a read AFTER the latest slip suppresses it; a read before it does not', () => {
+    const after = slippedState({
+      reads: [{ lessonId: 'fix:search-boundary:binary-search', readAt: ago(0.5), fuzzy: false }],
+    });
+    expect(fixOffer(after, ['search-boundary'], 'binary-search')).toBeNull();
+    const before = slippedState({
+      reads: [{ lessonId: 'fix:search-boundary:binary-search', readAt: ago(3), fuzzy: false }],
+    });
+    expect(fixOffer(before, ['search-boundary'], 'binary-search')).not.toBeNull();
+  });
+});
+
+describe('fixTopics + toNudge', () => {
+  it('lists the topics of current FIX steps once each', () => {
+    const topics = fixTopics(slippedState());
+    expect(topics).toContain('binary-search');
+    expect(new Set(topics).size).toBe(topics.length);
+    expect(fixTopics(state())).toEqual([]);
+  });
+
+  it('flattens a step into the wire shape', () => {
+    const n = toNudge(fixOffer(slippedState(), ['search-boundary'], 'binary-search')!);
+    expect(n).toMatchObject({
+      intent: 'fix',
+      topic: 'binary-search',
+      tag: 'search-boundary',
+      lessonId: 'fix:search-boundary:binary-search',
+      cached: false,
+      practice: { topic: 'binary-search', tag: 'search-boundary' },
+    });
+    const gate = toNudge(grindGate(state(), 'arrays')!);
+    expect(gate).toMatchObject({ intent: 'pre-read', lessonId: 'arrays:0', practice: { topic: 'arrays' } });
+    expect(gate && 'tag' in gate).toBe(false);
   });
 });

@@ -9,6 +9,7 @@ import type {
   ChatTurn,
   CoachingBrief,
   CoachFixResponse,
+  CoachNudge,
   Prediction,
   TestCase,
   TestResult,
@@ -33,6 +34,8 @@ import { coach, askFollowup } from '../services/llm.service.js';
 import { todayCarryNotes } from '../services/today.service.js';
 import { stashFix, getFix } from '../services/coachfix.service.js';
 import { errorBody } from '../services/explain.service.js';
+import { buildCoachState } from '../services/coach.service.js';
+import { fixOffer, toNudge } from '../services/coach.brain.js';
 import { MockError, codingSubmitTarget, recordCodingSubmit } from '../services/mock.service.js';
 
 /** Validate/normalize a client-supplied prediction, or undefined if absent/invalid. */
@@ -357,7 +360,19 @@ submitRoutes.post('/submit', async (c) => {
       enqueueReview(problem.id, assistedHints > 0 && solved ? 'hinted' : 'failed');
     }
 
-    await write({ type: 'coaching', coaching });
+    // The "3-min fix" offer. AFTER insertAttempt on purpose: fixOffer counts
+    // slips from the state, so this attempt's tags must already be among them.
+    // Deterministic, no model call; best-effort — it must never lose the brief.
+    let offer: CoachNudge | undefined;
+    try {
+      const tags = coaching.mistakeTags ?? [];
+      const step = tags.length ? fixOffer(buildCoachState(problem.language), tags, problem.topic) : null;
+      offer = step ? toNudge(step) : undefined;
+    } catch (err) {
+      console.error('[submit] fixOffer failed:', err instanceof Error ? err.message : err);
+    }
+
+    await write(offer ? { type: 'coaching', coaching, fixOffer: offer } : { type: 'coaching', coaching });
   });
 });
 
