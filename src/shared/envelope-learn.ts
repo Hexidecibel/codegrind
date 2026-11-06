@@ -25,6 +25,7 @@ import {
   numberTokens,
   pickSafe,
   parseAnswer,
+  totalMayNamePeriod,
   pow10,
   roundSig,
   sci,
@@ -729,7 +730,7 @@ export function checkFinalStep(item: EnvelopeItem, text: string): StepResult | n
       cause: 'bits-bytes',
     };
   }
-  if (p.per && p.per !== want.per && !(want.per === null && p.per === 'year')) {
+  if (p.per && p.per !== want.per && !(want.per === null && totalMayNamePeriod(item, p.per))) {
     return {
       ok: false,
       slip: 'wrong-period',

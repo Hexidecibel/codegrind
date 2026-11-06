@@ -957,6 +957,13 @@ export interface ParsedAnswer {
   per: Per | null;
   /** A ladder word or unit was written (million, M, GB…). */
   hadUnit: boolean;
+  /**
+   * A unit-shaped word right after the number that is not a known unit
+   * ("12.5 GPps", "3 TBs"). Grading it as a bare number read it in the
+   * question's unit and failed a right answer (2026-11-06); it is sent back
+   * to be retyped instead.
+   */
+  unreadUnit: string | null;
 }
 
 function normalizeDigits(s: string): string {
@@ -979,6 +986,7 @@ export function parseAnswer(text: string): ParsedAnswer | null {
   if (!Number.isFinite(number)) return null;
   let rest = s.slice(num.index + num[0].length).trim();
   let hadUnit = false;
+  let unreadUnit: string | null = null;
 
   // A data unit: GB, Gb, gigabytes, Gbps, MB/s, megabits …
   let dim: Dim | null = null;
@@ -1014,6 +1022,11 @@ export function parseAnswer(text: string): ParsedAnswer | null {
         dim = /^bit/i.test(after[1]) ? 'bits' : 'bytes';
         rest = rest.slice(after[0].length).trim();
       }
+    } else {
+      // A prefix letter then a capital ("GPps", "TBs") or a stray letter
+      // before "ps" ("Gxps"): a unit typo, not a noun like "photos".
+      const odd = /^([kKmMgGtTpP](?:[A-Z][a-zA-Z]{0,2}|[a-zA-Z]ps))(?![a-zA-Z])/.exec(rest);
+      if (odd) unreadUnit = odd[1];
     }
   }
 
@@ -1029,7 +1042,7 @@ export function parseAnswer(text: string): ParsedAnswer | null {
     const tail = /(?:\/|per|a)\s*(s|sec|second|day|d|mo|month|yr|year)\b/.exec(p);
     if (tail) per = tail[1].startsWith('s') ? 's' : tail[1].startsWith('d') ? 'day' : tail[1].startsWith('m') ? 'month' : 'year';
   }
-  return { number, dim, prefix, per, hadUnit };
+  return { number, dim, prefix, per, hadUnit, unreadUnit };
 }
 
 /**
@@ -1098,6 +1111,16 @@ function droppedOwnZeros(item: Pick<EnvelopeItem, 'kind' | 'expected'>, ratio: n
   return leadZeros > 0 && Math.abs(Math.log10(ratio) + leadZeros) < 0.05;
 }
 
+/**
+ * May a total (expected.per null) answer name this period? A total over a year
+ * may say "a year"; a storage-per-day total may say "per day" — the question
+ * asks "how much new storage is that per day?", so "200 TB per day" is the
+ * answer, not a restated question (graded wrong 2026-11-05/06). Pure.
+ */
+export function totalMayNamePeriod(item: Pick<EnvelopeItem, 'kind'>, per: Per): boolean {
+  return per === 'year' || (item.kind === 'storage-day' && per === 'day');
+}
+
 const PER_WORD: Readonly<Record<Per, string>> = { s: 'per second', day: 'per day', month: 'per month', year: 'per year' };
 
 /**
@@ -1107,10 +1130,10 @@ const PER_WORD: Readonly<Record<Per, string>> = { s: 'per second', day: 'per day
  * another period. Estimate items are left alone — there a stated unit is
  * converted, as before. Pure.
  */
-export function restatesQuestion(p: Pick<ParsedAnswer, 'per' | 'dim'>, item: Pick<EnvelopeItem, 'family' | 'expected'>): string | null {
+export function restatesQuestion(p: Pick<ParsedAnswer, 'per' | 'dim'>, item: Pick<EnvelopeItem, 'family' | 'expected' | 'kind'>): string | null {
   if (item.family !== 'conversion') return null;
   const want = item.expected;
-  if (p.per && p.per !== want.per && !(want.per === null && p.per === 'year')) {
+  if (p.per && p.per !== want.per && !(want.per === null && totalMayNamePeriod(item, p.per))) {
     return `That is ${PER_WORD[p.per]} — the question asks ${want.per ? PER_WORD[want.per] : 'for the total'}. Do the conversion and answer in that.`;
   }
   if (p.dim && want.dim !== 'count' && p.dim !== want.dim) {
@@ -1202,6 +1225,8 @@ const SCI_FORM_EXAMPLES = ['7 × 10^4', '3 × 10^6', '9 × 10^2', '4 × 10^11', 
  */
 export function formHint(item: Pick<EnvelopeItem, 'kind' | 'answerForm'> & Partial<EnvelopeItem>, text: string): string | null {
   if (item.answerForm === 'direction') return parseDirection(text) ? null : 'Type one word: divide or multiply.';
+  const unread = parseAnswer(text)?.unreadUnit;
+  if (unread) return `Couldn't read the unit "${unread}". Try MB, GB/s, Gbps or "per day".`;
   if (item.kind === 'words-to-sci' && !/(10\s*\^|10[⁰¹²³⁴⁵⁶⁷⁸⁹]|\de\s*\d)/i.test(text)) {
     const like = pickSafe(SCI_FORM_EXAMPLES, itemNumberTokens(item), keySeed(item.key ?? ''));
     return like ? `Write it as small × 10ⁿ, like ${like}.` : 'Write it as small × 10ⁿ (type x and ^).';
@@ -1252,7 +1277,7 @@ export function checkAnswer(item: EnvelopeItem, text: string): EnvelopeVerdict |
     if (verdicts.length) return verdicts.find((v) => !v.ok) ?? verdicts[0];
   }
   const p = parseAnswer(text);
-  if (!p) return null;
+  if (!p || p.unreadUnit) return null;
   let given = toItemValue(p, item);
   const exact = item.expected.value;
   // A bare number on a data question is read in the question's unit — unless

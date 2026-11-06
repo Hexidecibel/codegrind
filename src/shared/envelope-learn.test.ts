@@ -516,3 +516,29 @@ describe('hints never give this question away', () => {
     expect(formHint(fiveHundred, '500000000')).not.toContain(fmtSci(fiveHundred.expected.value).replace('×', 'x'));
   });
 });
+
+describe('right answers graded wrong on 2026-11-05/06', () => {
+  it('"200 TB per day" is the answer to a storage-per-day question', () => {
+    const photos = seedItems().find((i) => i.key === 'seed:500m-users-photos')!;
+    expect(checkFinalStep(photos, '200 TB per day')).toMatchObject({ ok: true, slip: null });
+    expect(checkFinalStep(photos, '200 TB a day')!.ok).toBe(true);
+    expect(checkFinalStep(photos, '200 TB')!.ok).toBe(true);
+    expect(checkAnswer(photos, '200 TB per day')!.ok).toBe(true);
+    // Another period is still a wrong period.
+    expect(checkFinalStep(photos, '200 TB per second')).toMatchObject({ ok: false, slip: 'wrong-period' });
+  });
+
+  it('a garbled unit ("12.5 GPps") is sent back, not read in the question unit', () => {
+    const card = gbpsToMBs('g:gbps-to-mbs:t', { gbps: 100 });
+    expect(checkAnswer(card, '12.5 GPps')).toBeNull();
+    expect(checkFinalStep(card, '12.5 GPps')).toBeNull();
+    expect(formHint(card, '12.5 GPps')).toMatch(/Couldn't read the unit "GPps"/);
+    expect(formHint(card, '3 TBs')).toMatch(/"TBs"/);
+    // Real units and nouns still read.
+    expect(formHint(card, '12.5 GBps')).toBeNull();
+    expect(checkFinalStep(card, '12.5 GB/s')!.ok).toBe(true);
+    expect(checkFinalStep(card, '12500 MBps')!.ok).toBe(true);
+    expect(formHint(card, '800 photos per second')).toBeNull();
+    expect(formHint(card, '300 qps')).toBeNull();
+  });
+});
